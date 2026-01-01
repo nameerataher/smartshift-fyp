@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>GLB on OSM Map (MapLibre + Three.js)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link
+    href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+    rel="stylesheet"
+  />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      background: rgba(15, 23, 42, 0.8); border: 1px solid #1f2937;
+      padding: 10px 12px; border-radius: 10px; min-width: 240px;
+      backdrop-filter: blur(6px); color: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px;
+    }
+    #status { font-size: 12px; color: #cbd5e1; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="hud">
+    <div><strong>GLB on OSM</strong></div>
+    <div id="status">Loading…</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/+esm';
+
+    const GLB_URL = './smartshift/data/raw/BusinessBay_Downtown.glb';
+
+    // Bounding box (west, south, east, north) for Dubai focus
+    const bbox = [55.25090, 25.17069, 55.29405, 25.20328];
+    // center map near Dubai
+    const anchorLon = (bbox[0] + bbox[2]) / 2;
+    const anchorLat = (bbox[1] + bbox[3]) / 2;
+
+    // Optional fine-tune adjustments (meters) and rotation (degrees)
+    const offsetMeters = { x: 0, y: 0, z: 0 }; // x=east, z=north, y=up
+    const rotateDeg = 0; // rotate about vertical axis if needed
+
+    // Compute target size from WebMercator delta (more accurate than cos(lat))
+    const mercSW_ref = maplibregl.MercatorCoordinate.fromLngLat({ lng: bbox[0], lat: bbox[1] }, 0);
+    const mercNE_ref = maplibregl.MercatorCoordinate.fromLngLat({ lng: bbox[2], lat: bbox[3] }, 0);
+    const metersToMerc_ref = mercSW_ref.meterInMercatorCoordinateUnits();
+    const targetWidthMeters = (mercNE_ref.x - mercSW_ref.x) / metersToMerc_ref;
+    const targetHeightMeters = (mercNE_ref.y - mercSW_ref.y) / metersToMerc_ref;
+
+    const statusEl = document.getElementById('status');
+
+    const osmStyle = {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [
+        {
+          id: 'osm',
+          type: 'raster',
+          source: 'osm'
+        }
+      ]
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: osmStyle,
+      center: [anchorLon, anchorLat],
+      zoom: 15,
+      minZoom: 12,
+      maxZoom: 20,
+      maxBounds: [
+        [bbox[0], bbox[1]], // southwest (lon, lat)
+        [bbox[2], bbox[3]], // northeast (lon, lat)
+      ],
+      renderWorldCopies: false,
+      pitch: 45,
+      bearing: 0,
+      antialias: true
+    });
+
+    const customLayer = {
+      id: 'threejs-glb',
+      type: 'custom',
+      renderingMode: '3d',
+      onAdd: function (map, gl) {
+        this.renderer = new THREE.WebGLRenderer({
+          canvas: map.getCanvas(),
+          context: gl,
+          antialias: true
+        });
+        this.renderer.autoClear = false;
+
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.Camera();
+
+        const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+        const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+        sun.position.set(500, 800, 400);
+        sun.castShadow = true;
+        this.scene.add(ambient);
+        this.scene.add(sun);
+
+        const loader = new GLTFLoader();
+        loader.load(
+          GLB_URL,
+          (gltf) => {
+            const obj = gltf.scene;
+            const box = new THREE.Box3().setFromObject(obj);
+            const size = box.getSize(new THREE.Vector3());
+
+            // Move model so its SW-bottom corner sits at origin
+            obj.position.sub(new THREE.Vector3(box.min.x, box.min.y, box.min.z));
+
+            // Non-uniform scale to fit bbox extents (meters)
+            const scaleX = targetWidthMeters / Math.max(size.x, 1);
+            const scaleZ = targetHeightMeters / Math.max(size.z, 1);
+            const scaleY = (scaleX + scaleZ) * 0.5; // keep vertical roughly consistent
+            obj.scale.set(scaleX, scaleY, scaleZ);
+
+            // Convert meters to Mercator units and place at SW corner of bbox
+            const mercSW = maplibregl.MercatorCoordinate.fromLngLat({ lng: bbox[0], lat: bbox[1] }, 0);
+            const metersToMerc = mercSW.meterInMercatorCoordinateUnits();
+            obj.scale.multiplyScalar(metersToMerc);
+
+            // Optional rotation about up-axis
+            obj.rotation.y = THREE.MathUtils.degToRad(rotateDeg);
+
+            // Apply position (SW corner) plus manual offsets (meters)
+            const ox = offsetMeters.x * metersToMerc;
+            const oz = offsetMeters.z * metersToMerc;
+            const oy = offsetMeters.y * metersToMerc;
+            obj.position.x += mercSW.x + ox;
+            obj.position.y += oy;
+            obj.position.z += mercSW.y + oz;
+
+            obj.traverse((child) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                if (child.material) {
+                  child.material.side = THREE.FrontSide;
+                  if (child.material.map) child.material.map.encoding = THREE.SRGBColorSpace;
+                } else {
+                  child.material = new THREE.MeshStandardMaterial({
+                    color: 0xcfd8e3,
+                    roughness: 0.6,
+                    metalness: 0.05,
+                  });
+                }
+              }
+            });
+
+            this.scene.add(obj);
+            statusEl.textContent = 'GLB placed on map';
+          },
+          undefined,
+          (err) => {
+            console.error(err);
+            statusEl.textContent = 'Failed to load GLB';
+          }
+        );
+      },
+      render: function (gl, matrix) {
+        this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+        this.renderer.resetState();
+        this.renderer.render(this.scene, this.camera);
+        this.renderer.resetState();
+        map.triggerRepaint();
+      }
+    };
+
+    map.on('style.load', () => {
+      map.addLayer(customLayer);
+      statusEl.textContent = 'Map ready, loading GLB…';
+    });
+  </script>
+</body>
+</html>
+
