@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dubai GLB on OSM (anchor-based)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+    #hud{
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      background: rgba(15, 23, 42, 0.86); border: 1px solid #1f2937;
+      padding: 10px 12px; border-radius: 10px; min-width: 360px;
+      backdrop-filter: blur(6px); color: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px;
+    }
+    #hud h1 { margin: 0 0 8px; font-size: 14px; }
+    #hud .row { display: flex; gap: 8px; margin: 6px 0; align-items: center; }
+    #hud label { display: flex; flex-direction: column; gap: 4px; flex: 1; }
+    #hud input {
+      padding: 6px 8px; border-radius: 8px; border: 1px solid #1f2937;
+      background: #0b1221; color: #e2e8f0;
+    }
+    #hud button {
+      padding: 6px 10px; border-radius: 8px; border: 1px solid #1f2937;
+      background: #111827; color: #e2e8f0; cursor: pointer;
+    }
+    #status { color: #cbd5e1; line-height: 1.25; }
+    #hint { color: #94a3b8; font-size: 11px; line-height: 1.25; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="hud">
+    <h1>Dubai GLB on OSM (Burj anchor)</h1>
+    <div class="row">
+      <label>GLB URL
+        <input id="glb" value="./smartshift/data/raw/BusinessBay_Downtown.glb" />
+      </label>
+    </div>
+    <div class="row">
+      <label>Anchor model X <input id="ax" type="number" step="0.01" value="0" /></label>
+      <label>Anchor model Y <input id="ay" type="number" step="0.01" value="0" /></label>
+      <label>Anchor model Z <input id="az" type="number" step="0.01" value="0" /></label>
+    </div>
+    <div class="row">
+      <label>Meters per model unit <input id="mperu" type="number" step="0.001" value="1" /></label>
+      <label>Yaw deg <input id="yaw" type="number" step="1" value="0" /></label>
+      <label>Flip North/South <input id="flip" type="number" step="1" value="0" title="0=no, 1=yes" /></label>
+    </div>
+    <div class="row">
+      <label>Anchor coords from Blender? <input id="blenderCoords" type="number" step="1" value="1" title="1=yes (Blender Z-up), 0=no (GLB Y-up)" /></label>
+    </div>
+    <div class="row">
+      <button id="apply">Apply transform</button>
+      <button id="reset">Reset view</button>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="hint">
+      This overlays a GLB onto an OSM basemap using ONE anchor (Burj Khalifa @ 25.1972, 55.2744).
+      <br/>To make it exact, set the model anchor point (ax/ay/az) to the Burj base location in your GLB.
+      <br/>How to get ax/ay/az: in Blender select the Burj object and read its Location (or run a tiny script to print it).
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.154.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/+esm';
+
+    const BURJ = { lat: 25.1972, lon: 55.2744 };
+
+    const glbEl = document.getElementById('glb');
+    const axEl = document.getElementById('ax');
+    const ayEl = document.getElementById('ay');
+    const azEl = document.getElementById('az');
+    const mperuEl = document.getElementById('mperu');
+    const yawEl = document.getElementById('yaw');
+    const flipEl = document.getElementById('flip');
+    const blenderCoordsEl = document.getElementById('blenderCoords');
+    const applyBtn = document.getElementById('apply');
+    const resetBtn = document.getElementById('reset');
+    const statusEl = document.getElementById('status');
+
+    const osmStyle = {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: osmStyle,
+      center: [BURJ.lon, BURJ.lat],
+      zoom: 16,
+      pitch: 60,
+      bearing: 0,
+      antialias: true,
+      renderWorldCopies: false,
+    });
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+
+    const customLayer = {
+      id: 'glb',
+      type: 'custom',
+      renderingMode: '3d',
+      onAdd: function (map, gl) {
+        this.renderer = new THREE.WebGLRenderer({ canvas: map.getCanvas(), context: gl, antialias: true });
+        this.renderer.autoClear = false;
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.Camera();
+
+        const amb = new THREE.AmbientLight(0xffffff, 0.55);
+        const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+        sun.position.set(0.5, 0.8, 0.6);
+        this.scene.add(amb);
+        this.scene.add(sun);
+
+        this.modelRoot = new THREE.Group();
+        this.scene.add(this.modelRoot);
+
+        this.loader = new GLTFLoader();
+        this.model = null;
+
+        this.loadModel(glbEl.value);
+      },
+      render: function (gl, matrix) {
+        this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix);
+        this.renderer.resetState();
+        this.renderer.render(this.scene, this.camera);
+        this.renderer.resetState();
+      },
+      loadModel: function (url) {
+        setStatus(`Loading GLB: ${url}`);
+        this.modelRoot.clear();
+        this.model = null;
+        this.loader.load(
+          url,
+          (gltf) => {
+            this.model = gltf.scene;
+            this.model.traverse((c) => {
+              if (c.isMesh) {
+                c.castShadow = false;
+                c.receiveShadow = false;
+                if (c.material && c.material.map) c.material.map.colorSpace = THREE.SRGBColorSpace;
+              }
+            });
+            this.modelRoot.add(this.model);
+            const box = new THREE.Box3().setFromObject(this.model);
+            const size = box.getSize(new THREE.Vector3());
+            setStatus(`GLB loaded. Bounds size: ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} (model units)`);
+            applyTransform();
+            map.triggerRepaint();
+          },
+          undefined,
+          (err) => {
+            console.error(err);
+            setStatus(`Failed to load GLB: ${err.message}`);
+          }
+        );
+      },
+    };
+
+    function applyTransform() {
+      if (!customLayer.model) {
+        setStatus('GLB not loaded yet — wait for "GLB loaded" then click Apply transform.');
+        return;
+      }
+
+      let ax = Number(axEl.value || 0);
+      let ay = Number(ayEl.value || 0);
+      let az = Number(azEl.value || 0);
+      const metersPerUnit = Math.max(1e-9, Number(mperuEl.value || 1));
+      const yaw = THREE.MathUtils.degToRad(Number(yawEl.value || 0));
+      const flip = Number(flipEl.value || 0) ? -1 : 1; // flip north/south
+      const fromBlender = Number(blenderCoordsEl.value || 0) ? 1 : 0;
+
+      // If the anchor was read from Blender (Z-up), convert to glTF coords (Y-up).
+      // Blender: (x=east, y=north, z=up)
+      // glTF:    (x=east, y=up,   z=north)  => (x_g = x_b, y_g = z_b, z_g = y_b)
+      if (fromBlender) {
+        const x_b = ax, y_b = ay, z_b = az;
+        ax = x_b;
+        ay = z_b;
+        az = y_b;
+      }
+
+      // MapLibre world: x=east, y=south, z=up (MercatorCoordinate)
+      // Assume model: glTF coords with x=east, y=up, z=north.
+      const merc = maplibregl.MercatorCoordinate.fromLngLat({ lng: BURJ.lon, lat: BURJ.lat }, 0);
+      const metersToMerc = merc.meterInMercatorCoordinateUnits();
+
+      // We'll transform the wrapper (modelRoot) and keep the GLB scene untouched.
+      const root = customLayer.modelRoot;
+
+      // Reset wrapper transform
+      root.position.set(0, 0, 0);
+      root.rotation.set(0, 0, 0);
+      root.scale.set(1, 1, 1);
+      root.updateMatrixWorld(true);
+
+      // Build rotation: yaw around model up (Y), then axis-convert to MapLibre by rotating +90° around X.
+      const qYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      const qAxis = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+      const q = qAxis.multiply(qYaw); // apply yaw, then axis conversion
+
+      // Scale: model units -> meters -> mercator units, with optional flip on map-Y
+      const s = metersToMerc * metersPerUnit;
+      const scaleVec = new THREE.Vector3(s, s * flip, s);
+
+      // Compute where the anchor point ends up after rotation+scale (no translation yet)
+      const anchorLocal = new THREE.Vector3(ax, ay, az); // in GLB coords
+      const anchorWorld = anchorLocal.clone().applyQuaternion(q).multiply(scaleVec);
+
+      // Translate so that the anchor lands at Burj mercator coordinate on ground (z=0)
+      root.position.set(merc.x - anchorWorld.x, merc.y - anchorWorld.y, 0 - anchorWorld.z);
+      root.quaternion.copy(q);
+      root.scale.copy(scaleVec);
+
+      setStatus(
+        `Applied. anchor(${ax.toFixed(2)},${ay.toFixed(2)},${az.toFixed(2)}) ` +
+        `meters/unit=${metersPerUnit} yaw=${THREE.MathUtils.radToDeg(yaw).toFixed(0)}° flip=${flip === -1 ? 'on' : 'off'}`
+      );
+      map.triggerRepaint();
+    }
+
+    applyBtn.addEventListener('click', () => applyTransform());
+    resetBtn.addEventListener('click', () => {
+      map.easeTo({ center: [BURJ.lon, BURJ.lat], zoom: 16, pitch: 60, bearing: 0 });
+    });
+
+    map.on('style.load', () => {
+      map.addLayer(customLayer);
+    });
+  </script>
+</body>
+</html>
+
+

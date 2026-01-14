@@ -52,7 +52,7 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import SunCalc from 'https://cdn.jsdelivr.net/npm/suncalc@1.9.0/+esm';
-
+    
     const GLB_URL = './smartshift/data/raw/BusinessBay_Downtown.glb';
 
     const statusEl = document.getElementById('status');
@@ -117,45 +117,45 @@
 
     function loadGLB(url) {
       return new Promise((resolve, reject) => {
-        const loader = new GLTFLoader();
-        loader.load(
-          url,
-          (gltf) => {
-            const obj = gltf.scene;
-            obj.traverse((child) => {
-              if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
+      const loader = new GLTFLoader();
+      loader.load(
+        url,
+        (gltf) => {
+          const obj = gltf.scene;
+          obj.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
                 if (child.material) {
                   child.material.side = THREE.FrontSide;
                   if (child.material.map) child.material.map.encoding = THREE.SRGBColorSpace;
                 } else {
-                  child.material = new THREE.MeshStandardMaterial({
+                child.material = new THREE.MeshStandardMaterial({
                     color: 0xcfd8e3,
                     roughness: 0.6,
-                    metalness: 0.05,
-                  });
-                }
+                  metalness: 0.05,
+                });
               }
-            });
-            scene.add(obj);
+            }
+          });
+          scene.add(obj);
             placeModel(obj);
-            updateSun();
-            setStatus('GLB loaded');
-            resolve();
-          },
-          (xhr) => {
-            if (xhr.total) setStatus(`Loading GLB… ${((xhr.loaded / xhr.total) * 100).toFixed(1)}%`);
-            else setStatus(`Loading GLB… ${(xhr.loaded / 1024).toFixed(1)} KB`);
-          },
-          (err) => {
-            console.error(err);
-            setStatus('GLB load failed. Serve via http://, not file://');
-            reject(err);
-          },
-        );
-      });
-    }
+          updateSun();
+          setStatus('GLB loaded');
+          resolve();
+        },
+        (xhr) => {
+          if (xhr.total) setStatus(`Loading GLB… ${((xhr.loaded / xhr.total) * 100).toFixed(1)}%`);
+          else setStatus(`Loading GLB… ${(xhr.loaded / 1024).toFixed(1)} KB`);
+        },
+        (err) => {
+          console.error(err);
+          setStatus('GLB load failed. Serve via http://, not file://');
+          reject(err);
+        },
+      );
+    });
+  }
 
     function placeModel(obj) {
       // keep native scale; drop to ground and center X/Z for orbit
