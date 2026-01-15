@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dubai LoD1 (OSM + Height Extrusion)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link
+    href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/dist/maplibre-gl.css"
+    rel="stylesheet"
+  />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      background: rgba(15, 23, 42, 0.82); border: 1px solid #1f2937;
+      padding: 10px 12px; border-radius: 10px; min-width: 320px;
+      backdrop-filter: blur(6px); color: #e2e8f0; font-family: Inter, system-ui, sans-serif; font-size: 12px;
+    }
+    #hud h1 { margin: 0 0 6px; font-size: 14px; }
+    #hud .row { display: flex; gap: 8px; margin: 6px 0; align-items: center; }
+    #hud button {
+      padding: 6px 10px; border-radius: 8px; border: 1px solid #1f2937;
+      background: #111827; color: #e2e8f0; cursor: pointer;
+    }
+    #hud input {
+      width: 92px;
+      padding: 6px 8px; border-radius: 8px; border: 1px solid #1f2937;
+      background: #0b1221; color: #e2e8f0;
+    }
+    #status { color: #cbd5e1; }
+    #hint { color: #94a3b8; font-size: 11px; line-height: 1.25; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="hud">
+    <h1>Dubai LoD1 viewer</h1>
+    <div class="row">
+      <button id="reload">Reload visible</button>
+      <label>Height scale <input id="scale" type="number" value="1" min="1" max="50" step="1" /></label>
+      <button id="resetView">Go to Dubai</button>
+    </div>
+    <div class="row">
+      <label>Date <input id="sunDate" type="date" /></label>
+      <label>Time <input id="sunTime" type="time" step="60" /></label>
+      <button id="applySun">Apply sun</button>
+    </div>
+    <div class="row">
+      <label><input id="shadowToggle" type="checkbox" /> Show shadow for clicked building</label>
+    </div>
+    <div class="row">
+      <button id="computeShadows">Shadows for visible</button>
+      <label>Max <input id="shadowMax" type="number" value="0" min="0" max="5000" step="50" /></label>
+      <label><input id="autoShadows" type="checkbox" /> Auto</label>
+      <label><input id="fastShadows" type="checkbox" checked /> Fast</label>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="hint">
+      Tip: Hold right-click + drag to rotate, shift + drag to pitch.
+      Click a building to draw its shadow, or render shadows for all visible buildings.
+      Set Max = 0 to use all visible buildings.
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module">
+    import maplibregl from 'https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.2/+esm';
+    import SunCalc from 'https://cdn.jsdelivr.net/npm/suncalc@1.9.0/+esm';
+    import polygonClipping from 'https://cdn.jsdelivr.net/npm/polygon-clipping@0.15.3/+esm';
+
+    const GEOJSON_URL = '../data/gba_dubai/dubai_merged_height_override.geojson';
+    // Approx Dubai city bounds (keeps initial view sensible but doesn't restrict navigation)
+    const bboxDubaiCity = [54.8, 24.8, 55.6, 25.6]; // west,south,east,north
+
+    const statusEl = document.getElementById('status');
+    const scaleEl = document.getElementById('scale');
+    const reloadBtn = document.getElementById('reload');
+    const sunDateEl = document.getElementById('sunDate');
+    const sunTimeEl = document.getElementById('sunTime');
+    const applySunBtn = document.getElementById('applySun');
+    const shadowToggleEl = document.getElementById('shadowToggle');
+    const computeShadowsBtn = document.getElementById('computeShadows');
+    const shadowMaxEl = document.getElementById('shadowMax');
+    const autoShadowsEl = document.getElementById('autoShadows');
+    const fastShadowsEl = document.getElementById('fastShadows');
+    const resetViewBtn = document.getElementById('resetView');
+
+    const SHADOW_ZOOM_MIN = 14;
+    const osmStyle = {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '© OpenStreetMap contributors'
+        }
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+    };
+
+    const center = [(bboxDubaiCity[0] + bboxDubaiCity[2]) / 2, (bboxDubaiCity[1] + bboxDubaiCity[3]) / 2];
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: osmStyle,
+      center,
+      zoom: 12.8,
+      minZoom: 9,
+      maxZoom: 20,
+      renderWorldCopies: false,
+      pitch: 55,
+      bearing: 0,
+      antialias: true,
+    });
+
+    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-right');
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    // Rendering is handled by MapLibre's fill-extrusion layer.
+    reloadBtn.addEventListener('click', () => {
+      setStatus('Rendering is automatic. Zoom/pan/rotate and the extrusions will update.');
+    });
+    resetViewBtn.addEventListener('click', () => {
+      map.fitBounds(
+        [[bboxDubaiCity[0], bboxDubaiCity[1]], [bboxDubaiCity[2], bboxDubaiCity[3]]],
+        { padding: 24, duration: 800 }
+      );
+    });
+
+    function baseHeightExpr() {
+      return [
+        'coalesce',
+        ['to-number', ['get', 'height_final']],
+        ['to-number', ['get', 'height']],
+        0
+      ];
+    }
+
+    function toWebMercator([lon, lat]) {
+      const rMajor = 6378137.0;
+      const x = rMajor * lon * Math.PI / 180.0;
+      const y = rMajor * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180.0) / 2));
+      return [x, y];
+    }
+
+    function fromWebMercator([x, y]) {
+      const rMajor = 6378137.0;
+      const lon = (x / rMajor) * 180.0 / Math.PI;
+      const lat = (2 * Math.atan(Math.exp(y / rMajor)) - Math.PI / 2) * 180.0 / Math.PI;
+      return [lon, lat];
+    }
+
+    function getHeightMeters(props) {
+      const h = Number(props?.height_final ?? props?.height);
+      return Number.isFinite(h) && h > 0 ? h : 20;
+    }
+
+    function computeShadowPolygon(geom, heightM, sunAzimuthDeg, sunAltDeg) {
+      if (!geom || sunAltDeg <= 0) return null;
+      const length = heightM / Math.tan((sunAltDeg * Math.PI) / 180);
+      if (!Number.isFinite(length) || length <= 0) return null;
+      const az = (sunAzimuthDeg + 180) * Math.PI / 180;
+      const dx = Math.sin(az) * length;
+      const dy = Math.cos(az) * length;
+      const closeRing = (ring) => {
+        if (!ring.length) return ring;
+        const first = ring[0];
+        const last = ring[ring.length - 1];
+        if (first[0] !== last[0] || first[1] !== last[1]) {
+          return [...ring, first];
+        }
+        return ring;
+      };
+      const toWM = (ring) => ring.map((pt) => toWebMercator(pt));
+      const fromWM = (ring) => ring.map((pt) => fromWebMercator(pt));
+      const shiftWM = (ring) => ring.map(([x, y]) => [x + dx, y + dy]);
+      const unionAll = (polys) => {
+        if (!polys.length) return null;
+        let acc = polys[0];
+        for (let i = 1; i < polys.length; i += 1) {
+          acc = polygonClipping.union(acc, polys[i]);
+        }
+        return acc;
+      };
+      const simplifyRing = (ring) => {
+        const n = ring.length;
+        if (n <= 120) return ring;
+        const step = n > 400 ? 4 : 2;
+        const out = [];
+        for (let i = 0; i < n; i += step) out.push(ring[i]);
+        if (out[out.length - 1] !== ring[n - 1]) out.push(ring[n - 1]);
+        return out;
+      };
+      const buildShadowWM = (outer) => {
+        const base = closeRing(simplifyRing(outer));
+        const baseWM = closeRing(toWM(base));
+        const shiftedWM = closeRing(shiftWM(baseWM));
+        const pieces = [
+          [baseWM],
+          [shiftedWM]
+        ];
+        for (let i = 0; i < baseWM.length - 1; i += 1) {
+          const a = baseWM[i];
+          const b = baseWM[i + 1];
+          const a2 = shiftedWM[i];
+          const b2 = shiftedWM[i + 1];
+          const quad = [a, b, b2, a2, a];
+          pieces.push([quad]);
+        }
+        return unionAll(pieces);
+      };
+      const buildShadowWMFast = (outer) => {
+        const base = closeRing(simplifyRing(outer));
+        const baseWM = closeRing(toWM(base));
+        const shiftedWM = closeRing(shiftWM(baseWM));
+        const pieces = [
+          [baseWM],
+          [shiftedWM]
+        ];
+        for (let i = 0; i < baseWM.length - 1; i += 1) {
+          const a = baseWM[i];
+          const b = baseWM[i + 1];
+          const a2 = shiftedWM[i];
+          const b2 = shiftedWM[i + 1];
+          const quad = [a, b, b2, a2, a];
+          pieces.push([quad]);
+        }
+        return pieces;
+      };
+      const wmToLonLat = (mp) => mp.map((poly) => poly.map((ring) => fromWM(ring)));
+      if (geom.type === 'Polygon') {
+        const outer = geom.coordinates[0];
+        const useFast = fastShadowsEl.checked;
+        const shadowWM = useFast ? buildShadowWMFast(outer) : buildShadowWM(outer);
+        if (!shadowWM) return null;
+        const shadowLL = wmToLonLat(shadowWM);
+        return useFast || shadowLL.length > 1
+          ? { type: 'MultiPolygon', coordinates: shadowLL }
+          : { type: 'Polygon', coordinates: shadowLL[0] };
+      }
+      if (geom.type === 'MultiPolygon') {
+        const parts = [];
+        geom.coordinates.forEach((poly) => {
+          const outer = poly[0];
+          const shadowWM = fastShadowsEl.checked ? buildShadowWMFast(outer) : buildShadowWM(outer);
+          if (shadowWM) parts.push(shadowWM);
+        });
+        if (!parts.length) return null;
+        if (fastShadowsEl.checked) {
+          const flattened = parts.flat();
+          const shadowLL = wmToLonLat(flattened);
+          return { type: 'MultiPolygon', coordinates: shadowLL };
+        }
+        const merged = unionAll(parts);
+        if (!merged) return null;
+        const shadowLL = wmToLonLat(merged);
+        return shadowLL.length === 1
+          ? { type: 'Polygon', coordinates: shadowLL[0] }
+          : { type: 'MultiPolygon', coordinates: shadowLL };
+      }
+      return null;
+    }
+
+    function getFeatureKey(feature) {
+      if (feature.id != null) return `id:${feature.id}`;
+      const pid = feature.properties?.id ?? feature.properties?.osm_id ?? null;
+      if (pid != null) return `pid:${pid}`;
+      return `geom:${JSON.stringify(feature.geometry?.bbox ?? feature.geometry?.coordinates?.[0]?.[0] ?? '')}`;
+    }
+
+    function setDefaultSunInputs() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      if (!sunDateEl.value) sunDateEl.value = `${y}-${m}-${d}`;
+      if (!sunTimeEl.value) sunTimeEl.value = `${hh}:${mm}`;
+    }
+
+    function getSunForCenter() {
+      const [lon, lat] = map.getCenter().toArray();
+      const dateStr = sunDateEl.value;
+      const timeStr = sunTimeEl.value;
+      if (!dateStr || !timeStr) return null;
+      const dt = new Date(`${dateStr}T${timeStr}:00`);
+      const pos = SunCalc.getPosition(dt, lat, lon);
+      return {
+        altitude: pos.altitude * 180 / Math.PI,
+        azimuth: (pos.azimuth * 180 / Math.PI) + 180
+      };
+    }
+
+    function setHeightScale() {
+      const scale = Math.max(1, Math.min(50, Number(scaleEl.value || 1)));
+      if (map.getLayer('dubai-lod1')) {
+        map.setPaintProperty('dubai-lod1', 'fill-extrusion-height', ['*', baseHeightExpr(), scale]);
+      }
+      setStatus(`Height scale set to ${scale}×`);
+    }
+
+    scaleEl.addEventListener('change', setHeightScale);
+
+    map.on('load', () => {
+      setDefaultSunInputs();
+      setStatus('Loading Dubai GeoJSON (this is large; first load may take time)…');
+
+      map.addSource('dubai', {
+        type: 'geojson',
+        data: GEOJSON_URL,
+      });
+
+      // 2D footprints at low zoom (fast)
+      map.addLayer({
+        id: 'dubai-footprints',
+        type: 'fill',
+        source: 'dubai',
+        paint: {
+          'fill-color': [
+            'match',
+            ['get', 'height_src'],
+            'osm_height', '#60a5fa',
+            'osm_levels', '#34d399',
+            '#fbbf24'
+          ],
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.10, 13, 0.25],
+        },
+      });
+
+      // 3D LoD1 extrusions (only when zoomed in)
+      map.addLayer({
+        id: 'dubai-lod1',
+        type: 'fill-extrusion',
+        source: 'dubai',
+        minzoom: 12,
+        paint: {
+          'fill-extrusion-color': [
+            'match',
+            ['get', 'height_src'],
+            'osm_height', '#60a5fa',
+            'osm_levels', '#34d399',
+            '#fbbf24'
+          ],
+          'fill-extrusion-height': ['*', baseHeightExpr(), Math.max(1, Math.min(50, Number(scaleEl.value || 1)))],
+          'fill-extrusion-base': 0,
+          'fill-extrusion-opacity': 0.88,
+        },
+      });
+
+      map.on('sourcedata', (e) => {
+        if (e.sourceId !== 'dubai') return;
+        if (e.isSourceLoaded) {
+          const zoomHint = map.getZoom() < 13 ? ' Zoom in (13+) to see 3D.' : '';
+          setStatus(`Dubai buildings loaded. Blue=OSM height, green=OSM levels, amber=computed.${zoomHint}`);
+          setHeightScale();
+        }
+      });
+      map.fitBounds(
+        [[bboxDubaiCity[0], bboxDubaiCity[1]], [bboxDubaiCity[2], bboxDubaiCity[3]]],
+        { padding: 24, duration: 800 }
+      );
+      map.on('error', (e) => {
+        if (e?.error?.message && e.sourceId === 'dubai') {
+          setStatus(`Failed to load buildings: ${e.error.message}`);
+        }
+      });
+
+      map.addSource('shadow', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] }
+      });
+      map.addLayer({
+        id: 'shadow-layer',
+        type: 'fill',
+        source: 'shadow',
+        paint: {
+          'fill-color': '#0f172a',
+          'fill-opacity': 0.55,
+          'fill-opacity-transition': { duration: 300, delay: 0 }
+        }
+      });
+
+      function updateShadowSource(features, fade = true) {
+        const src = map.getSource('shadow');
+        if (!src || !src.setData) return;
+        if (fade) map.setPaintProperty('shadow-layer', 'fill-opacity', 0.0);
+        src.setData({ type: 'FeatureCollection', features });
+        if (fade) {
+          setTimeout(() => {
+            map.setPaintProperty('shadow-layer', 'fill-opacity', 0.55);
+          }, 40);
+        }
+      }
+
+      applySunBtn.addEventListener('click', () => {
+        const sun = getSunForCenter();
+        if (!sun) {
+          setStatus('Set a date/time to compute sun position.');
+          return;
+        }
+        setStatus(`Sun set. Alt ${sun.altitude.toFixed(1)}°, Az ${sun.azimuth.toFixed(1)}°`);
+        if (autoShadowsEl.checked) {
+          computeVisibleShadows();
+        }
+      });
+
+      map.on('click', 'dubai-lod1', (e) => {
+        if (!shadowToggleEl.checked) return;
+        const feature = e.features?.[0];
+        if (!feature) return;
+        const sun = getSunForCenter();
+        if (!sun) {
+          setStatus('Set a date/time to compute sun position.');
+          return;
+        }
+        const heightM = getHeightMeters(feature.properties);
+        const scale = Math.max(1, Math.min(50, Number(scaleEl.value || 1)));
+        let shadowGeom = null;
+        try {
+          shadowGeom = computeShadowPolygon(feature.geometry, heightM * scale, sun.azimuth, sun.altitude);
+        } catch (err) {
+          console.error(err);
+          setStatus('Shadow error: failed to compute geometry.');
+          return;
+        }
+        if (!shadowGeom) {
+          setStatus('No shadow (sun below horizon or invalid geometry).');
+          return;
+        }
+        const shadowFeature = {
+          type: 'Feature',
+          properties: { height: heightM },
+          geometry: shadowGeom
+        };
+        updateShadowSource([shadowFeature], true);
+        setStatus(`Shadow drawn. Height ${heightM.toFixed(1)} m.`);
+      });
+
+      map.on('click', 'dubai-footprints', (e) => {
+        const f0 = e.features?.[0];
+        if (!f0) return;
+        const p = f0.properties || {};
+        const hFinal = p.height_final ?? '(missing)';
+        const h = p.height ?? '(missing)';
+        const src = p.height_src ?? '(missing)';
+        const scale = Math.max(1, Math.min(50, Number(scaleEl.value || 1)));
+        const used = Number.isFinite(Number(hFinal)) ? Number(hFinal) : (Number.isFinite(Number(h)) ? Number(h) : 0);
+        const html = `
+          <div style="font: 12px/1.2 system-ui; color: #0f172a;">
+            <div><b>height_final</b>: ${hFinal}</div>
+            <div><b>height</b>: ${h}</div>
+            <div><b>height_src</b>: ${src}</div>
+            <div><b>scale</b>: ${scale}×</div>
+            <div><b>extrusion</b>: ${(used * scale).toFixed(2)} m</div>
+          </div>
+        `;
+        new maplibregl.Popup({ closeOnClick: true })
+          .setLngLat(e.lngLat)
+          .setHTML(html)
+          .addTo(map);
+      });
+
+      map.on('mouseenter', 'dubai-lod1', () => map.getCanvas().style.cursor = 'pointer');
+      map.on('mouseleave', 'dubai-lod1', () => map.getCanvas().style.cursor = '');
+
+      let autoTimer = null;
+      let shadowJobToken = 0;
+      const shadowCache = new Map();
+      let currentSunKey = null;
+      function clearShadows(reason) {
+        updateShadowSource([], false);
+        if (reason) setStatus(reason);
+      }
+      function sunKey(sun, scale) {
+        const a = Math.round(sun.altitude * 10) / 10;
+        const z = Math.round(sun.azimuth * 10) / 10;
+        return `${a}|${z}|${scale}|${fastShadowsEl.checked ? 'fast' : 'union'}`;
+      }
+      function scheduleAuto() {
+        if (!autoShadowsEl.checked) return;
+        if (autoTimer) clearTimeout(autoTimer);
+        autoTimer = setTimeout(() => {
+          computeVisibleShadows();
+        }, 150);
+      }
+
+      async function computeVisibleShadows() {
+        const myToken = ++shadowJobToken;
+        if (map.getZoom() < SHADOW_ZOOM_MIN) {
+          clearShadows(`Zoom in to ${SHADOW_ZOOM_MIN}+ to show shadows.`);
+          return;
+        }
+        const sun = getSunForCenter();
+        if (!sun) {
+          setStatus('Set a date/time to compute sun position.');
+          return;
+        }
+        const scale = Math.max(1, Math.min(50, Number(scaleEl.value || 1)));
+        const key = sunKey(sun, scale);
+        if (key !== currentSunKey) {
+          shadowCache.clear();
+          currentSunKey = key;
+        }
+        const rawMax = Number(shadowMaxEl.value || 0);
+        const maxCount = rawMax <= 0 ? Infinity : Math.max(10, Math.min(5000, rawMax));
+        const layers = map.getZoom() >= 13 ? ['dubai-lod1'] : ['dubai-footprints'];
+        const raw = map.queryRenderedFeatures({ layers });
+        if (!raw.length) {
+          if (!map.isSourceLoaded('dubai')) {
+            setStatus('Buildings are still loading. Please wait a moment.');
+          } else {
+            setStatus('No buildings visible here. Try zooming in or moving to Dubai.');
+          }
+          return;
+        }
+        const seen = new Set();
+        const features = [];
+        for (const f of raw) {
+          const key = getFeatureKey(f);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          features.push(f);
+          if (features.length >= maxCount) break;
+        }
+        const shadows = [];
+        const batchSize = 150;
+        for (let i = 0; i < features.length; i += batchSize) {
+          if (myToken !== shadowJobToken) return;
+          const slice = features.slice(i, i + batchSize);
+          for (const f of slice) {
+            const cacheKey = `${getFeatureKey(f)}|${key}`;
+            let geom = shadowCache.get(cacheKey);
+            if (!geom) {
+              const heightM = getHeightMeters(f.properties) * scale;
+              geom = computeShadowPolygon(f.geometry, heightM, sun.azimuth, sun.altitude);
+              if (geom) shadowCache.set(cacheKey, geom);
+            }
+            if (!geom) continue;
+            shadows.push({ type: 'Feature', properties: {}, geometry: geom });
+          }
+          setStatus(`Rendering shadows: ${Math.min(i + batchSize, features.length)}/${features.length}…`);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        updateShadowSource(shadows, true);
+        const maxLabel = Number.isFinite(maxCount) && maxCount !== Infinity ? ` (max ${maxCount})` : '';
+        setStatus(`Shadows rendered: ${shadows.length}/${features.length} visible buildings${maxLabel}.`);
+      }
+
+      computeShadowsBtn.addEventListener('click', () => {
+        computeVisibleShadows();
+      });
+
+      map.on('moveend', scheduleAuto);
+      map.on('zoomend', () => {
+        if (map.getZoom() < SHADOW_ZOOM_MIN) {
+          clearShadows(`Zoom in to ${SHADOW_ZOOM_MIN}+ to show shadows.`);
+        } else {
+          scheduleAuto();
+        }
+      });
+      map.on('rotateend', scheduleAuto);
+      map.on('pitchend', scheduleAuto);
+      fastShadowsEl.addEventListener('change', () => {
+        shadowCache.clear();
+        currentSunKey = null;
+        scheduleAuto();
+      });
+    });
+  </script>
+</body>
+</html>
+
+

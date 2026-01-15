@@ -4,6 +4,7 @@ Override GlobalBuildingAtlas computed heights with raw OSM tag heights/levels.
 Inputs:
   1) GBA Dubai GeoJSON (has properties: id, height, var, region, source)
   2) Raw OSM building GeoJSON export (from osmium export) that contains OSM tags
+     OR Overpass JSON (out:json) with elements/tags (recommended for live OSM tags)
 
 Output:
   - A new GeoJSON with added properties:
@@ -14,6 +15,14 @@ Example raw OSM export creation (osmium):
   osmium extract -b 55.25090,25.17069,55.29405,25.20328 -o dubai_bbox.pbf middleeast.osm.pbf
   osmium tags-filter dubai_bbox.pbf nwr/building -o dubai_buildings.pbf
   osmium export dubai_buildings.pbf -o dubai_osm_buildings.geojson
+
+Example Overpass JSON:
+  [out:json][timeout:180];
+  (
+    way["building"](25.17069,55.25090,25.20328,55.29405);
+    relation["building"](25.17069,55.25090,25.20328,55.29405);
+  );
+  out body geom;
 """
 
 from __future__ import annotations
@@ -57,6 +66,27 @@ def _extract_tags(props: Dict[str, Any]) -> Dict[str, Any]:
     return props
 
 
+def _load_overpass(path: Path, levels_to_m: float) -> Dict[str, Tuple[Optional[float], Optional[float], str]]:
+    import json
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    elements = data.get("elements", [])
+    lookup: Dict[str, Tuple[Optional[float], Optional[float], str]] = {}
+
+    for el in elements:
+        tags = el.get("tags") or {}
+        if not tags:
+            continue
+        osm_id = el.get("id")
+        if osm_id is None:
+            continue
+        h_osm, levels_m, src_name = _compute_height_from_tags(tags, levels_to_m)
+        if h_osm is None and levels_m is None:
+            continue
+        lookup[str(osm_id)] = (h_osm, levels_m, src_name)
+    return lookup
+
+
 def _extract_osm_id(props: Dict[str, Any]) -> Optional[str]:
     # GBA uses "id" as a string
     for key in ("id", "@id", "osm_id", "osmid"):
@@ -82,39 +112,50 @@ def _compute_height_from_tags(tags: Dict[str, Any], levels_to_m: float) -> Tuple
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gba", required=True, help="Path to GBA dubai_merged.geojson")
-    parser.add_argument("--osm", required=True, help="Path to raw OSM buildings geojson (osmium export)")
+    parser.add_argument("--osm", required=False, help="Path to raw OSM buildings geojson (osmium export)")
+    parser.add_argument("--osm_overpass", required=False, help="Path to Overpass JSON (out:json)")
     parser.add_argument("--out", required=True, help="Output GeoJSON path")
     parser.add_argument("--out_csv", required=True, help="Output CSV path")
     parser.add_argument("--levels_to_m", type=float, default=3.6, help="Meters per building level")
     args = parser.parse_args()
 
     gba_path = Path(args.gba)
-    osm_path = Path(args.osm)
     out_path = Path(args.out)
     out_csv = Path(args.out_csv)
 
     if not gba_path.exists():
         raise SystemExit(f"GBA file not found: {gba_path}")
-    if not osm_path.exists():
-        raise SystemExit(f"OSM file not found: {osm_path}")
+    if not args.osm and not args.osm_overpass:
+        raise SystemExit("Provide --osm or --osm_overpass")
+
+    osm_lookup: Dict[str, Tuple[Optional[float], Optional[float], str]] = {}
+    if args.osm_overpass:
+        overpass_path = Path(args.osm_overpass)
+        if not overpass_path.exists():
+            raise SystemExit(f"Overpass file not found: {overpass_path}")
+        osm_lookup = _load_overpass(overpass_path, args.levels_to_m)
+    else:
+        osm_path = Path(args.osm)
+        if not osm_path.exists():
+            raise SystemExit(f"OSM file not found: {osm_path}")
 
     # Fiona is used for streaming (GeoJSON is huge)
     import fiona
     from shapely.geometry import shape
 
-    # Build OSM id -> (height_osm, levels_m, src)
-    osm_lookup: Dict[str, Tuple[Optional[float], Optional[float], str]] = {}
-    with fiona.open(osm_path, "r") as src:
-        for feat in src:
-            props = dict(feat.get("properties") or {})
-            osm_id = _extract_osm_id(props)
-            if not osm_id:
-                continue
-            tags = _extract_tags(props)
-            h_osm, levels_m, src_name = _compute_height_from_tags(tags, args.levels_to_m)
-            if h_osm is None and levels_m is None:
-                continue
-            osm_lookup[osm_id] = (h_osm, levels_m, src_name)
+    # Build OSM id -> (height_osm, levels_m, src) from GeoJSON export if provided
+    if not osm_lookup:
+        with fiona.open(osm_path, "r") as src:
+            for feat in src:
+                props = dict(feat.get("properties") or {})
+                osm_id = _extract_osm_id(props)
+                if not osm_id:
+                    continue
+                tags = _extract_tags(props)
+                h_osm, levels_m, src_name = _compute_height_from_tags(tags, args.levels_to_m)
+                if h_osm is None and levels_m is None:
+                    continue
+                osm_lookup[osm_id] = (h_osm, levels_m, src_name)
 
     # Prepare output schema (add new fields)
     with fiona.open(gba_path, "r") as gba_src:
