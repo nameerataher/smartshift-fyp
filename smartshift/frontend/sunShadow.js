@@ -47,6 +47,7 @@ export function setupSunShadowSystem(options) {
   let shadowJobToken = 0;
   const shadowCache = new Map();
   let currentSunKey = null;
+  let lod2ShadowGetter = null;
 
   function setDefaultSunInputs() {
     const now = new Date();
@@ -247,6 +248,69 @@ export function setupSunShadowSystem(options) {
     return `${a}|${z}|${scale}|${fastShadowsEl.checked ? 'fast' : 'union'}`;
   }
 
+  function buildLod2ShadowFeatures(lod2, sun, maxTriangles) {
+    if (!lod2 || !lod2.triangles?.length) return null;
+    if (sun.altitude <= 0) return [];
+    const alt = (sun.altitude * Math.PI) / 180;
+    const az = (sun.azimuth * Math.PI) / 180;
+    const sx = Math.sin(az) * Math.cos(alt);
+    const sy = Math.cos(az) * Math.cos(alt);
+    const sz = Math.sin(alt);
+    if (sz <= 0) return [];
+
+    const origin = lod2.originMercator;
+    const meterToMerc = Number(lod2.meterToMercator || 0);
+    if (!origin || !Number.isFinite(meterToMerc) || meterToMerc <= 0) return null;
+
+    const offsetMeters = typeof lod2.getOffsetMeters === 'function' ? lod2.getOffsetMeters() : [0, 0, 0];
+    const total = lod2.triangles.length;
+    let useRoofOnly = total > maxTriangles;
+    const polys = [];
+    const cap = Math.min(total, maxTriangles);
+    const step = total > cap ? Math.ceil(total / cap) : 1;
+
+    for (let i = 0; i < total; i += step) {
+      const tri = lod2.triangles[i];
+      if (!tri) continue;
+
+      const x1 = tri[0]; const y1 = tri[1]; const z1 = tri[2];
+      const x2 = tri[3]; const y2 = tri[4]; const z2 = tri[5];
+      const x3 = tri[6]; const y3 = tri[7]; const z3 = tri[8];
+
+      if (useRoofOnly) {
+        const ux = x2 - x1; const uy = y2 - y1; const uz = z2 - z1;
+        const vx = x3 - x1; const vy = y3 - y1; const vz = z3 - z1;
+        const nx = uy * vz - uz * vy;
+        const ny = uz * vx - ux * vz;
+        const nz = ux * vy - uy * vx;
+        if (nz < 0.2) continue;
+      }
+
+      const project = (x, y, z) => {
+        const t = z / sz;
+        const px = x - sx * t;
+        const py = y - sy * t;
+        const mx = origin.x + (px + (Number(offsetMeters[0]) || 0)) * meterToMerc;
+        const my = origin.y + ((Number(offsetMeters[1]) || 0) - py) * meterToMerc;
+        return fromWebMercator([mx, my]);
+      };
+
+      const p1 = project(x1, y1, z1);
+      const p2 = project(x2, y2, z2);
+      const p3 = project(x3, y3, z3);
+      polys.push([[p1, p2, p3, p1]]);
+    }
+
+    if (!polys.length) return [];
+    return [
+      {
+        type: 'Feature',
+        properties: { mode: useRoofOnly ? 'roof' : 'full', triangles: polys.length },
+        geometry: { type: 'MultiPolygon', coordinates: polys }
+      }
+    ];
+  }
+
   async function computeVisibleShadows() {
     const myToken = ++shadowJobToken;
     if (map.getZoom() < SHADOW_ZOOM_MIN) {
@@ -264,6 +328,23 @@ export function setupSunShadowSystem(options) {
       shadowCache.clear();
       currentSunKey = key;
     }
+
+    const lod2 = typeof lod2ShadowGetter === 'function' ? lod2ShadowGetter() : null;
+    if (lod2?.triangles?.length) {
+      const rawMax = Number(shadowMaxEl.value || 0);
+      const maxTriangles = rawMax <= 0 ? 8000 : Math.max(200, Math.min(40000, rawMax));
+      const features = buildLod2ShadowFeatures(lod2, sun, maxTriangles);
+      if (!features) {
+        setStatus('LOD2 shadows unavailable. Falling back to LOD1.');
+      } else {
+        updateShadowSource(features, true);
+        const triCount = features[0]?.properties?.triangles ?? 0;
+        const mode = features[0]?.properties?.mode ?? 'full';
+        setStatus(`LOD2 shadows rendered (${mode}). Triangles: ${triCount}.`);
+        return;
+      }
+    }
+
     const rawMax = Number(shadowMaxEl.value || 0);
     const maxCount = rawMax <= 0 ? Infinity : Math.max(10, Math.min(5000, rawMax));
     const layers = map.getZoom() >= 13 ? ['dubai-lod1'] : ['dubai-footprints'];
@@ -414,6 +495,9 @@ export function setupSunShadowSystem(options) {
     setTimeFromSlider,
     computeVisibleShadows,
     scheduleAuto,
-    clearShadows
+    clearShadows,
+    setLod2ShadowSource(getter) {
+      lod2ShadowGetter = getter;
+    }
   };
 }

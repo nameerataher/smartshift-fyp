@@ -9,6 +9,19 @@ export const downtownCenter = [55.2744, 25.1972]; // Burj Khalifa vicinity
 
 export const SHADOW_ZOOM_MIN = 14;
 
+// Optional LOD2+ model overlay (glTF/GLB). Set URL and anchor to enable.
+// Example: export const LOD2_MODEL_URL = '../data/dso.glb';
+export const LOD2_MODEL_URL = '../data/dso.glb';
+export const LOD2_MODEL_ANCHOR = [55.384, 25.118]; // Dubai Silicon Oasis (lon, lat)
+export const LOD2_MODEL_ALT_M = 0; // altitude in meters
+export const LOD2_MODEL_SCALE = 1; // multiplier in meters (1 = real scale)
+// glTF is Y-up; MapLibre custom layer uses Z-up, so rotate 90° on X by default.
+export const LOD2_MODEL_ROTATION_DEG = [90, 0, 0];
+// Recenter model around its bounding box (helps if origin is far away).
+export const LOD2_MODEL_RECENTER = true;
+// Optional model offset in meters: +X east, +Y north, +Z up.
+export const LOD2_MODEL_OFFSET_M = [345, -590, 0];
+
 export const osmStyle = {
   version: 8,
   sources: {

@@ -32,7 +32,7 @@ import csv
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 def _to_float_maybe(value: Any) -> Optional[float]:
@@ -109,6 +109,61 @@ def _compute_height_from_tags(tags: Dict[str, Any], levels_to_m: float) -> Tuple
     return None, None, "gba"
 
 
+def _load_manual_csv(path: Path) -> Dict[str, Tuple[float, str]]:
+    import csv as csvlib
+
+    overrides: Dict[str, Tuple[float, str]] = {}
+    with path.open("r", encoding="utf-8") as csvf:
+        reader = csvlib.DictReader(csvf)
+        for row in reader:
+            if not row:
+                continue
+            raw_id = row.get("id") or row.get("osm_id") or row.get("osmid")
+            if not raw_id:
+                continue
+            h = _to_float_maybe(row.get("height_final") or row.get("height_m") or row.get("height"))
+            if h is None or h <= 0:
+                continue
+            src = row.get("height_src") or "manual"
+            overrides[str(raw_id)] = (h, str(src))
+    return overrides
+
+
+def _load_manual_polygons(path: Path) -> List[Tuple[Any, float, str]]:
+    # Returns list of (polygon, height, src)
+    import fiona
+    from shapely.geometry import shape
+
+    overrides: List[Tuple[Any, float, str]] = []
+    with fiona.open(path, "r") as src:
+        for feat in src:
+            props = dict(feat.get("properties") or {})
+            h = _to_float_maybe(props.get("height_final") or props.get("height_m") or props.get("height"))
+            if h is None or h <= 0:
+                continue
+            geom = shape(feat.get("geometry"))
+            if geom.is_empty:
+                continue
+            height_src = props.get("height_src") or "manual_area"
+            overrides.append((geom, h, str(height_src)))
+    return overrides
+
+
+def _manual_override_height(
+    osm_id: Optional[str],
+    centroid: Any,
+    manual_by_id: Dict[str, Tuple[float, str]],
+    manual_polys: Iterable[Tuple[Any, float, str]],
+) -> Tuple[Optional[float], Optional[str]]:
+    if osm_id and osm_id in manual_by_id:
+        h, src = manual_by_id[osm_id]
+        return h, src
+    for poly, h, src in manual_polys:
+        if poly.contains(centroid):
+            return h, src
+    return None, None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gba", required=True, help="Path to GBA dubai_merged.geojson")
@@ -117,6 +172,16 @@ def main() -> int:
     parser.add_argument("--out", required=True, help="Output GeoJSON path")
     parser.add_argument("--out_csv", required=True, help="Output CSV path")
     parser.add_argument("--levels_to_m", type=float, default=3.6, help="Meters per building level")
+    parser.add_argument(
+        "--manual_csv",
+        required=False,
+        help="Optional CSV overrides with columns id,height_final or id,height_m (optional height_src)",
+    )
+    parser.add_argument(
+        "--manual_geojson",
+        required=False,
+        help="Optional GeoJSON polygons with height_final/height_m/height in properties",
+    )
     args = parser.parse_args()
 
     gba_path = Path(args.gba)
@@ -138,6 +203,19 @@ def main() -> int:
         osm_path = Path(args.osm)
         if not osm_path.exists():
             raise SystemExit(f"OSM file not found: {osm_path}")
+
+    manual_by_id: Dict[str, Tuple[float, str]] = {}
+    manual_polys: List[Tuple[Any, float, str]] = []
+    if args.manual_csv:
+        manual_csv = Path(args.manual_csv)
+        if not manual_csv.exists():
+            raise SystemExit(f"Manual CSV not found: {manual_csv}")
+        manual_by_id = _load_manual_csv(manual_csv)
+    if args.manual_geojson:
+        manual_geojson = Path(args.manual_geojson)
+        if not manual_geojson.exists():
+            raise SystemExit(f"Manual GeoJSON not found: {manual_geojson}")
+        manual_polys = _load_manual_polygons(manual_geojson)
 
     # Fiona is used for streaming (GeoJSON is huge)
     import fiona
@@ -208,6 +286,14 @@ def main() -> int:
                 geom = shape(feat["geometry"])
                 c = geom.representative_point()
                 lon, lat = c.x, c.y
+
+                # Optional manual overrides (id first, then polygon areas)
+                manual_height, manual_src = _manual_override_height(
+                    osm_id, c, manual_by_id, manual_polys
+                )
+                if manual_height is not None:
+                    height_final = manual_height
+                    height_src = manual_src or "manual"
 
                 props.update(
                     {
