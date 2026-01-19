@@ -10,6 +10,10 @@ Key Features
 - Real-Time Heat Alerts: Issues automatic warnings when conditions exceed safe exposure thresholds.
 - Dashboard Visualization: Interactive UI for monitoring shadows and worker routes.
 
+Local Viewer (Python server)
+- Run: `python smartshift/server.py --port 8001`
+- Open: `http://localhost:8001/` (redirects to the Dubai LoD1 viewer)
+
 System Architecture (Tentative) 
 - Data Input Layer:
 OSM 2D 
