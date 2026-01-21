@@ -11,7 +11,8 @@ export const SHADOW_ZOOM_MIN = 14;
 
 // Optional LOD2+ model overlay (glTF/GLB). Set URL and anchor to enable.
 // Example: export const LOD2_MODEL_URL = '../data/dso.glb';
-export const LOD2_MODEL_URL = '../data/dso.glb';
+// Set to null to disable the LOD2 overlay.
+export const LOD2_MODEL_URL = null;
 export const LOD2_MODEL_ANCHOR = [55.384, 25.118]; // Dubai Silicon Oasis (lon, lat)
 export const LOD2_MODEL_ALT_M = 0; // altitude in meters
 export const LOD2_MODEL_SCALE = 1; // multiplier in meters (1 = real scale)
