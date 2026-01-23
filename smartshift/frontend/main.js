@@ -288,12 +288,16 @@ map.on('load', () => {
     type: 'fill',
     source: 'dubai',
     paint: {
+      // Color by height: teal→purple→pink→rose→amber→gold for supertalls
       'fill-color': [
-        'match',
-        ['get', 'height_src'],
-        'osm_height', '#60a5fa',
-        'osm_levels', '#34d399',
-        '#fbbf24'
+        'interpolate', ['linear'], ['get', 'height'],
+        0, '#14b8a6',    // teal - ground level
+        15, '#8b5cf6',   // purple - low-rise
+        50, '#ec4899',   // pink - mid-rise
+        150, '#f43f5e',  // rose - high-rise
+        300, '#fbbf24',  // amber - skyscraper
+        500, '#eab308',  // gold - supertall
+        828, '#ef4444'   // red - megatall (Burj Khalifa)
       ],
       'fill-opacity': ['interpolate', ['linear'], ['zoom'], 9, 0.10, 13, 0.25],
     },
@@ -305,12 +309,16 @@ map.on('load', () => {
     source: 'dubai',
     minzoom: 12,
     paint: {
+      // Color by height: teal→purple→pink→rose→amber→gold for supertalls
       'fill-extrusion-color': [
-        'match',
-        ['get', 'height_src'],
-        'osm_height', '#60a5fa',
-        'osm_levels', '#34d399',
-        '#fbbf24'
+        'interpolate', ['linear'], ['get', 'height'],
+        0, '#14b8a6',    // teal - ground level
+        15, '#8b5cf6',   // purple - low-rise
+        50, '#ec4899',   // pink - mid-rise
+        150, '#f43f5e',  // rose - high-rise
+        300, '#fbbf24',  // amber - skyscraper
+        500, '#eab308',  // gold - supertall
+        828, '#ef4444'   // red - megatall (Burj Khalifa)
       ],
       'fill-extrusion-height': ['*', baseHeightExpr(), Math.max(1, Math.min(50, Number(scaleEl.value || 1)))],
       'fill-extrusion-base': 0,
@@ -322,7 +330,7 @@ map.on('load', () => {
     if (e.sourceId !== 'dubai') return;
     if (e.isSourceLoaded) {
       const zoomHint = map.getZoom() < 13 ? ' Zoom in (13+) to see 3D.' : '';
-      setStatus(`Dubai buildings loaded. Blue=OSM height, green=OSM levels, amber=computed.${zoomHint}`);
+      setStatus(`Dubai buildings loaded. Heights from OSM + landmarks + GHSL.${zoomHint}`);
       setHeightScale(map);
     }
   });
@@ -332,18 +340,23 @@ map.on('load', () => {
     const f0 = e.features?.[0];
     if (!f0) return;
     const p = f0.properties || {};
-    const hFinal = p.height_final ?? '(missing)';
-    const h = p.height ?? '(missing)';
-    const src = p.height_src ?? '(missing)';
+    const h = Number(p.height) || 0;
+    const src = p.height_src || 'unknown';
+    const name = p.name || '';
     const scale = Math.max(1, Math.min(50, Number(scaleEl.value || 1)));
-    const used = Number.isFinite(Number(hFinal)) ? Number(hFinal) : (Number.isFinite(Number(h)) ? Number(h) : 0);
+    const srcLabel = {
+      'landmark': '🏛️ Landmark',
+      'osm_height': '📐 OSM Height',
+      'osm_levels': '🏢 OSM Levels',
+      'ghsl': '🛰️ GHSL Satellite',
+      'default': '📍 Default'
+    }[src] || src;
     const html = `
       <div style="font: 12px/1.2 system-ui; color: #0f172a;">
-        <div><b>height_final</b>: ${hFinal}</div>
-        <div><b>height</b>: ${h}</div>
-        <div><b>height_src</b>: ${src}</div>
-        <div><b>scale</b>: ${scale}×</div>
-        <div><b>extrusion</b>: ${(used * scale).toFixed(2)} m</div>
+        ${name ? `<div><b>${name}</b></div>` : ''}
+        <div><b>Height</b>: ${h.toFixed(1)} m</div>
+        <div><b>Source</b>: ${srcLabel}</div>
+        <div><b>Extrusion</b>: ${(h * scale).toFixed(1)} m (${scale}× scale)</div>
       </div>
     `;
     new maplibregl.Popup({ closeOnClick: true })

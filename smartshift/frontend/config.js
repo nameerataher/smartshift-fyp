@@ -1,5 +1,6 @@
 // Shared configuration and helpers for the Dubai LoD1 viewer.
-export const GEOJSON_URL = '../data/gba_dubai/dubai_merged_height_override.geojson';
+// Final heights: OSM + Landmarks + GHSL fallback
+export const GEOJSON_URL = '../data/final/dubai_buildings.geojson';
 
 // Approx Dubai city bounds (keeps initial view sensible but doesn't restrict navigation)
 export const bboxDubaiCity = [54.8, 24.8, 55.6, 25.6]; // west, south, east, north
@@ -37,15 +38,11 @@ export const osmStyle = {
 };
 
 export function baseHeightExpr() {
-  return [
-    'coalesce',
-    ['to-number', ['get', 'height_final']],
-    ['to-number', ['get', 'height']],
-    0
-  ];
+  // Simple: just use height property (all heights from GHSL)
+  return ['coalesce', ['to-number', ['get', 'height']], 5];
 }
 
 export function getHeightMeters(props) {
-  const h = Number(props?.height_final ?? props?.height);
-  return Number.isFinite(h) && h > 0 ? h : 20;
+  const h = Number(props?.height);
+  return Number.isFinite(h) && h > 0 ? h : 5;
 }
