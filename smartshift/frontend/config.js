@@ -1,12 +1,12 @@
 // Shared configuration and helpers for the Dubai LoD1 viewer.
-// Municipality footprints with OSM/Landmark/GHSL heights
-export const GEOJSON_URL = '../data/final/dubai_municipality_buildings.geojson';
+// Final heights: OSM + Landmarks + GHSL fallback
+export const GEOJSON_URL = '../data/final/dubai_buildings.geojson';
 
 // Approx Dubai city bounds (keeps initial view sensible but doesn't restrict navigation)
 export const bboxDubaiCity = [54.8, 24.8, 55.6, 25.6]; // west, south, east, north
 
 // Start over Downtown Dubai / Business Bay where the tall buildings are
-export const downtownCenter = [55.275, 25.195]; // Near Burj Khalifa in municipality data
+export const downtownCenter = [55.275, 25.195]; // Near Burj Khalifa
 
 export const SHADOW_ZOOM_MIN = 14;
 
