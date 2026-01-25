@@ -11,17 +11,17 @@
        RESET & BASE STYLES
        ========================================================================= */
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    
-    html, body { 
-      width: 100%; 
-      height: 100%; 
+
+    html, body {
+      width: 100%;
+      height: 100%;
       font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
       background: #0a0a0f;
     }
-    
-    #map { 
-      width: 100%; 
-      height: 100%; 
+
+    #map {
+      width: 100%;
+      height: 100%;
     }
 
     /* =========================================================================
@@ -36,9 +36,9 @@
       align-items: center;
       justify-content: center;
     }
-    
+
     #token-overlay.hidden { display: none; }
-    
+
     #token-form {
       background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
       padding: 40px;
@@ -46,18 +46,18 @@
       max-width: 520px;
       text-align: center;
       border: 1px solid rgba(99, 102, 241, 0.3);
-      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5), 
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5),
                   0 0 100px rgba(99, 102, 241, 0.1);
     }
-    
-    #token-form h2 { 
-      margin: 0 0 8px; 
-      color: #f8fafc; 
+
+    #token-form h2 {
+      margin: 0 0 8px;
+      color: #f8fafc;
       font-size: 28px;
       font-weight: 700;
       letter-spacing: -0.5px;
     }
-    
+
     #token-form .subtitle {
       color: #f59e0b;
       font-size: 13px;
@@ -66,14 +66,14 @@
       text-transform: uppercase;
       margin-bottom: 20px;
     }
-    
-    #token-form p { 
-      color: #94a3b8; 
-      font-size: 14px; 
-      line-height: 1.6; 
-      margin-bottom: 24px; 
+
+    #token-form p {
+      color: #94a3b8;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 24px;
     }
-    
+
     #token-form input {
       width: 100%;
       padding: 14px 18px;
@@ -85,13 +85,13 @@
       margin-bottom: 16px;
       transition: all 0.2s;
     }
-    
+
     #token-form input:focus {
       outline: none;
       border-color: #6366f1;
       box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
     }
-    
+
     #token-form button {
       width: 100%;
       padding: 14px;
@@ -104,18 +104,18 @@
       cursor: pointer;
       transition: all 0.2s;
     }
-    
+
     #token-form button:hover {
       transform: translateY(-2px);
       box-shadow: 0 10px 30px rgba(99, 102, 241, 0.4);
     }
-    
-    #token-form a { 
-      color: #818cf8; 
+
+    #token-form a {
+      color: #818cf8;
       text-decoration: none;
       transition: color 0.2s;
     }
-    
+
     #token-form a:hover {
       color: #a5b4fc;
     }
@@ -137,17 +137,17 @@
       color: #e2e8f0;
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
     }
-    
-    #hud h1 { 
-      margin: 0 0 4px; 
-      font-size: 20px; 
+
+    #hud h1 {
+      margin: 0 0 4px;
+      font-size: 20px;
       font-weight: 700;
       background: linear-gradient(90deg, #f8fafc 0%, #c7d2fe 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
     }
-    
+
     #hud .subtitle {
       color: #f59e0b;
       font-size: 10px;
@@ -156,7 +156,7 @@
       text-transform: uppercase;
       margin-bottom: 16px;
     }
-    
+
     .section {
       background: rgba(30, 41, 59, 0.5);
       border-radius: 12px;
@@ -164,7 +164,7 @@
       margin-bottom: 12px;
       border: 1px solid rgba(71, 85, 105, 0.3);
     }
-    
+
     .section-title {
       font-size: 11px;
       font-weight: 600;
@@ -176,7 +176,7 @@
       align-items: center;
       gap: 6px;
     }
-    
+
     .section-title::before {
       content: '';
       width: 3px;
@@ -193,7 +193,7 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 8px;
     }
-    
+
     .loc-btn {
       padding: 8px 6px;
       border-radius: 10px;
@@ -206,7 +206,7 @@
       text-align: center;
       transition: all 0.2s;
     }
-    
+
     .loc-btn:hover {
       background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
       border-color: #6366f1;
@@ -222,14 +222,14 @@
       grid-template-columns: repeat(2, 1fr);
       gap: 10px;
     }
-    
+
     .sun-stat {
       background: rgba(15, 23, 42, 0.6);
       border-radius: 10px;
       padding: 10px 12px;
       border: 1px solid rgba(71, 85, 105, 0.2);
     }
-    
+
     .sun-stat-label {
       font-size: 9px;
       color: #64748b;
@@ -237,13 +237,13 @@
       letter-spacing: 0.5px;
       margin-bottom: 4px;
     }
-    
+
     .sun-stat-value {
       font-size: 16px;
       font-weight: 600;
       color: #f8fafc;
     }
-    
+
     .sun-stat-value.azimuth { color: #818cf8; }
     .sun-stat-value.altitude { color: #fbbf24; }
     .sun-stat-value.daylight { color: #34d399; }
@@ -255,21 +255,21 @@
     .time-control {
       margin-top: 10px;
     }
-    
+
     .time-display {
       display: flex;
       justify-content: space-between;
       align-items: center;
       margin-bottom: 8px;
     }
-    
+
     .current-time {
       font-size: 28px;
       font-weight: 700;
       font-variant-numeric: tabular-nums;
       color: #f8fafc;
     }
-    
+
     .time-period {
       font-size: 12px;
       color: #94a3b8;
@@ -277,26 +277,26 @@
       background: rgba(30, 41, 59, 0.8);
       border-radius: 6px;
     }
-    
+
     #timeSlider {
       width: 100%;
       height: 6px;
       -webkit-appearance: none;
       appearance: none;
-      background: linear-gradient(90deg, 
-        #1e1b4b 0%, 
-        #312e81 15%, 
-        #fbbf24 30%, 
-        #fef08a 50%, 
-        #fbbf24 70%, 
-        #312e81 85%, 
+      background: linear-gradient(90deg,
+        #1e1b4b 0%,
+        #312e81 15%,
+        #fbbf24 30%,
+        #fef08a 50%,
+        #fbbf24 70%,
+        #312e81 85%,
         #1e1b4b 100%
       );
       border-radius: 3px;
       outline: none;
       cursor: pointer;
     }
-    
+
     #timeSlider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 18px;
@@ -307,7 +307,7 @@
       box-shadow: 0 2px 8px rgba(251, 191, 36, 0.5);
       border: 3px solid #0f172a;
     }
-    
+
     #timeSlider::-moz-range-thumb {
       width: 18px;
       height: 18px;
@@ -317,7 +317,7 @@
       box-shadow: 0 2px 8px rgba(251, 191, 36, 0.5);
       border: 3px solid #0f172a;
     }
-    
+
     .time-labels {
       display: flex;
       justify-content: space-between;
@@ -334,7 +334,7 @@
       gap: 8px;
       margin-top: 12px;
     }
-    
+
     .anim-btn {
       flex: 1;
       padding: 10px;
@@ -351,13 +351,13 @@
       justify-content: center;
       gap: 6px;
     }
-    
+
     .anim-btn:hover {
       background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
       border-color: #6366f1;
       color: white;
     }
-    
+
     .anim-btn.active {
       background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
       border-color: #22c55e;
@@ -373,13 +373,13 @@
       gap: 10px;
       margin-top: 10px;
     }
-    
+
     .speed-label {
       font-size: 10px;
       color: #64748b;
       min-width: 50px;
     }
-    
+
     #speedSlider {
       flex: 1;
       height: 4px;
@@ -389,7 +389,7 @@
       border-radius: 2px;
       outline: none;
     }
-    
+
     #speedSlider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 14px;
@@ -411,20 +411,20 @@
       background: rgba(15, 23, 42, 0.6);
       border-radius: 10px;
     }
-    
+
     .stat-item {
       display: flex;
       flex-direction: column;
       align-items: center;
       flex: 1;
     }
-    
+
     .stat-value {
       font-size: 18px;
       font-weight: 700;
       color: #22c55e;
     }
-    
+
     .stat-label {
       font-size: 9px;
       color: #64748b;
@@ -434,15 +434,15 @@
     /* =========================================================================
        STATUS & HINTS
        ========================================================================= */
-    #status { 
-      color: #94a3b8; 
-      margin-top: 12px; 
+    #status {
+      color: #94a3b8;
+      margin-top: 12px;
       font-size: 11px;
       display: flex;
       align-items: center;
       gap: 6px;
     }
-    
+
     .status-dot {
       width: 8px;
       height: 8px;
@@ -450,16 +450,26 @@
       background: #22c55e;
       animation: pulse 2s infinite;
     }
-    
+
+    .status-dot.updating {
+      background: #f59e0b;
+      animation: pulse-fast 0.5s infinite;
+    }
+
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.5; }
     }
-    
-    #hint { 
-      color: #475569; 
-      font-size: 10px; 
-      line-height: 1.5; 
+
+    @keyframes pulse-fast {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.2); }
+    }
+
+    #hint {
+      color: #475569;
+      font-size: 10px;
+      line-height: 1.5;
       margin-top: 10px;
       padding-top: 10px;
       border-top: 1px solid rgba(71, 85, 105, 0.3);
@@ -474,12 +484,12 @@
       gap: 10px;
       margin-top: 10px;
     }
-    
+
     .date-label {
       font-size: 10px;
       color: #64748b;
     }
-    
+
     #dateInput {
       flex: 1;
       padding: 8px 12px;
@@ -489,7 +499,7 @@
       color: #e2e8f0;
       font-size: 12px;
     }
-    
+
     #dateInput:focus {
       outline: none;
       border-color: #6366f1;
@@ -505,7 +515,7 @@
       padding-top: 12px;
       border-top: 1px solid rgba(71, 85, 105, 0.3);
     }
-    
+
     .footer-btn {
       padding: 6px 10px;
       border-radius: 8px;
@@ -516,7 +526,7 @@
       cursor: pointer;
       transition: all 0.2s;
     }
-    
+
     .footer-btn:hover {
       color: #e2e8f0;
       border-color: #6366f1;
@@ -537,12 +547,12 @@
       pointer-events: none;
       transition: opacity 0.3s;
     }
-    
+
     #loading-overlay.visible {
       opacity: 1;
       pointer-events: auto;
     }
-    
+
     .loading-text {
       color: #94a3b8;
       font-size: 14px;
@@ -641,19 +651,19 @@
           <span>18:00</span>
           <span>24:00</span>
         </div>
-        
+
         <div class="date-control">
           <span class="date-label">Date:</span>
           <input type="date" id="dateInput" />
         </div>
       </div>
-      
+
       <!-- Animation Controls -->
       <div class="anim-controls">
         <button class="anim-btn" id="playBtn">▶ Play</button>
         <button class="anim-btn" id="resetBtn">↺ Reset</button>
       </div>
-      
+
       <div class="speed-control">
         <span class="speed-label">Speed:</span>
         <input type="range" id="speedSlider" min="100" max="2000" value="500" step="100" />
@@ -664,16 +674,16 @@
     <!-- Shadow Stats -->
     <div class="shadow-stats">
       <div class="stat-item">
-        <div class="stat-value" id="buildingCount">0</div>
-        <div class="stat-label">Buildings</div>
+        <div class="stat-value" id="buildingCount">3D</div>
+        <div class="stat-label">Mode</div>
       </div>
       <div class="stat-item">
-        <div class="stat-value" id="shadowCount">0</div>
+        <div class="stat-value" id="shadowCount">ON</div>
         <div class="stat-label">Shadows</div>
       </div>
       <div class="stat-item">
-        <div class="stat-value" id="avgShadowLen">0m</div>
-        <div class="stat-label">Avg Length</div>
+        <div class="stat-value" id="avgShadowLen">--°</div>
+        <div class="stat-label">Sun Alt</div>
       </div>
     </div>
 
@@ -682,17 +692,16 @@
       <span class="status-dot"></span>
       <span>Ready</span>
     </div>
-    
+
     <div id="hint">
-      Drag to pan • Right-drag to rotate • Scroll to zoom<br>
-      Ctrl+drag to adjust pitch • Use slider to simulate time
+      🌞 Using Mapbox 3D DirectionalLight with real-time shadow casting<br>
+      Drag slider to change time • Watch shadows move throughout the day
     </div>
 
     <!-- Footer -->
     <div class="footer-controls">
       <button class="footer-btn" id="resetToken">Change Token</button>
-      <button class="footer-btn" id="toggleShadows">Hide Shadows</button>
-      <button class="footer-btn" id="refreshBuildings">Refresh</button>
+      <button class="footer-btn" id="toggleShadows">Disable Shadows</button>
     </div>
   </div>
 
@@ -703,9 +712,9 @@
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
-    
+
     const TOKEN_KEY = 'smartshift:mapboxToken';
-    
+
     // Dubai location configurations
     const locations = {
       burj: { center: [55.274376, 25.197197], zoom: 16.5, pitch: 67, bearing: -145 },
@@ -715,22 +724,22 @@
       museum: { center: [55.2805, 25.2197], zoom: 17, pitch: 60, bearing: 45 },
       downtown: { center: [55.2708, 25.2048], zoom: 15, pitch: 55, bearing: -20 }
     };
-    
+
     // Dubai geographic settings for sun calculations
     const DUBAI = {
       latitude: 25.2048,
       longitude: 55.2708,
       timezoneOffset: 4  // UTC+4
     };
-    
+
     // Meters per degree at Dubai's latitude
     const METERS_PER_DEGREE_LAT = 111320;
     const METERS_PER_DEGREE_LON = 111320 * Math.cos(DUBAI.latitude * Math.PI / 180);
-    
+
     // =========================================================================
     // STATE
     // =========================================================================
-    
+
     let map = null;
     let animationInterval = null;
     let isPlaying = false;
@@ -740,61 +749,127 @@
     let buildingsCache = [];   // Cache extracted buildings
     let lastBuildingsUpdate = 0;
     let isUpdatingShadows = false;
-    
+
     // =========================================================================
     // TOKEN MANAGEMENT
     // =========================================================================
-    
-    function saveToken(t) { 
-      try { localStorage.setItem(TOKEN_KEY, t); } catch(e) {} 
+
+    function saveToken(t) {
+      try { localStorage.setItem(TOKEN_KEY, t); } catch(e) {}
     }
-    
-    function loadToken() { 
-      try { return localStorage.getItem(TOKEN_KEY) || ''; } catch(e) { return ''; } 
+
+    function loadToken() {
+      try { return localStorage.getItem(TOKEN_KEY) || ''; } catch(e) { return ''; }
     }
-    
-    function resetToken() { 
-      localStorage.removeItem(TOKEN_KEY); 
-      location.reload(); 
+
+    function resetToken() {
+      localStorage.removeItem(TOKEN_KEY);
+      location.reload();
     }
-    
+
     // =========================================================================
     // UI HELPERS
     // =========================================================================
-    
-    function setStatus(msg) { 
+
+    function setStatus(msg, isUpdating = false) {
       const el = document.querySelector('#status span:last-child');
-      if (el) el.textContent = msg; 
+      const dot = document.querySelector('.status-dot');
+      if (el) el.textContent = msg;
+      if (dot) {
+        dot.classList.toggle('updating', isUpdating);
+      }
     }
-    
+
     function formatTime(minutes) {
       const hours = Math.floor(minutes / 60);
       const mins = minutes % 60;
       return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
     }
-    
+
     function getTimePeriod(altitude, azimuth) {
       if (altitude < -6) return 'Night';
       if (altitude < 0) return azimuth < 180 ? 'Dawn' : 'Dusk';
       if (altitude < 15) return azimuth < 180 ? 'Morning' : 'Evening';
       return 'Day';
     }
-    
+
     function updateTimeDisplay() {
       document.getElementById('currentTime').textContent = formatTime(currentMinutes);
     }
-    
+
     function showLoading(show) {
       const overlay = document.getElementById('loading-overlay');
       if (overlay) {
         overlay.classList.toggle('visible', show);
       }
     }
-    
+
+    // =========================================================================
+    // LIGHTING HELPER FUNCTIONS
+    // =========================================================================
+
+    function getTimeOfDayColor(altitude, azimuth) {
+      /**
+       * Get sun color based on time of day
+       * Returns RGB color for directional light
+       */
+      if (altitude < -6) {
+        // Night - no sun
+        return '#000000';
+      } else if (altitude < 0) {
+        // Twilight
+        return azimuth < 180 ? '#ff9966' : '#ff6633'; // Dawn orange / Dusk red
+      } else if (altitude < 15) {
+        // Low sun - golden hour
+        return azimuth < 180 ? '#ffcc66' : '#ff9966'; // Morning gold / Evening orange
+      } else {
+        // Daytime - bright white/yellow
+        return '#ffffee';
+      }
+    }
+
+    function getAmbientColor(altitude) {
+      /**
+       * Get ambient light color based on sun altitude
+       */
+      if (altitude < -6) {
+        return '#1a1a2e'; // Dark blue night
+      } else if (altitude < 0) {
+        return '#4a4a6a'; // Twilight purple
+      } else if (altitude < 15) {
+        return '#8899aa'; // Low sun blue
+      } else {
+        return '#aaccff'; // Day sky blue
+      }
+    }
+
+    function getSunIntensity(altitude) {
+      /**
+       * Get sun light intensity based on altitude
+       * Returns value between 0 and 1
+       */
+      if (altitude < -6) return 0; // Night
+      if (altitude < 0) return 0.2; // Twilight
+      if (altitude < 15) return 0.5; // Low sun
+      if (altitude < 45) return 0.7; // Mid sun
+      return 0.9; // High sun
+    }
+
+    function getShadowIntensity(altitude) {
+      /**
+       * Get shadow intensity based on sun altitude
+       * Higher sun = darker, more defined shadows
+       */
+      if (altitude <= 0) return 0; // No shadows at night
+      if (altitude < 15) return 0.3; // Soft shadows at low sun
+      if (altitude < 45) return 0.6; // Medium shadows
+      return 0.8; // Strong shadows at high sun
+    }
+
     // =========================================================================
     // SOLAR POSITION CALCULATIONS
     // =========================================================================
-    
+
     function calculateSunPosition(date, hour, minute) {
       /**
        * Calculate sun position using NOAA algorithms
@@ -802,56 +877,56 @@
        */
       const dt = new Date(date);
       dt.setHours(hour, minute, 0, 0);
-      
+
       const lat = DUBAI.latitude;
       const lon = DUBAI.longitude;
       const tz = DUBAI.timezoneOffset;
-      
+
       // Day of year
       const start = new Date(dt.getFullYear(), 0, 0);
       const diff = dt - start;
       const oneDay = 1000 * 60 * 60 * 24;
       const dayOfYear = Math.floor(diff / oneDay);
-      
+
       // Solar declination
       const declination = 23.45 * Math.sin(2 * Math.PI * (284 + dayOfYear) / 365);
-      
+
       // Equation of time
       const B = 2 * Math.PI * (dayOfYear - 81) / 365;
       const EoT = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
-      
+
       // Solar time and hour angle
       const solarTime = hour * 60 + minute + EoT + 4 * (lon - tz * 15);
       const hourAngle = (solarTime / 4) - 180;
-      
+
       // Convert to radians
       const latRad = lat * Math.PI / 180;
       const decRad = declination * Math.PI / 180;
       const haRad = hourAngle * Math.PI / 180;
-      
+
       // Calculate altitude
-      const sinAlt = Math.sin(latRad) * Math.sin(decRad) + 
+      const sinAlt = Math.sin(latRad) * Math.sin(decRad) +
                      Math.cos(latRad) * Math.cos(decRad) * Math.cos(haRad);
       const altitude = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
-      
+
       // Calculate azimuth
-      const cosAz = (Math.sin(decRad) - Math.sin(latRad) * sinAlt) / 
+      const cosAz = (Math.sin(decRad) - Math.sin(latRad) * sinAlt) /
                     (Math.cos(latRad) * Math.cos(Math.asin(sinAlt)));
       let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180 / Math.PI;
-      
+
       if (hourAngle > 0) azimuth = 360 - azimuth;
-      
+
       // Sunrise/sunset times
       const cosHaSunrise = -Math.tan(latRad) * Math.tan(decRad);
       let sunrise = null, sunset = null;
-      
+
       if (cosHaSunrise >= -1 && cosHaSunrise <= 1) {
         const haSunrise = Math.acos(cosHaSunrise) * 180 / Math.PI;
         const noonMinutes = 720 - 4 * lon - EoT + tz * 60;
         sunrise = noonMinutes - haSunrise * 4;
         sunset = noonMinutes + haSunrise * 4;
       }
-      
+
       return {
         azimuth,
         altitude,
@@ -860,109 +935,166 @@
         sunset: sunset ? formatTime(Math.round(sunset)) : null
       };
     }
-    
+
     // =========================================================================
     // BUILDING EXTRACTION FROM MAPBOX
     // =========================================================================
-    
+
     function extractBuildingsFromMap() {
       /**
        * Extract building footprints and heights from Mapbox's 3D buildings layer
        * Returns array of building objects with footprint polygons and heights
        */
-      if (!map) return [];
-      
+      if (!map) {
+        console.log('Map not initialized');
+        return [];
+      }
+
       const buildings = [];
-      
-      // Query rendered features for building layers
-      // Mapbox Standard style uses 'building' and 'building-extrusion' layers
-      const layerIds = ['building', 'building-extrusion', 'building-3d'];
-      
+
       // Get all features in the current viewport
       let features = [];
-      
+
       try {
-        // Try to query building features from various possible layer names
-        features = map.queryRenderedFeatures({ layers: undefined });
-        
+        // Query all rendered features
+        features = map.queryRenderedFeatures();
+        console.log(`Queried ${features.length} total features`);
+
         // Filter for building-related features
-        features = features.filter(f => {
+        const buildingFeatures = features.filter(f => {
           const layerId = f.layer?.id || '';
           const sourceLayer = f.sourceLayer || '';
-          return layerId.includes('building') || 
+          const hasHeight = f.properties?.height > 0 ||
+                           f.properties?.render_height > 0 ||
+                           f.properties?.extrusion_height > 0;
+
+          return layerId.includes('building') ||
                  sourceLayer.includes('building') ||
                  f.properties?.extrude === 'true' ||
-                 f.properties?.height > 0;
+                 hasHeight;
         });
+
+        console.log(`Found ${buildingFeatures.length} building features`);
+        features = buildingFeatures;
       } catch (e) {
-        console.log('Layer query failed, trying alternative method');
-        // Fallback: query all features
-        features = map.queryRenderedFeatures();
-        features = features.filter(f => {
-          return f.properties?.height > 0 || 
-                 f.properties?.render_height > 0 ||
-                 f.layer?.id?.includes('building');
-        });
+        console.error('Feature query failed:', e);
+        return [];
       }
-      
+
       // Process each feature
       const seenIds = new Set();
-      
+
       for (const feature of features) {
-        // Get unique ID
-        const id = feature.id || feature.properties?.id || 
-                   `${feature.geometry?.coordinates?.[0]?.[0]?.[0]}-${feature.geometry?.coordinates?.[0]?.[0]?.[1]}`;
-        
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
-        
-        // Get height from various possible properties
-        let height = feature.properties?.height || 
-                     feature.properties?.render_height ||
-                     feature.properties?.extrusion_height ||
-                     feature.properties?.max_height ||
-                     15; // Default height if not available
-        
-        // Convert height to number
-        height = parseFloat(height) || 15;
-        
-        // Skip very short structures
-        if (height < 5) continue;
-        
-        // Get geometry
-        const geometry = feature.geometry;
-        if (!geometry) continue;
-        
-        let footprint = null;
-        
-        if (geometry.type === 'Polygon') {
-          footprint = geometry.coordinates[0];
-        } else if (geometry.type === 'MultiPolygon') {
-          // Use the largest polygon
-          let maxArea = 0;
-          for (const poly of geometry.coordinates) {
-            const area = calculatePolygonArea(poly[0]);
-            if (area > maxArea) {
-              maxArea = area;
-              footprint = poly[0];
+        try {
+          // Get unique ID
+          const id = feature.id || feature.properties?.id ||
+                     `bldg_${Math.random().toString(36).substr(2, 9)}`;
+
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+
+          // Get height from various possible properties
+          let height = feature.properties?.height ||
+                       feature.properties?.render_height ||
+                       feature.properties?.extrusion_height ||
+                       feature.properties?.max_height ||
+                       feature.properties?.min_height ||
+                       20; // Default height if not available
+
+          // Convert height to number and validate
+          height = parseFloat(height) || 20;
+
+          // Skip very short structures
+          if (height < 5) continue;
+
+          // Get geometry
+          const geometry = feature.geometry;
+          if (!geometry) continue;
+
+          let footprint = null;
+
+          if (geometry.type === 'Polygon') {
+            footprint = geometry.coordinates[0];
+          } else if (geometry.type === 'MultiPolygon') {
+            // Use the largest polygon
+            let maxArea = 0;
+            for (const poly of geometry.coordinates) {
+              const area = calculatePolygonArea(poly[0]);
+              if (area > maxArea) {
+                maxArea = area;
+                footprint = poly[0];
+              }
             }
           }
+
+          if (footprint && footprint.length >= 3) {
+            buildings.push({
+              id,
+              height,
+              footprint,
+              name: feature.properties?.name || null
+            });
+          }
+        } catch (err) {
+          // Skip problematic features
+          continue;
         }
-        
-        if (footprint && footprint.length >= 3) {
+      }
+
+      console.log(`Successfully extracted ${buildings.length} buildings from map`);
+
+      // If still no buildings, create sample buildings at current view
+      if (buildings.length === 0) {
+        console.log('No buildings extracted, creating sample buildings');
+        const center = map.getCenter();
+        buildings.push(...createSampleBuildingsAtLocation(center));
+      }
+
+      return buildings;
+    }
+
+    function createSampleBuildingsAtLocation(center) {
+      /**
+       * Create sample buildings around a location for demonstration
+       * These will be visible and have prominent shadows
+       */
+      const buildings = [];
+      const baseHeight = 80;
+      const offset = 0.003; // ~300m for better visibility
+
+      console.log(`Creating sample buildings at: ${center.lng}, ${center.lat}`);
+
+      // Create a visible grid of sample buildings
+      for (let i = -2; i <= 2; i++) {
+        for (let j = -2; j <= 2; j++) {
+          if (i === 0 && j === 0) continue; // Skip center
+
+          const lon = center.lng + i * offset;
+          const lat = center.lat + j * offset;
+          const height = baseHeight + Math.random() * 120;
+
+          const buildingSize = offset / 3; // Larger buildings
+
           buildings.push({
-            id,
-            height,
-            footprint,
-            name: feature.properties?.name || null
+            id: `sample_${i}_${j}`,
+            height: height,
+            footprint: [
+              [lon - buildingSize, lat - buildingSize],
+              [lon + buildingSize, lat - buildingSize],
+              [lon + buildingSize, lat + buildingSize],
+              [lon - buildingSize, lat + buildingSize],
+              [lon - buildingSize, lat - buildingSize]
+            ],
+            name: `Sample Building ${i},${j}`
           });
         }
       }
-      
-      console.log(`Extracted ${buildings.length} buildings from map`);
+
+      console.log(`Created ${buildings.length} sample buildings with heights ${baseHeight}-${baseHeight+120}m`);
+      console.log(`Sample building locations: ${buildings[0].footprint[0]} to ${buildings[buildings.length-1].footprint[0]}`);
       return buildings;
     }
-    
+
     function calculatePolygonArea(coords) {
       /**
        * Calculate approximate area of a polygon (for sorting)
@@ -975,70 +1107,70 @@
       }
       return Math.abs(area / 2);
     }
-    
+
     // =========================================================================
     // SHADOW CALCULATIONS
     // =========================================================================
-    
+
     function calculateShadowLength(buildingHeight, sunAltitude) {
       /**
        * Calculate shadow length based on building height and sun altitude
        * Shadow Length = Height / tan(altitude)
        */
       if (sunAltitude <= 0) return 0;
-      
+
       const altRad = Math.max(1, sunAltitude) * Math.PI / 180;
       const length = buildingHeight / Math.tan(altRad);
-      
+
       // Cap at 10x height to avoid extremely long shadows
       return Math.min(length, buildingHeight * 10);
     }
-    
+
     function calculateShadowPolygon(footprint, height, sunPosition) {
       /**
        * Calculate shadow polygon for a building
        * Projects each vertex in the shadow direction
        */
       if (!sunPosition.isDaylight || sunPosition.altitude <= 0) return null;
-      
+
       const shadowLength = calculateShadowLength(height, sunPosition.altitude);
       if (shadowLength < 1) return null;  // Skip very short shadows
-      
+
       // Shadow direction (opposite to sun azimuth)
       const shadowDir = (sunPosition.azimuth + 180) % 360;
       const dirRad = shadowDir * Math.PI / 180;
-      
+
       // Calculate offset in meters, then convert to degrees
       const dx = shadowLength * Math.sin(dirRad);
       const dy = shadowLength * Math.cos(dirRad);
-      
+
       const dLon = dx / METERS_PER_DEGREE_LON;
       const dLat = dy / METERS_PER_DEGREE_LAT;
-      
+
       // Create shadow polygon by projecting footprint vertices
       const shadowVertices = footprint.map(pt => [pt[0] + dLon, pt[1] + dLat]);
-      
+
       // Build the shadow polygon:
       // Connect footprint vertices to their shadow projections
       const polygon = [];
-      
+
       // Add shadow edge (projected vertices)
       for (const pt of shadowVertices) {
         polygon.push(pt);
       }
-      
+
       // Close by adding footprint in reverse
       for (let i = footprint.length - 1; i >= 0; i--) {
         polygon.push(footprint[i]);
       }
-      
+
       return polygon;
     }
-    
+
     // =========================================================================
     // SHADOW RENDERING
     // =========================================================================
-    
+
     function generateShadowGeoJSON(date) {
       /**
        * Generate GeoJSON for all building shadows
@@ -1046,66 +1178,81 @@
       const hour = Math.floor(currentMinutes / 60);
       const minute = currentMinutes % 60;
       const sunPos = calculateSunPosition(date, hour, minute);
-      
+
       // Update UI with sun position
       document.getElementById('sunAzimuth').textContent = `${sunPos.azimuth.toFixed(1)}°`;
       document.getElementById('sunAltitude').textContent = `${sunPos.altitude.toFixed(1)}°`;
       document.getElementById('sunRise').textContent = sunPos.sunrise || '--:--';
       document.getElementById('sunSet').textContent = sunPos.sunset || '--:--';
-      
+
       // Update styling based on daylight
       const altEl = document.getElementById('sunAltitude');
       altEl.className = sunPos.isDaylight ? 'sun-stat-value altitude' : 'sun-stat-value night';
-      
+
       // Update time period
       const period = getTimePeriod(sunPos.altitude, sunPos.azimuth);
       document.getElementById('timePeriod').textContent = period;
-      
+
       // Update map light preset
       if (map) {
         let lightPreset = 'day';
         if (sunPos.altitude < -6) lightPreset = 'night';
         else if (sunPos.altitude < 6) lightPreset = sunPos.azimuth < 180 ? 'dawn' : 'dusk';
-        
+
         try {
           map.setConfigProperty('basemap', 'lightPreset', lightPreset);
         } catch (e) {
           // Light preset not available
         }
       }
-      
+
       // Use cached buildings or extract new ones
       const now = Date.now();
       if (buildingsCache.length === 0 || now - lastBuildingsUpdate > 2000) {
         buildingsCache = extractBuildingsFromMap();
         lastBuildingsUpdate = now;
       }
-      
+
       // Generate shadow polygons
       const features = [];
       let totalShadowLength = 0;
-      
+
       for (const building of buildingsCache) {
         const shadowPoly = calculateShadowPolygon(building.footprint, building.height, sunPos);
-        
+
         if (shadowPoly && shadowPoly.length >= 3) {
           // Close the polygon properly
           const coords = [...shadowPoly];
-          if (coords[0][0] !== coords[coords.length - 1][0] || 
+          if (coords[0][0] !== coords[coords.length - 1][0] ||
               coords[0][1] !== coords[coords.length - 1][1]) {
             coords.push(coords[0]);
           }
-          
+
           const shadowLen = calculateShadowLength(building.height, sunPos.altitude);
           totalShadowLength += shadowLen;
-          
+
+          // Calculate shadow opacity based on sun altitude
+          // Higher sun = more defined shadows
+          let shadowOpacity = 0.5;
+          if (sunPos.altitude > 0) {
+            if (sunPos.altitude < 30) {
+              shadowOpacity = 0.3 + (sunPos.altitude / 30) * 0.2; // 0.3 to 0.5
+            } else if (sunPos.altitude < 60) {
+              shadowOpacity = 0.5 + ((sunPos.altitude - 30) / 30) * 0.15; // 0.5 to 0.65
+            } else {
+              shadowOpacity = 0.65; // Max opacity
+            }
+          }
+
           features.push({
             type: 'Feature',
             properties: {
               building_id: building.id,
               building_name: building.name,
               height: building.height,
-              shadow_length: shadowLen
+              shadow_length: shadowLen,
+              shadow_opacity: shadowOpacity,
+              sun_altitude: sunPos.altitude
             },
             geometry: {
               type: 'Polygon',
@@ -1114,46 +1261,109 @@
           });
         }
       }
-      
+
       // Update stats
       document.getElementById('buildingCount').textContent = buildingsCache.length;
       document.getElementById('shadowCount').textContent = features.length;
       const avgLen = features.length > 0 ? Math.round(totalShadowLength / features.length) : 0;
       document.getElementById('avgShadowLen').textContent = `${avgLen}m`;
-      
+
+      // Log for debugging
+      if (features.length > 0) {
+        console.log(`Generated ${features.length} shadows at ${formatTime(currentMinutes)} (Sun alt: ${sunPos.altitude.toFixed(1)}°)`);
+        console.log(`First shadow polygon sample:`, features[0].geometry.coordinates[0].slice(0, 3));
+        console.log(`Shadow properties:`, features[0].properties);
+      } else if (sunPos.isDaylight) {
+        console.log(`No shadows generated despite daylight (altitude: ${sunPos.altitude.toFixed(1)}°)`);
+        console.log(`Buildings cache has ${buildingsCache.length} buildings`);
+      }
+
       return {
         type: 'FeatureCollection',
         features
       };
     }
-    
+
     function updateShadows() {
       /**
-       * Update shadow layer on map
+       * Update 3D directional lighting based on sun position
+       * This uses Mapbox's native shadow rendering system
        */
       if (!map || isUpdatingShadows) return;
-      
+
       isUpdatingShadows = true;
-      
+
       try {
-        const source = map.getSource('shadows');
-        if (!source) {
-          isUpdatingShadows = false;
-          return;
-        }
-        
         const dateInput = document.getElementById('dateInput');
         const date = dateInput.value ? new Date(dateInput.value) : new Date();
-        
-        const shadowData = generateShadowGeoJSON(date);
-        source.setData(shadowData);
+
+        // Calculate current sun position
+        const hour = Math.floor(currentMinutes / 60);
+        const minute = currentMinutes % 60;
+        const sunPos = calculateSunPosition(date, hour, minute);
+
+        // Update UI displays
+        document.getElementById('sunAzimuth').textContent = `${sunPos.azimuth.toFixed(1)}°`;
+        document.getElementById('sunAltitude').textContent = `${sunPos.altitude.toFixed(1)}°`;
+        document.getElementById('sunRise').textContent = sunPos.sunrise || '--:--';
+        document.getElementById('sunSet').textContent = sunPos.sunset || '--:--';
+
+        const altEl = document.getElementById('sunAltitude');
+        altEl.className = sunPos.isDaylight ? 'sun-stat-value altitude' : 'sun-stat-value night';
+
+        const period = getTimePeriod(sunPos.altitude, sunPos.azimuth);
+        document.getElementById('timePeriod').textContent = period;
+
+        // Convert altitude to polar angle
+        // Polar: 0° = directly above, 90° = horizon, 180° = directly below
+        const polarAngle = 90 - sunPos.altitude;
+
+        // Update 3D directional light with current sun position
+        // Reference: https://docs.mapbox.com/style-spec/reference/light/#directional
+        try {
+          map.setLights([
+            {
+              "id": "sun-directional",
+              "type": "directional",
+              "properties": {
+                "direction": [sunPos.azimuth, polarAngle],
+                "color": getTimeOfDayColor(sunPos.altitude, sunPos.azimuth),
+                "intensity": getSunIntensity(sunPos.altitude),
+                "cast-shadows": true,
+                "shadow-intensity": getShadowIntensity(sunPos.altitude)
+              }
+            },
+            {
+              "id": "ambient",
+              "type": "ambient",
+              "properties": {
+                "color": getAmbientColor(sunPos.altitude),
+                "intensity": 0.4
+              }
+            }
+          ]);
+
+          console.log(`Updated 3D lighting: azimuth=${sunPos.azimuth.toFixed(1)}°, polar=${polarAngle.toFixed(1)}°, intensity=${getSunIntensity(sunPos.altitude).toFixed(2)}`);
+
+          // Update statistics
+          document.getElementById('buildingCount').textContent = '3D';
+          document.getElementById('shadowCount').textContent = sunPos.isDaylight ? 'ON' : 'OFF';
+          document.getElementById('avgShadowLen').textContent = `${sunPos.altitude.toFixed(0)}°`;
+
+          setStatus(sunPos.isDaylight ? '3D shadows active' : 'Night (no shadows)', false);
+        } catch (lightError) {
+          console.error('Error updating lights:', lightError);
+          setStatus('Light update failed', false);
+        }
+
       } catch (e) {
         console.error('Error updating shadows:', e);
+        setStatus('Error updating shadows', false);
       }
-      
+
       isUpdatingShadows = false;
     }
-    
+
     function refreshBuildings() {
       /**
        * Force refresh of building data
@@ -1163,11 +1373,11 @@
       updateShadows();
       setStatus(`Refreshed - found ${buildingsCache.length} buildings`);
     }
-    
+
     // =========================================================================
     // MAP INITIALIZATION
     // =========================================================================
-    
+
     function flyTo(key) {
       if (!map) return;
       const loc = locations[key];
@@ -1179,19 +1389,17 @@
         bearing: loc.bearing,
         duration: 2000
       });
-      
-      // Refresh buildings after flying
+
       setTimeout(() => {
-        refreshBuildings();
         setStatus('Ready');
-      }, 2500);
+      }, 2100);
     }
-    
+
     function initMap(token) {
       mapboxgl.accessToken = token;
-      
+
       const burj = locations.burj;
-      
+
       map = new mapboxgl.Map({
         container: 'map',
         style: 'mapbox://styles/mapbox/standard',
@@ -1201,63 +1409,68 @@
         bearing: burj.bearing,
         antialias: true
       });
-      
+
       map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
-      
+
       map.on('load', () => {
-        setStatus('Map loaded! Initializing shadows...');
-        
-        // Set initial light preset
-        try {
-          map.setConfigProperty('basemap', 'lightPreset', 'day');
-        } catch (e) {}
-        
-        // Add shadow source
-        map.addSource('shadows', {
-          type: 'geojson',
-          data: { type: 'FeatureCollection', features: [] }
-        });
-        
-        // Add shadow fill layer - render below buildings
-        map.addLayer({
-          id: 'shadows-fill',
-          type: 'fill',
-          source: 'shadows',
-          paint: {
-            'fill-color': '#000000',
-            'fill-opacity': 0.4
-          }
-        });
-        
-        // Add shadow outline
-        map.addLayer({
-          id: 'shadows-outline',
-          type: 'line',
-          source: 'shadows',
-          paint: {
-            'line-color': '#1e293b',
-            'line-width': 0.5,
-            'line-opacity': 0.3
-          }
-        });
-        
-        // Wait for style to fully load, then update shadows
+        setStatus('Map loaded! Initializing 3D lighting...');
+
+        console.log('Map loaded, setting up 3D lighting system');
+
+        // Initialize 3D lighting with DirectionalLight and AmbientLight
+        // This uses Mapbox's native shadow rendering system
         setTimeout(() => {
-          updateShadows();
-          setStatus(`Ready - ${buildingsCache.length} buildings`);
-        }, 1500);
+          try {
+            // Configure 3D lights for the map
+            // Reference: https://docs.mapbox.com/style-spec/reference/light/#directional
+            const initialSunPos = calculateSunPosition(new Date(),
+              Math.floor(currentMinutes / 60),
+              currentMinutes % 60
+            );
+
+            // Convert our altitude to polar angle
+            // Polar: 0° = directly above, 90° = horizon, 180° = below
+            const polarAngle = 90 - initialSunPos.altitude;
+
+            console.log(`Initial sun position: azimuth=${initialSunPos.azimuth.toFixed(1)}°, altitude=${initialSunPos.altitude.toFixed(1)}°, polar=${polarAngle.toFixed(1)}°`);
+
+            // Set up 3D lights array
+            map.setLights([
+              {
+                "id": "sun-directional",
+                "type": "directional",
+                "properties": {
+                  "direction": [initialSunPos.azimuth, polarAngle],
+                  "color": getTimeOfDayColor(initialSunPos.altitude, initialSunPos.azimuth),
+                  "intensity": getSunIntensity(initialSunPos.altitude),
+                  "cast-shadows": true,
+                  "shadow-intensity": getShadowIntensity(initialSunPos.altitude)
+                }
+              },
+              {
+                "id": "ambient",
+                "type": "ambient",
+                "properties": {
+                  "color": getAmbientColor(initialSunPos.altitude),
+                  "intensity": 0.4
+                }
+              }
+            ]);
+
+            console.log('3D lighting configured with shadows enabled');
+            setStatus('3D shadows active');
+
+            // Update UI
+            updateShadows();
+          } catch (e) {
+            console.error('Error setting up 3D lights:', e);
+            setStatus('Error: 3D lighting not available');
+          }
+        }, 1000);
       });
-      
-      // Update shadows when map moves
-      map.on('moveend', () => {
-        refreshBuildings();
-      });
-      
-      // Update shadows on zoom
-      map.on('zoomend', () => {
-        refreshBuildings();
-      });
-      
+
+      // Shadows are handled by Mapbox 3D lighting, no need to refresh on move
+
       map.on('error', (e) => {
         console.error('Map error:', e);
         if (e.error?.status === 401) {
@@ -1266,46 +1479,46 @@
         }
       });
     }
-    
+
     // =========================================================================
     // ANIMATION CONTROLS
     // =========================================================================
-    
+
     function startAnimation() {
       if (isPlaying) return;
-      
+
       isPlaying = true;
       document.getElementById('playBtn').textContent = '⏸ Pause';
       document.getElementById('playBtn').classList.add('active');
-      setStatus('Animation playing...');
-      
+      setStatus('Animating sun path...');
+
       animationInterval = setInterval(() => {
         currentMinutes += 5;
-        
+
         if (currentMinutes > 1440) {
           currentMinutes = 0;
         }
-        
+
         document.getElementById('timeSlider').value = currentMinutes;
         updateTimeDisplay();
         updateShadows();
       }, animationSpeed);
     }
-    
+
     function stopAnimation() {
       if (!isPlaying) return;
-      
+
       isPlaying = false;
       document.getElementById('playBtn').textContent = '▶ Play';
       document.getElementById('playBtn').classList.remove('active');
-      setStatus(`Ready - ${buildingsCache.length} buildings`);
-      
+      setStatus('Paused', false);
+
       if (animationInterval) {
         clearInterval(animationInterval);
         animationInterval = null;
       }
     }
-    
+
     function toggleAnimation() {
       if (isPlaying) {
         stopAnimation();
@@ -1313,20 +1526,22 @@
         startAnimation();
       }
     }
-    
+
     function resetAnimation() {
       stopAnimation();
       currentMinutes = 720;
       document.getElementById('timeSlider').value = currentMinutes;
       updateTimeDisplay();
       updateShadows();
-      setStatus('Reset to noon');
+      setTimeout(() => {
+        setStatus('Reset to noon', false);
+      }, 200);
     }
-    
+
     // =========================================================================
     // INITIALIZATION
     // =========================================================================
-    
+
     function start(token) {
       if (!token || token.length < 20) {
         alert('Please enter a valid Mapbox access token');
@@ -1337,78 +1552,97 @@
       document.getElementById('hud').style.display = 'block';
       initMap(token);
     }
-    
+
     // Event listeners
     document.addEventListener('DOMContentLoaded', () => {
       // Token form
       document.getElementById('startBtn').addEventListener('click', () => {
         start(document.getElementById('tokenInput').value.trim());
       });
-      
+
       document.getElementById('tokenInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') start(document.getElementById('tokenInput').value.trim());
       });
-      
+
       document.getElementById('resetToken').addEventListener('click', resetToken);
-      
+
       // Location buttons
       document.querySelectorAll('[data-loc]').forEach(btn => {
         btn.addEventListener('click', () => flyTo(btn.dataset.loc));
       });
-      
-      // Time slider
+
+      // Time slider - update shadows dynamically as you drag
       const timeSlider = document.getElementById('timeSlider');
+      let sliderTimeout = null;
+
       timeSlider.addEventListener('input', (e) => {
+        currentMinutes = parseInt(e.target.value);
+        updateTimeDisplay();
+
+        // Debounce shadow updates for smooth performance
+        if (sliderTimeout) clearTimeout(sliderTimeout);
+        sliderTimeout = setTimeout(() => {
+          updateShadows();
+        }, 100);
+      });
+
+      // Also update on change (when user releases slider)
+      timeSlider.addEventListener('change', (e) => {
         currentMinutes = parseInt(e.target.value);
         updateTimeDisplay();
         updateShadows();
       });
-      
+
       // Date input
       const dateInput = document.getElementById('dateInput');
       dateInput.value = new Date().toISOString().split('T')[0];
       dateInput.addEventListener('change', updateShadows);
-      
+
       // Animation controls
       document.getElementById('playBtn').addEventListener('click', toggleAnimation);
       document.getElementById('resetBtn').addEventListener('click', resetAnimation);
-      
+
       // Speed slider
       const speedSlider = document.getElementById('speedSlider');
       speedSlider.addEventListener('input', (e) => {
         animationSpeed = 2100 - parseInt(e.target.value);
         const speedMultiple = (1000 / animationSpeed).toFixed(1);
         document.getElementById('speedValue').textContent = `${speedMultiple}x`;
-        
+
         if (isPlaying) {
           stopAnimation();
           startAnimation();
         }
       });
-      
-      // Shadow toggle
+
+      // Shadow toggle (enable/disable shadow casting)
       document.getElementById('toggleShadows').addEventListener('click', () => {
         shadowsVisible = !shadowsVisible;
         const btn = document.getElementById('toggleShadows');
-        btn.textContent = shadowsVisible ? 'Hide Shadows' : 'Show Shadows';
-        
+        btn.textContent = shadowsVisible ? 'Disable Shadows' : 'Enable Shadows';
+
         if (map) {
-          const visibility = shadowsVisible ? 'visible' : 'none';
-          if (map.getLayer('shadows-fill')) {
-            map.setLayoutProperty('shadows-fill', 'visibility', visibility);
-          }
-          if (map.getLayer('shadows-outline')) {
-            map.setLayoutProperty('shadows-outline', 'visibility', visibility);
+          try {
+            // Update the directional light's cast-shadows property
+            const lights = map.getLights();
+            if (lights && lights.length > 0) {
+              const directionalLight = lights.find(l => l.id === 'sun-directional');
+              if (directionalLight) {
+                directionalLight.properties['cast-shadows'] = shadowsVisible;
+                directionalLight.properties['shadow-intensity'] = shadowsVisible ? getShadowIntensity(45) : 0;
+                map.setLights(lights);
+                console.log('Shadow casting', shadowsVisible ? 'enabled' : 'disabled');
+              }
+            }
+          } catch (e) {
+            console.error('Error toggling shadows:', e);
           }
         }
       });
-      
-      // Refresh buildings button
-      document.getElementById('refreshBuildings').addEventListener('click', refreshBuildings);
-      
+
       // Initialize time display
       updateTimeDisplay();
-      
+
       // Auto-start if token saved
       const saved = loadToken();
       if (saved) {
