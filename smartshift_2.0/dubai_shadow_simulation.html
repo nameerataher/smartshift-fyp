@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dubai 3D Sun-Shadow Simulation | SmartShift</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    /* =========================================================================
+       RESET & BASE STYLES
+       ========================================================================= */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    html, body { 
+      width: 100%; 
+      height: 100%; 
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: #0a0a0f;
+    }
+    
+    #map { 
+      width: 100%; 
+      height: 100%; 
+    }
+
+    /* =========================================================================
+       TOKEN OVERLAY
+       ========================================================================= */
+    #token-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    #token-overlay.hidden { display: none; }
+    
+    #token-form {
+      background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+      padding: 40px;
+      border-radius: 24px;
+      max-width: 520px;
+      text-align: center;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.5), 
+                  0 0 100px rgba(99, 102, 241, 0.1);
+    }
+    
+    #token-form h2 { 
+      margin: 0 0 8px; 
+      color: #f8fafc; 
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    
+    #token-form .subtitle {
+      color: #f59e0b;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    
+    #token-form p { 
+      color: #94a3b8; 
+      font-size: 14px; 
+      line-height: 1.6; 
+      margin-bottom: 24px; 
+    }
+    
+    #token-form input {
+      width: 100%;
+      padding: 14px 18px;
+      border-radius: 12px;
+      border: 1px solid #334155;
+      background: rgba(15, 23, 42, 0.8);
+      color: #e2e8f0;
+      font-size: 14px;
+      margin-bottom: 16px;
+      transition: all 0.2s;
+    }
+    
+    #token-form input:focus {
+      outline: none;
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    }
+    
+    #token-form button {
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    #token-form button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(99, 102, 241, 0.4);
+    }
+    
+    #token-form a { 
+      color: #818cf8; 
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    
+    #token-form a:hover {
+      color: #a5b4fc;
+    }
+
+    /* =========================================================================
+       MAIN HUD PANEL
+       ========================================================================= */
+    #hud {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 1000;
+      background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 27, 75, 0.9) 100%);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      padding: 20px;
+      border-radius: 20px;
+      width: 340px;
+      backdrop-filter: blur(12px);
+      color: #e2e8f0;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+    }
+    
+    #hud h1 { 
+      margin: 0 0 4px; 
+      font-size: 20px; 
+      font-weight: 700;
+      background: linear-gradient(90deg, #f8fafc 0%, #c7d2fe 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    
+    #hud .subtitle {
+      color: #f59e0b;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 16px;
+    }
+    
+    .section {
+      background: rgba(30, 41, 59, 0.5);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      border: 1px solid rgba(71, 85, 105, 0.3);
+    }
+    
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .section-title::before {
+      content: '';
+      width: 3px;
+      height: 12px;
+      background: #6366f1;
+      border-radius: 2px;
+    }
+
+    /* =========================================================================
+       LOCATION BUTTONS
+       ========================================================================= */
+    .loc-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    
+    .loc-btn {
+      padding: 8px 6px;
+      border-radius: 10px;
+      border: 1px solid rgba(71, 85, 105, 0.4);
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%);
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 10px;
+      font-weight: 500;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    
+    .loc-btn:hover {
+      background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+      border-color: #6366f1;
+      color: white;
+      transform: translateY(-1px);
+    }
+
+    /* =========================================================================
+       SUN INFO DISPLAY
+       ========================================================================= */
+    .sun-info {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    
+    .sun-stat {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 10px;
+      padding: 10px 12px;
+      border: 1px solid rgba(71, 85, 105, 0.2);
+    }
+    
+    .sun-stat-label {
+      font-size: 9px;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    
+    .sun-stat-value {
+      font-size: 16px;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    
+    .sun-stat-value.azimuth { color: #818cf8; }
+    .sun-stat-value.altitude { color: #fbbf24; }
+    .sun-stat-value.daylight { color: #34d399; }
+    .sun-stat-value.night { color: #64748b; }
+
+    /* =========================================================================
+       TIME SLIDER
+       ========================================================================= */
+    .time-control {
+      margin-top: 10px;
+    }
+    
+    .time-display {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    
+    .current-time {
+      font-size: 28px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: #f8fafc;
+    }
+    
+    .time-period {
+      font-size: 12px;
+      color: #94a3b8;
+      padding: 4px 10px;
+      background: rgba(30, 41, 59, 0.8);
+      border-radius: 6px;
+    }
+    
+    #timeSlider {
+      width: 100%;
+      height: 6px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: linear-gradient(90deg, 
+        #1e1b4b 0%, 
+        #312e81 15%, 
+        #fbbf24 30%, 
+        #fef08a 50%, 
+        #fbbf24 70%, 
+        #312e81 85%, 
+        #1e1b4b 100%
+      );
+      border-radius: 3px;
+      outline: none;
+      cursor: pointer;
+    }
+    
+    #timeSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      background: linear-gradient(135deg, #fef08a 0%, #fbbf24 100%);
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(251, 191, 36, 0.5);
+      border: 3px solid #0f172a;
+    }
+    
+    #timeSlider::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      background: linear-gradient(135deg, #fef08a 0%, #fbbf24 100%);
+      border-radius: 50%;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(251, 191, 36, 0.5);
+      border: 3px solid #0f172a;
+    }
+    
+    .time-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      color: #64748b;
+      margin-top: 6px;
+    }
+
+    /* =========================================================================
+       ANIMATION CONTROLS
+       ========================================================================= */
+    .anim-controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .anim-btn {
+      flex: 1;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(71, 85, 105, 0.4);
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.8) 100%);
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    
+    .anim-btn:hover {
+      background: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+      border-color: #6366f1;
+      color: white;
+    }
+    
+    .anim-btn.active {
+      background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%);
+      border-color: #22c55e;
+      color: white;
+    }
+
+    /* =========================================================================
+       SPEED CONTROL
+       ========================================================================= */
+    .speed-control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .speed-label {
+      font-size: 10px;
+      color: #64748b;
+      min-width: 50px;
+    }
+    
+    #speedSlider {
+      flex: 1;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: #334155;
+      border-radius: 2px;
+      outline: none;
+    }
+    
+    #speedSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      background: #6366f1;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+
+    /* =========================================================================
+       SHADOW LEGEND & STATS
+       ========================================================================= */
+    .shadow-stats {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 10px;
+      padding: 10px;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 10px;
+    }
+    
+    .stat-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      flex: 1;
+    }
+    
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: #22c55e;
+    }
+    
+    .stat-label {
+      font-size: 9px;
+      color: #64748b;
+      text-transform: uppercase;
+    }
+
+    /* =========================================================================
+       STATUS & HINTS
+       ========================================================================= */
+    #status { 
+      color: #94a3b8; 
+      margin-top: 12px; 
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    #hint { 
+      color: #475569; 
+      font-size: 10px; 
+      line-height: 1.5; 
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(71, 85, 105, 0.3);
+    }
+
+    /* =========================================================================
+       DATE PICKER
+       ========================================================================= */
+    .date-control {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    
+    .date-label {
+      font-size: 10px;
+      color: #64748b;
+    }
+    
+    #dateInput {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(71, 85, 105, 0.4);
+      background: rgba(15, 23, 42, 0.8);
+      color: #e2e8f0;
+      font-size: 12px;
+    }
+    
+    #dateInput:focus {
+      outline: none;
+      border-color: #6366f1;
+    }
+
+    /* =========================================================================
+       FOOTER CONTROLS
+       ========================================================================= */
+    .footer-controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(71, 85, 105, 0.3);
+    }
+    
+    .footer-btn {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid rgba(71, 85, 105, 0.4);
+      background: transparent;
+      color: #64748b;
+      font-size: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .footer-btn:hover {
+      color: #e2e8f0;
+      border-color: #6366f1;
+    }
+
+    /* =========================================================================
+       LOADING OVERLAY
+       ========================================================================= */
+    #loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.9);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1500;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s;
+    }
+    
+    #loading-overlay.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    
+    .loading-text {
+      color: #94a3b8;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <!-- =========================================================================
+       TOKEN ENTRY OVERLAY
+       ========================================================================= -->
+  <div id="token-overlay">
+    <div id="token-form">
+      <h2>🌇 Dubai Shadow Simulation</h2>
+      <div class="subtitle">SmartShift 2.0</div>
+      <p>
+        Enter your Mapbox access token to visualize<br>
+        real-time sun positions and building shadows.<br>
+        <a href="https://account.mapbox.com/access-tokens/" target="_blank">Get your free token →</a>
+      </p>
+      <input type="text" id="tokenInput" placeholder="pk.eyJ1Ijoi..." />
+      <button id="startBtn">Launch Simulation</button>
+      <p style="font-size: 11px; color: #475569; margin-top: 16px;">
+        Free tier: 50,000 map loads/month
+      </p>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       LOADING OVERLAY
+       ========================================================================= -->
+  <div id="loading-overlay">
+    <div class="loading-text">Calculating shadows...</div>
+  </div>
+
+  <!-- =========================================================================
+       MAP CONTAINER
+       ========================================================================= -->
+  <div id="map"></div>
+
+  <!-- =========================================================================
+       MAIN HUD PANEL
+       ========================================================================= -->
+  <div id="hud" style="display: none;">
+    <h1>☀️ Sun-Shadow Simulation</h1>
+    <div class="subtitle">Dubai, UAE</div>
+
+    <!-- Location Navigation -->
+    <div class="section">
+      <div class="section-title">Landmarks</div>
+      <div class="loc-grid">
+        <button class="loc-btn" data-loc="burj">Burj Khalifa</button>
+        <button class="loc-btn" data-loc="marina">Marina</button>
+        <button class="loc-btn" data-loc="palm">Palm</button>
+        <button class="loc-btn" data-loc="frame">Frame</button>
+        <button class="loc-btn" data-loc="museum">Museum</button>
+        <button class="loc-btn" data-loc="downtown">Downtown</button>
+      </div>
+    </div>
+
+    <!-- Sun Position Display -->
+    <div class="section">
+      <div class="section-title">Sun Position</div>
+      <div class="sun-info">
+        <div class="sun-stat">
+          <div class="sun-stat-label">Azimuth</div>
+          <div class="sun-stat-value azimuth" id="sunAzimuth">--°</div>
+        </div>
+        <div class="sun-stat">
+          <div class="sun-stat-label">Altitude</div>
+          <div class="sun-stat-value altitude" id="sunAltitude">--°</div>
+        </div>
+        <div class="sun-stat">
+          <div class="sun-stat-label">Sunrise</div>
+          <div class="sun-stat-value" id="sunRise">--:--</div>
+        </div>
+        <div class="sun-stat">
+          <div class="sun-stat-label">Sunset</div>
+          <div class="sun-stat-value" id="sunSet">--:--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Time Control -->
+    <div class="section">
+      <div class="section-title">Time Control</div>
+      <div class="time-control">
+        <div class="time-display">
+          <span class="current-time" id="currentTime">12:00</span>
+          <span class="time-period" id="timePeriod">Day</span>
+        </div>
+        <input type="range" id="timeSlider" min="0" max="1440" value="720" step="5" />
+        <div class="time-labels">
+          <span>00:00</span>
+          <span>06:00</span>
+          <span>12:00</span>
+          <span>18:00</span>
+          <span>24:00</span>
+        </div>
+        
+        <div class="date-control">
+          <span class="date-label">Date:</span>
+          <input type="date" id="dateInput" />
+        </div>
+      </div>
+      
+      <!-- Animation Controls -->
+      <div class="anim-controls">
+        <button class="anim-btn" id="playBtn">▶ Play</button>
+        <button class="anim-btn" id="resetBtn">↺ Reset</button>
+      </div>
+      
+      <div class="speed-control">
+        <span class="speed-label">Speed:</span>
+        <input type="range" id="speedSlider" min="100" max="2000" value="500" step="100" />
+        <span id="speedValue" style="font-size: 10px; color: #64748b; min-width: 40px;">1x</span>
+      </div>
+    </div>
+
+    <!-- Shadow Stats -->
+    <div class="shadow-stats">
+      <div class="stat-item">
+        <div class="stat-value" id="buildingCount">0</div>
+        <div class="stat-label">Buildings</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="shadowCount">0</div>
+        <div class="stat-label">Shadows</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value" id="avgShadowLen">0m</div>
+        <div class="stat-label">Avg Length</div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div id="status">
+      <span class="status-dot"></span>
+      <span>Ready</span>
+    </div>
+    
+    <div id="hint">
+      Drag to pan • Right-drag to rotate • Scroll to zoom<br>
+      Ctrl+drag to adjust pitch • Use slider to simulate time
+    </div>
+
+    <!-- Footer -->
+    <div class="footer-controls">
+      <button class="footer-btn" id="resetToken">Change Token</button>
+      <button class="footer-btn" id="toggleShadows">Hide Shadows</button>
+      <button class="footer-btn" id="refreshBuildings">Refresh</button>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       JAVASCRIPT - SHADOW SIMULATION LOGIC
+       ========================================================================= -->
+  <script>
+    // =========================================================================
+    // CONFIGURATION
+    // =========================================================================
+    
+    const TOKEN_KEY = 'smartshift:mapboxToken';
+    
+    // Dubai location configurations
+    const locations = {
+      burj: { center: [55.274376, 25.197197], zoom: 16.5, pitch: 67, bearing: -145 },
+      marina: { center: [55.1386, 25.0805], zoom: 15.5, pitch: 60, bearing: 45 },
+      palm: { center: [55.1380, 25.1124], zoom: 14, pitch: 55, bearing: 0 },
+      frame: { center: [55.3002, 25.2357], zoom: 16, pitch: 65, bearing: -90 },
+      museum: { center: [55.2805, 25.2197], zoom: 17, pitch: 60, bearing: 45 },
+      downtown: { center: [55.2708, 25.2048], zoom: 15, pitch: 55, bearing: -20 }
+    };
+    
+    // Dubai geographic settings for sun calculations
+    const DUBAI = {
+      latitude: 25.2048,
+      longitude: 55.2708,
+      timezoneOffset: 4  // UTC+4
+    };
+    
+    // Meters per degree at Dubai's latitude
+    const METERS_PER_DEGREE_LAT = 111320;
+    const METERS_PER_DEGREE_LON = 111320 * Math.cos(DUBAI.latitude * Math.PI / 180);
+    
+    // =========================================================================
+    // STATE
+    // =========================================================================
+    
+    let map = null;
+    let animationInterval = null;
+    let isPlaying = false;
+    let currentMinutes = 720;  // Default to noon (12:00)
+    let animationSpeed = 500;  // ms per frame
+    let shadowsVisible = true;
+    let buildingsCache = [];   // Cache extracted buildings
+    let lastBuildingsUpdate = 0;
+    let isUpdatingShadows = false;
+    
+    // =========================================================================
+    // TOKEN MANAGEMENT
+    // =========================================================================
+    
+    function saveToken(t) { 
+      try { localStorage.setItem(TOKEN_KEY, t); } catch(e) {} 
+    }
+    
+    function loadToken() { 
+      try { return localStorage.getItem(TOKEN_KEY) || ''; } catch(e) { return ''; } 
+    }
+    
+    function resetToken() { 
+      localStorage.removeItem(TOKEN_KEY); 
+      location.reload(); 
+    }
+    
+    // =========================================================================
+    // UI HELPERS
+    // =========================================================================
+    
+    function setStatus(msg) { 
+      const el = document.querySelector('#status span:last-child');
+      if (el) el.textContent = msg; 
+    }
+    
+    function formatTime(minutes) {
+      const hours = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+      return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+    }
+    
+    function getTimePeriod(altitude, azimuth) {
+      if (altitude < -6) return 'Night';
+      if (altitude < 0) return azimuth < 180 ? 'Dawn' : 'Dusk';
+      if (altitude < 15) return azimuth < 180 ? 'Morning' : 'Evening';
+      return 'Day';
+    }
+    
+    function updateTimeDisplay() {
+      document.getElementById('currentTime').textContent = formatTime(currentMinutes);
+    }
+    
+    function showLoading(show) {
+      const overlay = document.getElementById('loading-overlay');
+      if (overlay) {
+        overlay.classList.toggle('visible', show);
+      }
+    }
+    
+    // =========================================================================
+    // SOLAR POSITION CALCULATIONS
+    // =========================================================================
+    
+    function calculateSunPosition(date, hour, minute) {
+      /**
+       * Calculate sun position using NOAA algorithms
+       * Returns azimuth, altitude, and day/night info
+       */
+      const dt = new Date(date);
+      dt.setHours(hour, minute, 0, 0);
+      
+      const lat = DUBAI.latitude;
+      const lon = DUBAI.longitude;
+      const tz = DUBAI.timezoneOffset;
+      
+      // Day of year
+      const start = new Date(dt.getFullYear(), 0, 0);
+      const diff = dt - start;
+      const oneDay = 1000 * 60 * 60 * 24;
+      const dayOfYear = Math.floor(diff / oneDay);
+      
+      // Solar declination
+      const declination = 23.45 * Math.sin(2 * Math.PI * (284 + dayOfYear) / 365);
+      
+      // Equation of time
+      const B = 2 * Math.PI * (dayOfYear - 81) / 365;
+      const EoT = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
+      
+      // Solar time and hour angle
+      const solarTime = hour * 60 + minute + EoT + 4 * (lon - tz * 15);
+      const hourAngle = (solarTime / 4) - 180;
+      
+      // Convert to radians
+      const latRad = lat * Math.PI / 180;
+      const decRad = declination * Math.PI / 180;
+      const haRad = hourAngle * Math.PI / 180;
+      
+      // Calculate altitude
+      const sinAlt = Math.sin(latRad) * Math.sin(decRad) + 
+                     Math.cos(latRad) * Math.cos(decRad) * Math.cos(haRad);
+      const altitude = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
+      
+      // Calculate azimuth
+      const cosAz = (Math.sin(decRad) - Math.sin(latRad) * sinAlt) / 
+                    (Math.cos(latRad) * Math.cos(Math.asin(sinAlt)));
+      let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180 / Math.PI;
+      
+      if (hourAngle > 0) azimuth = 360 - azimuth;
+      
+      // Sunrise/sunset times
+      const cosHaSunrise = -Math.tan(latRad) * Math.tan(decRad);
+      let sunrise = null, sunset = null;
+      
+      if (cosHaSunrise >= -1 && cosHaSunrise <= 1) {
+        const haSunrise = Math.acos(cosHaSunrise) * 180 / Math.PI;
+        const noonMinutes = 720 - 4 * lon - EoT + tz * 60;
+        sunrise = noonMinutes - haSunrise * 4;
+        sunset = noonMinutes + haSunrise * 4;
+      }
+      
+      return {
+        azimuth,
+        altitude,
+        isDaylight: altitude > 0,
+        sunrise: sunrise ? formatTime(Math.round(sunrise)) : null,
+        sunset: sunset ? formatTime(Math.round(sunset)) : null
+      };
+    }
+    
+    // =========================================================================
+    // BUILDING EXTRACTION FROM MAPBOX
+    // =========================================================================
+    
+    function extractBuildingsFromMap() {
+      /**
+       * Extract building footprints and heights from Mapbox's 3D buildings layer
+       * Returns array of building objects with footprint polygons and heights
+       */
+      if (!map) return [];
+      
+      const buildings = [];
+      
+      // Query rendered features for building layers
+      // Mapbox Standard style uses 'building' and 'building-extrusion' layers
+      const layerIds = ['building', 'building-extrusion', 'building-3d'];
+      
+      // Get all features in the current viewport
+      let features = [];
+      
+      try {
+        // Try to query building features from various possible layer names
+        features = map.queryRenderedFeatures({ layers: undefined });
+        
+        // Filter for building-related features
+        features = features.filter(f => {
+          const layerId = f.layer?.id || '';
+          const sourceLayer = f.sourceLayer || '';
+          return layerId.includes('building') || 
+                 sourceLayer.includes('building') ||
+                 f.properties?.extrude === 'true' ||
+                 f.properties?.height > 0;
+        });
+      } catch (e) {
+        console.log('Layer query failed, trying alternative method');
+        // Fallback: query all features
+        features = map.queryRenderedFeatures();
+        features = features.filter(f => {
+          return f.properties?.height > 0 || 
+                 f.properties?.render_height > 0 ||
+                 f.layer?.id?.includes('building');
+        });
+      }
+      
+      // Process each feature
+      const seenIds = new Set();
+      
+      for (const feature of features) {
+        // Get unique ID
+        const id = feature.id || feature.properties?.id || 
+                   `${feature.geometry?.coordinates?.[0]?.[0]?.[0]}-${feature.geometry?.coordinates?.[0]?.[0]?.[1]}`;
+        
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        
+        // Get height from various possible properties
+        let height = feature.properties?.height || 
+                     feature.properties?.render_height ||
+                     feature.properties?.extrusion_height ||
+                     feature.properties?.max_height ||
+                     15; // Default height if not available
+        
+        // Convert height to number
+        height = parseFloat(height) || 15;
+        
+        // Skip very short structures
+        if (height < 5) continue;
+        
+        // Get geometry
+        const geometry = feature.geometry;
+        if (!geometry) continue;
+        
+        let footprint = null;
+        
+        if (geometry.type === 'Polygon') {
+          footprint = geometry.coordinates[0];
+        } else if (geometry.type === 'MultiPolygon') {
+          // Use the largest polygon
+          let maxArea = 0;
+          for (const poly of geometry.coordinates) {
+            const area = calculatePolygonArea(poly[0]);
+            if (area > maxArea) {
+              maxArea = area;
+              footprint = poly[0];
+            }
+          }
+        }
+        
+        if (footprint && footprint.length >= 3) {
+          buildings.push({
+            id,
+            height,
+            footprint,
+            name: feature.properties?.name || null
+          });
+        }
+      }
+      
+      console.log(`Extracted ${buildings.length} buildings from map`);
+      return buildings;
+    }
+    
+    function calculatePolygonArea(coords) {
+      /**
+       * Calculate approximate area of a polygon (for sorting)
+       */
+      let area = 0;
+      const n = coords.length;
+      for (let i = 0; i < n - 1; i++) {
+        area += coords[i][0] * coords[i + 1][1];
+        area -= coords[i + 1][0] * coords[i][1];
+      }
+      return Math.abs(area / 2);
+    }
+    
+    // =========================================================================
+    // SHADOW CALCULATIONS
+    // =========================================================================
+    
+    function calculateShadowLength(buildingHeight, sunAltitude) {
+      /**
+       * Calculate shadow length based on building height and sun altitude
+       * Shadow Length = Height / tan(altitude)
+       */
+      if (sunAltitude <= 0) return 0;
+      
+      const altRad = Math.max(1, sunAltitude) * Math.PI / 180;
+      const length = buildingHeight / Math.tan(altRad);
+      
+      // Cap at 10x height to avoid extremely long shadows
+      return Math.min(length, buildingHeight * 10);
+    }
+    
+    function calculateShadowPolygon(footprint, height, sunPosition) {
+      /**
+       * Calculate shadow polygon for a building
+       * Projects each vertex in the shadow direction
+       */
+      if (!sunPosition.isDaylight || sunPosition.altitude <= 0) return null;
+      
+      const shadowLength = calculateShadowLength(height, sunPosition.altitude);
+      if (shadowLength < 1) return null;  // Skip very short shadows
+      
+      // Shadow direction (opposite to sun azimuth)
+      const shadowDir = (sunPosition.azimuth + 180) % 360;
+      const dirRad = shadowDir * Math.PI / 180;
+      
+      // Calculate offset in meters, then convert to degrees
+      const dx = shadowLength * Math.sin(dirRad);
+      const dy = shadowLength * Math.cos(dirRad);
+      
+      const dLon = dx / METERS_PER_DEGREE_LON;
+      const dLat = dy / METERS_PER_DEGREE_LAT;
+      
+      // Create shadow polygon by projecting footprint vertices
+      const shadowVertices = footprint.map(pt => [pt[0] + dLon, pt[1] + dLat]);
+      
+      // Build the shadow polygon:
+      // Connect footprint vertices to their shadow projections
+      const polygon = [];
+      
+      // Add shadow edge (projected vertices)
+      for (const pt of shadowVertices) {
+        polygon.push(pt);
+      }
+      
+      // Close by adding footprint in reverse
+      for (let i = footprint.length - 1; i >= 0; i--) {
+        polygon.push(footprint[i]);
+      }
+      
+      return polygon;
+    }
+    
+    // =========================================================================
+    // SHADOW RENDERING
+    // =========================================================================
+    
+    function generateShadowGeoJSON(date) {
+      /**
+       * Generate GeoJSON for all building shadows
+       */
+      const hour = Math.floor(currentMinutes / 60);
+      const minute = currentMinutes % 60;
+      const sunPos = calculateSunPosition(date, hour, minute);
+      
+      // Update UI with sun position
+      document.getElementById('sunAzimuth').textContent = `${sunPos.azimuth.toFixed(1)}°`;
+      document.getElementById('sunAltitude').textContent = `${sunPos.altitude.toFixed(1)}°`;
+      document.getElementById('sunRise').textContent = sunPos.sunrise || '--:--';
+      document.getElementById('sunSet').textContent = sunPos.sunset || '--:--';
+      
+      // Update styling based on daylight
+      const altEl = document.getElementById('sunAltitude');
+      altEl.className = sunPos.isDaylight ? 'sun-stat-value altitude' : 'sun-stat-value night';
+      
+      // Update time period
+      const period = getTimePeriod(sunPos.altitude, sunPos.azimuth);
+      document.getElementById('timePeriod').textContent = period;
+      
+      // Update map light preset
+      if (map) {
+        let lightPreset = 'day';
+        if (sunPos.altitude < -6) lightPreset = 'night';
+        else if (sunPos.altitude < 6) lightPreset = sunPos.azimuth < 180 ? 'dawn' : 'dusk';
+        
+        try {
+          map.setConfigProperty('basemap', 'lightPreset', lightPreset);
+        } catch (e) {
+          // Light preset not available
+        }
+      }
+      
+      // Use cached buildings or extract new ones
+      const now = Date.now();
+      if (buildingsCache.length === 0 || now - lastBuildingsUpdate > 2000) {
+        buildingsCache = extractBuildingsFromMap();
+        lastBuildingsUpdate = now;
+      }
+      
+      // Generate shadow polygons
+      const features = [];
+      let totalShadowLength = 0;
+      
+      for (const building of buildingsCache) {
+        const shadowPoly = calculateShadowPolygon(building.footprint, building.height, sunPos);
+        
+        if (shadowPoly && shadowPoly.length >= 3) {
+          // Close the polygon properly
+          const coords = [...shadowPoly];
+          if (coords[0][0] !== coords[coords.length - 1][0] || 
+              coords[0][1] !== coords[coords.length - 1][1]) {
+            coords.push(coords[0]);
+          }
+          
+          const shadowLen = calculateShadowLength(building.height, sunPos.altitude);
+          totalShadowLength += shadowLen;
+          
+          features.push({
+            type: 'Feature',
+            properties: {
+              building_id: building.id,
+              building_name: building.name,
+              height: building.height,
+              shadow_length: shadowLen
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [coords]
+            }
+          });
+        }
+      }
+      
+      // Update stats
+      document.getElementById('buildingCount').textContent = buildingsCache.length;
+      document.getElementById('shadowCount').textContent = features.length;
+      const avgLen = features.length > 0 ? Math.round(totalShadowLength / features.length) : 0;
+      document.getElementById('avgShadowLen').textContent = `${avgLen}m`;
+      
+      return {
+        type: 'FeatureCollection',
+        features
+      };
+    }
+    
+    function updateShadows() {
+      /**
+       * Update shadow layer on map
+       */
+      if (!map || isUpdatingShadows) return;
+      
+      isUpdatingShadows = true;
+      
+      try {
+        const source = map.getSource('shadows');
+        if (!source) {
+          isUpdatingShadows = false;
+          return;
+        }
+        
+        const dateInput = document.getElementById('dateInput');
+        const date = dateInput.value ? new Date(dateInput.value) : new Date();
+        
+        const shadowData = generateShadowGeoJSON(date);
+        source.setData(shadowData);
+      } catch (e) {
+        console.error('Error updating shadows:', e);
+      }
+      
+      isUpdatingShadows = false;
+    }
+    
+    function refreshBuildings() {
+      /**
+       * Force refresh of building data
+       */
+      buildingsCache = [];
+      lastBuildingsUpdate = 0;
+      updateShadows();
+      setStatus(`Refreshed - found ${buildingsCache.length} buildings`);
+    }
+    
+    // =========================================================================
+    // MAP INITIALIZATION
+    // =========================================================================
+    
+    function flyTo(key) {
+      if (!map) return;
+      const loc = locations[key];
+      setStatus(`Flying to ${key}...`);
+      map.flyTo({
+        center: loc.center,
+        zoom: loc.zoom,
+        pitch: loc.pitch,
+        bearing: loc.bearing,
+        duration: 2000
+      });
+      
+      // Refresh buildings after flying
+      setTimeout(() => {
+        refreshBuildings();
+        setStatus('Ready');
+      }, 2500);
+    }
+    
+    function initMap(token) {
+      mapboxgl.accessToken = token;
+      
+      const burj = locations.burj;
+      
+      map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/standard',
+        center: burj.center,
+        zoom: burj.zoom,
+        pitch: burj.pitch,
+        bearing: burj.bearing,
+        antialias: true
+      });
+      
+      map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+      
+      map.on('load', () => {
+        setStatus('Map loaded! Initializing shadows...');
+        
+        // Set initial light preset
+        try {
+          map.setConfigProperty('basemap', 'lightPreset', 'day');
+        } catch (e) {}
+        
+        // Add shadow source
+        map.addSource('shadows', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] }
+        });
+        
+        // Add shadow fill layer - render below buildings
+        map.addLayer({
+          id: 'shadows-fill',
+          type: 'fill',
+          source: 'shadows',
+          paint: {
+            'fill-color': '#000000',
+            'fill-opacity': 0.4
+          }
+        });
+        
+        // Add shadow outline
+        map.addLayer({
+          id: 'shadows-outline',
+          type: 'line',
+          source: 'shadows',
+          paint: {
+            'line-color': '#1e293b',
+            'line-width': 0.5,
+            'line-opacity': 0.3
+          }
+        });
+        
+        // Wait for style to fully load, then update shadows
+        setTimeout(() => {
+          updateShadows();
+          setStatus(`Ready - ${buildingsCache.length} buildings`);
+        }, 1500);
+      });
+      
+      // Update shadows when map moves
+      map.on('moveend', () => {
+        refreshBuildings();
+      });
+      
+      // Update shadows on zoom
+      map.on('zoomend', () => {
+        refreshBuildings();
+      });
+      
+      map.on('error', (e) => {
+        console.error('Map error:', e);
+        if (e.error?.status === 401) {
+          alert('Invalid Mapbox token. Please check and try again.');
+          resetToken();
+        }
+      });
+    }
+    
+    // =========================================================================
+    // ANIMATION CONTROLS
+    // =========================================================================
+    
+    function startAnimation() {
+      if (isPlaying) return;
+      
+      isPlaying = true;
+      document.getElementById('playBtn').textContent = '⏸ Pause';
+      document.getElementById('playBtn').classList.add('active');
+      setStatus('Animation playing...');
+      
+      animationInterval = setInterval(() => {
+        currentMinutes += 5;
+        
+        if (currentMinutes > 1440) {
+          currentMinutes = 0;
+        }
+        
+        document.getElementById('timeSlider').value = currentMinutes;
+        updateTimeDisplay();
+        updateShadows();
+      }, animationSpeed);
+    }
+    
+    function stopAnimation() {
+      if (!isPlaying) return;
+      
+      isPlaying = false;
+      document.getElementById('playBtn').textContent = '▶ Play';
+      document.getElementById('playBtn').classList.remove('active');
+      setStatus(`Ready - ${buildingsCache.length} buildings`);
+      
+      if (animationInterval) {
+        clearInterval(animationInterval);
+        animationInterval = null;
+      }
+    }
+    
+    function toggleAnimation() {
+      if (isPlaying) {
+        stopAnimation();
+      } else {
+        startAnimation();
+      }
+    }
+    
+    function resetAnimation() {
+      stopAnimation();
+      currentMinutes = 720;
+      document.getElementById('timeSlider').value = currentMinutes;
+      updateTimeDisplay();
+      updateShadows();
+      setStatus('Reset to noon');
+    }
+    
+    // =========================================================================
+    // INITIALIZATION
+    // =========================================================================
+    
+    function start(token) {
+      if (!token || token.length < 20) {
+        alert('Please enter a valid Mapbox access token');
+        return;
+      }
+      saveToken(token);
+      document.getElementById('token-overlay').classList.add('hidden');
+      document.getElementById('hud').style.display = 'block';
+      initMap(token);
+    }
+    
+    // Event listeners
+    document.addEventListener('DOMContentLoaded', () => {
+      // Token form
+      document.getElementById('startBtn').addEventListener('click', () => {
+        start(document.getElementById('tokenInput').value.trim());
+      });
+      
+      document.getElementById('tokenInput').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') start(document.getElementById('tokenInput').value.trim());
+      });
+      
+      document.getElementById('resetToken').addEventListener('click', resetToken);
+      
+      // Location buttons
+      document.querySelectorAll('[data-loc]').forEach(btn => {
+        btn.addEventListener('click', () => flyTo(btn.dataset.loc));
+      });
+      
+      // Time slider
+      const timeSlider = document.getElementById('timeSlider');
+      timeSlider.addEventListener('input', (e) => {
+        currentMinutes = parseInt(e.target.value);
+        updateTimeDisplay();
+        updateShadows();
+      });
+      
+      // Date input
+      const dateInput = document.getElementById('dateInput');
+      dateInput.value = new Date().toISOString().split('T')[0];
+      dateInput.addEventListener('change', updateShadows);
+      
+      // Animation controls
+      document.getElementById('playBtn').addEventListener('click', toggleAnimation);
+      document.getElementById('resetBtn').addEventListener('click', resetAnimation);
+      
+      // Speed slider
+      const speedSlider = document.getElementById('speedSlider');
+      speedSlider.addEventListener('input', (e) => {
+        animationSpeed = 2100 - parseInt(e.target.value);
+        const speedMultiple = (1000 / animationSpeed).toFixed(1);
+        document.getElementById('speedValue').textContent = `${speedMultiple}x`;
+        
+        if (isPlaying) {
+          stopAnimation();
+          startAnimation();
+        }
+      });
+      
+      // Shadow toggle
+      document.getElementById('toggleShadows').addEventListener('click', () => {
+        shadowsVisible = !shadowsVisible;
+        const btn = document.getElementById('toggleShadows');
+        btn.textContent = shadowsVisible ? 'Hide Shadows' : 'Show Shadows';
+        
+        if (map) {
+          const visibility = shadowsVisible ? 'visible' : 'none';
+          if (map.getLayer('shadows-fill')) {
+            map.setLayoutProperty('shadows-fill', 'visibility', visibility);
+          }
+          if (map.getLayer('shadows-outline')) {
+            map.setLayoutProperty('shadows-outline', 'visibility', visibility);
+          }
+        }
+      });
+      
+      // Refresh buildings button
+      document.getElementById('refreshBuildings').addEventListener('click', refreshBuildings);
+      
+      // Initialize time display
+      updateTimeDisplay();
+      
+      // Auto-start if token saved
+      const saved = loadToken();
+      if (saved) {
+        document.getElementById('token-overlay').classList.add('hidden');
+        document.getElementById('hud').style.display = 'block';
+        initMap(saved);
+      }
+    });
+  </script>
+</body>
+</html>
