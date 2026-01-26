@@ -21,3 +21,4 @@ flask-cors>=4.0.0               # Cross-Origin Resource Sharing support
 # mypy>=1.8.0                   # Type checking
 
 
+
