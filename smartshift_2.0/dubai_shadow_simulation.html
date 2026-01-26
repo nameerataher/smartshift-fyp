@@ -696,17 +696,13 @@
     </div>
   </div>
 
-  <!-- =========================================================================
-       JAVASCRIPT - SHADOW SIMULATION LOGIC
-       ========================================================================= -->
+  <!-- javascript - shadow simulation logic -->
   <script>
-    // =========================================================================
-    // CONFIGURATION
-    // =========================================================================
+    // configuration
 
     const TOKEN_KEY = 'smartshift:mapboxToken';
 
-    // Dubai location configurations
+    // dubai location configurations
     const locations = {
       burj: { center: [55.274376, 25.197197], zoom: 16.5, pitch: 67, bearing: -145 },
       marina: { center: [55.1386, 25.0805], zoom: 15.5, pitch: 60, bearing: 45 },
@@ -716,16 +712,14 @@
       downtown: { center: [55.2708, 25.2048], zoom: 15, pitch: 55, bearing: -20 }
     };
 
-    // Dubai geographic settings for sun calculations
+    // dubai geographic settings for sun calculations
     const DUBAI = {
       latitude: 25.2048,
       longitude: 55.2708,
       timezoneOffset: 4  // UTC+4
     };
 
-    // =========================================================================
-    // STATE
-    // =========================================================================
+    // state
 
     let map = null;
     let animationInterval = null;
@@ -735,47 +729,70 @@
     let shadowsVisible = true;
     let isUpdatingShadows = false;
 
-    // =========================================================================
-    // TOKEN MANAGEMENT
-    // =========================================================================
+    // token management
 
+    // first visit, save token to local storage
     function saveToken(t) {
       try { localStorage.setItem(TOKEN_KEY, t); } catch(e) {}
     }
 
+    // return visits, load token from local storage
     function loadToken() {
       try { return localStorage.getItem(TOKEN_KEY) || ''; } catch(e) { return ''; }
     }
 
+    // change token, remove token from local storage and reload page
     function resetToken() {
       localStorage.removeItem(TOKEN_KEY);
       location.reload();
     }
 
-    // =========================================================================
-    // UI HELPERS
-    // =========================================================================
+    // ui helpers
 
-    function setStatus(msg, isUpdating = false) {
-      const el = document.querySelector('#status span:last-child');
-      const dot = document.querySelector('.status-dot');
-      if (el) el.textContent = msg;
-      if (dot) {
-        dot.classList.toggle('updating', isUpdating);
-      }
-    }
+    // function setStatus(msg, isUpdating = false) {
+    //   const el = document.querySelector('#status span:last-child');
+    //   const dot = document.querySelector('.status-dot');
+    //   if (el) el.textContent = msg;
+    //   if (dot) {
+    //     dot.classList.toggle('updating', isUpdating);
+    //   }
+    // }
 
+    // convert minutes to hours and minutes
     function formatTime(minutes) {
       const hours = Math.floor(minutes / 60);
       const mins = minutes % 60;
       return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
     }
 
+    // to determine the time of day label based on the sun altitude and azimuth
+    // altitude = height (-90 to +90), azimuth = direction (0 to 360)
+    // -90 = directly below the horizon (not visible = night)
+    // 0 = just above the horizon (sunrise)
+    // 90 = sun at its highest point (noon)
+
+    // azimuth convention: 0 = north, 90 = east (sunrise), 180 = south (noon), 270 = west (sunset)
+
     function getTimePeriod(altitude, azimuth) {
-      if (altitude < -6) return 'Night';
+//       -6° is the threshold for astronomical twilight:
+// Below -6°: Complete darkness (stars visible)
+// Above -6°: Some sky glow still present
+      if (altitude < -6) return 'Night'; //sun well below the horizon (not visible = night)
+
+      // Azimuth distinguishes East vs West:
+//  azimuth < 180° (0° to 180°): East side = Sun rising (Dawn/Morning)
+//  azimuth >= 180° (180° to 360°): West side = Sun setting (Dusk/Evening)
+
+      //sun rising or setting but just below the horizon
       if (altitude < 0) return azimuth < 180 ? 'Dawn' : 'Dusk';
+
+//       15° altitude is when the sun is noticeably high:
+// Below 15°: "Golden hour" lighting (Morning/Evening)
+// Above 15°: Full daylight (Day)
+
+      // low sun - early morning or late afternoon
       if (altitude < 15) return azimuth < 180 ? 'Morning' : 'Evening';
-      return 'Day';
+      return 'Day'; //sun high in the sky (full daylight)
     }
 
     function updateTimeDisplay() {
@@ -789,9 +806,8 @@
       }
     }
 
-    // =========================================================================
-    // LIGHTING HELPER FUNCTIONS
-    // =========================================================================
+    // lighting helper functions
+
 
     function getTimeOfDayColor(altitude, azimuth) {
       /**
@@ -851,57 +867,73 @@
       return 0.8; // Strong shadows at high sun
     }
 
-    // =========================================================================
-    // SOLAR POSITION CALCULATIONS
-    // =========================================================================
+    // solar position calculations
 
     function calculateSunPosition(date, hour, minute) {
       /**
        * Calculate sun position using NOAA algorithms
        * Returns azimuth, altitude, and day/night info
        */
-      const dt = new Date(date);
+      // set up date and time
+       const dt = new Date(date);
       dt.setHours(hour, minute, 0, 0);
 
+      // dubai coordinates
       const lat = DUBAI.latitude;
       const lon = DUBAI.longitude;
       const tz = DUBAI.timezoneOffset;
 
-      // Day of year
+      // calculate day of year
+      // formula: day of year = (date - start of year) / one day
       const start = new Date(dt.getFullYear(), 0, 0);
       const diff = dt - start;
       const oneDay = 1000 * 60 * 60 * 24;
       const dayOfYear = Math.floor(diff / oneDay);
 
-      // Solar declination
+      // calculate solar declination = sun angle relative to the equator
+      // varies from -23.45° to +23.45° throughout the year
+      // caused by the 23.45° tilt of the earth's axis
+      // formula: 23.45° × sin(2π × (284 + day) / 365)
+      // Summer Solstice (June 21):    +23.45° → Sun directly over Tropic of Cancer
+      // Winter Solstice (December 21): -23.45° → Sun directly over Tropic of Capricorn
+      // Equinoxes (March/Sept):          0°    → Sun directly over Equator
       const declination = 23.45 * Math.sin(2 * Math.PI * (284 + dayOfYear) / 365);
 
-      // Equation of time
+      // Equation of time = correction for the difference between solar time and clock time
+      // formula: 9.87 * sin(2 * B) - 7.53 * cos(B) - 1.5 * sin(B)
+      // where B = 2 * Math.PI * (dayOfYear - 81) / 365
       const B = 2 * Math.PI * (dayOfYear - 81) / 365;
       const EoT = 9.87 * Math.sin(2 * B) - 7.53 * Math.cos(B) - 1.5 * Math.sin(B);
 
-      // Solar time and hour angle
+      // solar time and hour angle (not clock time)
+      // formula: solar time = clock time + equation of time + 4 * (longitude - timezone)
+      // Hour Angle = 0°   → Solar noon (sun due south)
+      // Hour Angle < 0°   → Morning (sun in east)
+      // Hour Angle > 0°   → Afternoon (sun in west)
       const solarTime = hour * 60 + minute + EoT + 4 * (lon - tz * 15);
       const hourAngle = (solarTime / 4) - 180;
 
-      // Convert to radians
+      // convert to radians
       const latRad = lat * Math.PI / 180;
       const decRad = declination * Math.PI / 180;
       const haRad = hourAngle * Math.PI / 180;
 
-      // Calculate altitude
+      // calculate altitude
+      // formula: sin(altitude) = sin(latitude) * sin(declination) + cos(latitude) * cos(declination) * cos(hour angle)
       const sinAlt = Math.sin(latRad) * Math.sin(decRad) +
                      Math.cos(latRad) * Math.cos(decRad) * Math.cos(haRad);
       const altitude = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
 
       // Calculate azimuth
+      // formula: cos(azimuth) = (sin(declination) - sin(latitude) * sin(altitude)) / (cos(latitude) * cos(altitude))
       const cosAz = (Math.sin(decRad) - Math.sin(latRad) * sinAlt) /
                     (Math.cos(latRad) * Math.cos(Math.asin(sinAlt)));
       let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180 / Math.PI;
 
       if (hourAngle > 0) azimuth = 360 - azimuth;
 
-      // Sunrise/sunset times
+      // sunrise/sunset times in local time
+      // formula: cos(hour angle) = -tan(latitude) * tan(declination)
       const cosHaSunrise = -Math.tan(latRad) * Math.tan(decRad);
       let sunrise = null, sunset = null;
 
@@ -921,9 +953,7 @@
       };
     }
 
-    // =========================================================================
-    // BUILDING EXTRACTION FROM MAPBOX
-    // =========================================================================
+    // building extraction from mapbox
 
     function extractBuildingsFromMap() {
       /**
@@ -1093,14 +1123,12 @@
       return Math.abs(area / 2);
     }
 
-    // =========================================================================
-    // SHADOW CALCULATIONS
-    // =========================================================================
+    // shadow calculations
 
     function calculateShadowLength(buildingHeight, sunAltitude) {
       /**
        * Calculate shadow length based on building height and sun altitude
-       * Shadow Length = Height / tan(altitude)
+       * formula: shadow length = height / tan(altitude)
        */
       if (sunAltitude <= 0) return 0;
 
@@ -1151,10 +1179,6 @@
 
       return polygon;
     }
-
-    // =========================================================================
-    // SHADOW RENDERING
-    // =========================================================================
 
     function generateShadowGeoJSON(date) {
       /**
@@ -1304,7 +1328,6 @@
         const polarAngle = 90 - sunPos.altitude;
 
         // Update 3D directional light with current sun position
-        // Reference: https://docs.mapbox.com/style-spec/reference/light/#directional
         try {
           map.setLights([
             {
@@ -1330,10 +1353,10 @@
 
           console.log(`Updated 3D lighting: azimuth=${sunPos.azimuth.toFixed(1)}°, polar=${polarAngle.toFixed(1)}°, intensity=${getSunIntensity(sunPos.altitude).toFixed(2)}`);
 
-          // Update statistics
-          document.getElementById('buildingCount').textContent = '3D';
-          document.getElementById('shadowCount').textContent = sunPos.isDaylight ? 'ON' : 'OFF';
-          document.getElementById('avgShadowLen').textContent = `${sunPos.altitude.toFixed(0)}°`;
+          // // Update statistics
+          // document.getElementById('buildingCount').textContent = '3D';
+          // document.getElementById('shadowCount').textContent = sunPos.isDaylight ? 'ON' : 'OFF';
+          // document.getElementById('avgShadowLen').textContent = `${sunPos.altitude.toFixed(0)}°`;
 
           setStatus(sunPos.isDaylight ? '3D shadows active' : 'Night (no shadows)', false);
         } catch (lightError) {
@@ -1359,9 +1382,7 @@
       setStatus(`Refreshed - found ${buildingsCache.length} buildings`);
     }
 
-    // =========================================================================
-    // MAP INITIALIZATION
-    // =========================================================================
+    // map initialization
 
     function flyTo(key) {
       if (!map) return;
@@ -1402,12 +1423,10 @@
 
         console.log('Map loaded, setting up 3D lighting system');
 
-        // Initialize 3D lighting with DirectionalLight and AmbientLight
-        // This uses Mapbox's native shadow rendering system
+
         setTimeout(() => {
           try {
             // Configure 3D lights for the map
-            // Reference: https://docs.mapbox.com/style-spec/reference/light/#directional
             const initialSunPos = calculateSunPosition(new Date(),
               Math.floor(currentMinutes / 60),
               currentMinutes % 60
@@ -1465,9 +1484,7 @@
       });
     }
 
-    // =========================================================================
-    // ANIMATION CONTROLS
-    // =========================================================================
+    // animation controls
 
     function startAnimation() {
       if (isPlaying) return;
@@ -1523,9 +1540,7 @@
       }, 200);
     }
 
-    // =========================================================================
-    // INITIALIZATION
-    // =========================================================================
+    // initialization
 
     function start(token) {
       if (!token || token.length < 20) {

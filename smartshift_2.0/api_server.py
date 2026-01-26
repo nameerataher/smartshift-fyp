@@ -14,7 +14,6 @@ Endpoints:
 - GET /api/locations        - Available landmark locations
 - GET /api/health           - Server health check
 
-Author: SmartShift Team
 """
 
 import json
@@ -27,15 +26,13 @@ from flask_cors import CORS
 from solar_position import SolarPositionCalculator, SunPosition
 from shadow_calculator import ShadowCalculator, Building, Shadow
 from config import (
-    DUBAI, API, SHADOW, 
+    DUBAI, API, SHADOW,
     LANDMARK_LOCATIONS, SAMPLE_BUILDINGS,
     get_location_config, get_all_location_keys
 )
 
 
-# =============================================================================
-# FLASK APP INITIALIZATION
-# =============================================================================
+# flask app initialization
 
 app = Flask(__name__, static_folder='.')
 CORS(app, origins=API.CORS_ORIGINS)
@@ -54,47 +51,45 @@ shadow_calculator = ShadowCalculator(
 )
 
 
-# =============================================================================
-# HELPER FUNCTIONS
-# =============================================================================
+# helper functions
 
 def parse_datetime_param(date_str: Optional[str], time_str: Optional[str]) -> datetime:
     """
     Parse date and time from request parameters.
-    
+
     Args:
         date_str: Date in YYYY-MM-DD format (optional)
         time_str: Time in HH:MM format (optional)
-        
+
     Returns:
         Datetime object (defaults to current time if not provided)
     """
     now = datetime.now()
-    
+
     if date_str:
         try:
             year, month, day = map(int, date_str.split('-'))
             now = now.replace(year=year, month=month, day=day)
         except (ValueError, AttributeError):
             pass  # Use current date
-    
+
     if time_str:
         try:
             hour, minute = map(int, time_str.split(':'))
             now = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         except (ValueError, AttributeError):
             pass  # Use current time
-    
+
     return now
 
 
 def sun_position_to_dict(pos: SunPosition) -> Dict[str, Any]:
     """
     Convert SunPosition object to JSON-serializable dictionary.
-    
+
     Args:
         pos: SunPosition object
-        
+
     Returns:
         Dictionary with sun position data
     """
@@ -112,7 +107,7 @@ def sun_position_to_dict(pos: SunPosition) -> Dict[str, Any]:
 def load_buildings() -> List[Building]:
     """
     Load building data from configuration.
-    
+
     Returns:
         List of Building objects
     """
@@ -136,7 +131,7 @@ def load_buildings() -> List[Building]:
 def index():
     """
     Serve the main HTML page.
-    
+
     Redirects to the shadow simulation viewer.
     """
     return send_from_directory('.', 'dubai_shadow_simulation.html')
@@ -146,7 +141,7 @@ def index():
 def health_check():
     """
     Health check endpoint.
-    
+
     Returns:
         JSON with server status and version
     """
@@ -167,11 +162,11 @@ def health_check():
 def get_sun_position():
     """
     Get current or specified sun position.
-    
+
     Query Parameters:
         date: Date in YYYY-MM-DD format (optional)
         time: Time in HH:MM format (optional)
-        
+
     Returns:
         JSON with sun position data including azimuth, altitude,
         sunrise, sunset, and solar noon times
@@ -180,10 +175,10 @@ def get_sun_position():
     date_str = request.args.get('date')
     time_str = request.args.get('time')
     dt = parse_datetime_param(date_str, time_str)
-    
+
     # Calculate sun position
     position = solar_calculator.get_sun_position(dt)
-    
+
     return jsonify({
         "success": True,
         "timestamp": dt.isoformat(),
@@ -196,11 +191,11 @@ def get_sun_position():
 def get_shadows():
     """
     Get shadow data for all buildings at current or specified time.
-    
+
     Query Parameters:
         date: Date in YYYY-MM-DD format (optional)
         time: Time in HH:MM format (optional)
-        
+
     Returns:
         JSON with GeoJSON shadow polygons and sun position data
     """
@@ -208,14 +203,14 @@ def get_shadows():
     date_str = request.args.get('date')
     time_str = request.args.get('time')
     dt = parse_datetime_param(date_str, time_str)
-    
+
     # Load buildings and calculate shadows
     buildings = load_buildings()
     analysis = shadow_calculator.calculate_shadows_for_buildings(buildings, dt)
-    
+
     # Convert to response format
     shadows_geojson = shadow_calculator.shadows_to_geojson(analysis.shadows)
-    
+
     return jsonify({
         "success": True,
         "timestamp": dt.isoformat(),
@@ -233,29 +228,29 @@ def get_shadows():
 def get_animation_frames():
     """
     Get shadow animation frames for an entire day.
-    
+
     Query Parameters:
         date: Date in YYYY-MM-DD format (optional, defaults to today)
         start_hour: Starting hour 0-23 (optional, default 6)
         end_hour: Ending hour 0-23 (optional, default 20)
         interval: Minutes between frames (optional, default 30)
-        
+
     Returns:
         JSON with array of shadow frames for animation
     """
     # Parse request parameters
     date_str = request.args.get('date')
     dt = parse_datetime_param(date_str, None)
-    
+
     start_hour = int(request.args.get('start_hour', SHADOW.DEFAULT_ANIMATION_START_HOUR))
     end_hour = int(request.args.get('end_hour', SHADOW.DEFAULT_ANIMATION_END_HOUR))
     interval = int(request.args.get('interval', SHADOW.DEFAULT_ANIMATION_INTERVAL_MINUTES))
-    
+
     # Validate parameters
     start_hour = max(0, min(23, start_hour))
     end_hour = max(start_hour + 1, min(24, end_hour))
     interval = max(5, min(120, interval))
-    
+
     # Load buildings and calculate animation frames
     buildings = load_buildings()
     frames = shadow_calculator.calculate_shadow_animation_frames(
@@ -265,7 +260,7 @@ def get_animation_frames():
         end_hour=end_hour,
         interval_minutes=interval
     )
-    
+
     # Convert frames to response format
     animation_data = []
     for frame in frames:
@@ -276,7 +271,7 @@ def get_animation_frames():
             "shadows": shadow_calculator.shadows_to_geojson(frame.shadows),
             "light_preset": _get_light_preset(frame.sun_position)
         })
-    
+
     return jsonify({
         "success": True,
         "date": dt.strftime("%Y-%m-%d"),
@@ -290,11 +285,11 @@ def get_animation_frames():
 def get_sun_path():
     """
     Get sun path data for visualization (arc across the sky).
-    
+
     Query Parameters:
         date: Date in YYYY-MM-DD format (optional)
         interval: Minutes between points (optional, default 15)
-        
+
     Returns:
         JSON with sun positions throughout the day for path visualization
     """
@@ -302,10 +297,10 @@ def get_sun_path():
     date_str = request.args.get('date')
     dt = parse_datetime_param(date_str, None)
     interval = int(request.args.get('interval', 15))
-    
+
     # Calculate sun positions for daylight hours
     positions = solar_calculator.get_positions_for_day(dt, interval_minutes=interval)
-    
+
     # Filter to daylight hours and format
     sun_path = []
     for time_key, pos in sorted(positions.items()):
@@ -315,10 +310,10 @@ def get_sun_path():
                 "azimuth": round(pos.azimuth, 2),
                 "altitude": round(pos.altitude, 2)
             })
-    
+
     # Get sunrise/sunset for reference
     first_pos = list(positions.values())[0] if positions else None
-    
+
     return jsonify({
         "success": True,
         "date": dt.strftime("%Y-%m-%d"),
@@ -333,7 +328,7 @@ def get_sun_path():
 def get_buildings():
     """
     Get list of available buildings with their data.
-    
+
     Returns:
         JSON with building list including heights and footprints
     """
@@ -346,7 +341,7 @@ def get_buildings():
             "footprint": bldg["footprint"],
             "centroid": _calculate_centroid(bldg["footprint"])
         })
-    
+
     return jsonify({
         "success": True,
         "count": len(buildings),
@@ -358,7 +353,7 @@ def get_buildings():
 def get_locations():
     """
     Get list of available landmark locations for map navigation.
-    
+
     Returns:
         JSON with landmark locations and camera configurations
     """
@@ -373,7 +368,7 @@ def get_locations():
             "pitch": loc["pitch"],
             "bearing": loc["bearing"]
         })
-    
+
     return jsonify({
         "success": True,
         "count": len(locations),
@@ -385,13 +380,13 @@ def get_locations():
 def get_shadow_at_point():
     """
     Check if a specific point is in shadow at a given time.
-    
+
     Query Parameters:
         lat: Latitude of the point
         lon: Longitude of the point
         date: Date in YYYY-MM-DD format (optional)
         time: Time in HH:MM format (optional)
-        
+
     Returns:
         JSON with shadow status for the specified point
     """
@@ -404,15 +399,15 @@ def get_shadow_at_point():
             "success": False,
             "error": "lat and lon parameters are required and must be numbers"
         }), 400
-    
+
     # Parse time parameters
     date_str = request.args.get('date')
     time_str = request.args.get('time')
     dt = parse_datetime_param(date_str, time_str)
-    
+
     # Get sun position
     position = solar_calculator.get_sun_position(dt)
-    
+
     # Note: Full point-in-shadow calculation would require ray casting
     # This is a simplified response indicating sun conditions
     return jsonify({
@@ -431,18 +426,18 @@ def get_shadow_at_point():
 def _get_light_preset(sun_position: SunPosition) -> str:
     """
     Determine appropriate Mapbox light preset based on sun position.
-    
+
     Args:
         sun_position: Current sun position
-        
+
     Returns:
         Light preset name: 'day', 'dawn', 'dusk', or 'night'
     """
     if not sun_position.is_daylight:
         return "night"
-    
+
     altitude = sun_position.altitude
-    
+
     if altitude < 6:
         # Very low sun - dawn or dusk
         # Determine based on azimuth (morning: E, evening: W)
@@ -463,20 +458,20 @@ def _get_light_preset(sun_position: SunPosition) -> str:
 def _calculate_centroid(footprint: List[List[float]]) -> Dict[str, float]:
     """
     Calculate centroid of a building footprint.
-    
+
     Args:
         footprint: List of [lon, lat] coordinates
-        
+
     Returns:
         Dictionary with lon and lat of centroid
     """
     if not footprint:
         return {"lon": 0, "lat": 0}
-    
+
     sum_lon = sum(pt[0] for pt in footprint)
     sum_lat = sum(pt[1] for pt in footprint)
     n = len(footprint)
-    
+
     return {
         "lon": round(sum_lon / n, 6),
         "lat": round(sum_lat / n, 6)
@@ -537,7 +532,7 @@ if __name__ == "__main__":
     print("  GET /api/buildings    - Building list")
     print("  GET /api/locations    - Landmark locations")
     print("=" * 60)
-    
+
     app.run(
         host=API.HOST,
         port=API.PORT,

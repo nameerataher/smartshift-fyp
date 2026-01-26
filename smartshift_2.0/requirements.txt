@@ -1,20 +1,17 @@
-# SmartShift 2.0 - Sun-Shadow Simulation Dependencies
-# ====================================================
 # Install with: pip install -r requirements.txt
 
 # Web Framework
 flask>=3.0.0                    # Core web framework for API server
 flask-cors>=4.0.0               # Cross-Origin Resource Sharing support
 
-# Note: The following packages are from Python standard library
-# and do not need to be installed:
+# Packages used from Python standard library (no need to install)
 #   - math (trigonometric calculations)
 #   - datetime (date/time handling)
 #   - dataclasses (data structures)
 #   - typing (type hints)
 #   - json (JSON serialization)
 
-# Optional - for enhanced functionality:
+# For enhanced functionality:
 # numpy>=1.24.0                 # Faster numerical calculations (optional)
 # pytz>=2024.1                  # Timezone handling (optional)
 

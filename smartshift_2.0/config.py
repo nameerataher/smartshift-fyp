@@ -1,42 +1,28 @@
-"""
-Configuration Settings for Dubai Sun-Shadow Simulation
-=======================================================
-
-This module contains all configuration constants and settings for the
-SmartShift sun-shadow simulation system. Centralizing these values
-makes it easy to adjust parameters and adapt the system for different
-locations or requirements.
-
-Author: SmartShift Team
-"""
-
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 
 
-# =============================================================================
-# GEOGRAPHIC CONFIGURATION
-# =============================================================================
+# geographic configuration
 
 @dataclass(frozen=True)
 class DubaiConfig:
     """
     Geographic and timezone configuration for Dubai.
-    
+
     These values are used throughout the application for solar
     calculations and coordinate transformations.
     """
     # Dubai's geographic center (Downtown Dubai area)
     LATITUDE: float = 25.2048
     LONGITUDE: float = 55.2708
-    
+
     # UAE Standard Time (UTC+4, no daylight saving)
     TIMEZONE_OFFSET: float = 4.0
     TIMEZONE_NAME: str = "Asia/Dubai"
-    
+
     # Elevation above sea level (affects atmospheric calculations)
     ELEVATION_METERS: float = 5.0
-    
+
     # City bounding box (approximate)
     BOUNDS_NORTH: float = 25.35
     BOUNDS_SOUTH: float = 24.85
@@ -48,11 +34,8 @@ class DubaiConfig:
 DUBAI = DubaiConfig()
 
 
-# =============================================================================
-# MAP LOCATIONS - LANDMARKS AND POINTS OF INTEREST
-# =============================================================================
+# map locations - landmarks and points of interest
 
-# Mapbox camera configurations for Dubai landmarks
 # Each entry contains: center (lon, lat), zoom, pitch, bearing
 LANDMARK_LOCATIONS: Dict[str, Dict] = {
     "burj_khalifa": {
@@ -122,36 +105,30 @@ LANDMARK_LOCATIONS: Dict[str, Dict] = {
 }
 
 
-# =============================================================================
-# SHADOW CALCULATION SETTINGS
-# =============================================================================
+# shadow calculation settings
 
 @dataclass(frozen=True)
 class ShadowSettings:
-    """
-    Configuration for shadow calculations.
-    
-    These parameters control how shadows are computed and rendered.
-    """
+
     # Minimum sun altitude to calculate shadows (degrees)
     # Below this, shadows become too long and impractical
     MIN_SUN_ALTITUDE: float = 1.0
-    
+
     # Maximum shadow length as multiple of building height
     # Prevents extremely long shadows at sunrise/sunset
     MAX_SHADOW_LENGTH_FACTOR: float = 10.0
-    
+
     # Minimum shadow length to render (meters)
     # Shadows shorter than this are not drawn
     MIN_SHADOW_LENGTH: float = 0.5
-    
+
     # Default shadow opacity range
     MIN_OPACITY: float = 0.1
     MAX_OPACITY: float = 0.7
-    
+
     # Shadow color (RGBA for map rendering)
     SHADOW_COLOR: str = "rgba(0, 0, 0, 0.4)"
-    
+
     # Animation settings
     DEFAULT_ANIMATION_START_HOUR: int = 6
     DEFAULT_ANIMATION_END_HOUR: int = 20
@@ -162,29 +139,25 @@ class ShadowSettings:
 SHADOW = ShadowSettings()
 
 
-# =============================================================================
-# API SERVER CONFIGURATION
-# =============================================================================
+# api server configuration
 
 @dataclass(frozen=True)
 class APIConfig:
-    """
-    Configuration for the API server.
-    """
+
     # Server settings
     HOST: str = "0.0.0.0"
     PORT: int = 8002
     DEBUG: bool = True
-    
+
     # CORS settings
     CORS_ORIGINS: List[str] = ("*",)
-    
+
     # Rate limiting (requests per minute)
     RATE_LIMIT: int = 100
-    
+
     # Cache settings (seconds)
     CACHE_TIMEOUT: int = 300  # 5 minutes
-    
+
     # API version
     VERSION: str = "1.0.0"
 
@@ -192,9 +165,7 @@ class APIConfig:
 API = APIConfig()
 
 
-# =============================================================================
-# SAMPLE BUILDING DATA
-# =============================================================================
+# sample building data
 
 # Sample building data for Dubai landmarks
 # In production, this would come from OpenStreetMap or a building database
@@ -290,9 +261,7 @@ SAMPLE_BUILDINGS: List[Dict] = [
 ]
 
 
-# =============================================================================
-# UI THEME CONFIGURATION
-# =============================================================================
+# ui theme configuration
 
 @dataclass(frozen=True)
 class UITheme:
@@ -303,18 +272,18 @@ class UITheme:
     PRIMARY_BG: str = "rgba(15, 23, 42, 0.88)"
     SECONDARY_BG: str = "#1e293b"
     BORDER_COLOR: str = "#1f2937"
-    
+
     # Text colors
     TEXT_PRIMARY: str = "#e2e8f0"
     TEXT_SECONDARY: str = "#94a3b8"
     TEXT_MUTED: str = "#64748b"
-    
+
     # Accent colors
     ACCENT_BLUE: str = "#3b82f6"
     ACCENT_GREEN: str = "#22c55e"
     ACCENT_ORANGE: str = "#f59e0b"
     ACCENT_RED: str = "#ef4444"
-    
+
     # Map overlay colors
     SHADOW_COLOR: str = "rgba(0, 0, 0, 0.4)"
     SUNLIGHT_COLOR: str = "rgba(255, 200, 100, 0.1)"
@@ -323,15 +292,13 @@ class UITheme:
 THEME = UITheme()
 
 
-# =============================================================================
-# HEAT SAFETY THRESHOLDS (for future integration)
-# =============================================================================
+# heat safety thresholds (for future integration)
 
 @dataclass(frozen=True)
 class HeatSafetyConfig:
     """
     Configuration for heat safety calculations.
-    
+
     These thresholds are used to determine safe working conditions
     based on temperature, humidity, and sun exposure.
     """
@@ -339,12 +306,12 @@ class HeatSafetyConfig:
     TEMP_CAUTION: float = 32.0
     TEMP_WARNING: float = 38.0
     TEMP_DANGER: float = 42.0
-    
+
     # Heat index thresholds
     HEAT_INDEX_CAUTION: float = 35.0
     HEAT_INDEX_WARNING: float = 40.0
     HEAT_INDEX_DANGER: float = 48.0
-    
+
     # Maximum recommended sun exposure (minutes)
     MAX_SUN_EXPOSURE_CAUTION: int = 60
     MAX_SUN_EXPOSURE_WARNING: int = 30
@@ -354,20 +321,18 @@ class HeatSafetyConfig:
 HEAT_SAFETY = HeatSafetyConfig()
 
 
-# =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
+# utility functions
 
 def get_location_config(location_key: str) -> Dict:
     """
     Get configuration for a specific landmark location.
-    
+
     Args:
         location_key: Key from LANDMARK_LOCATIONS
-        
+
     Returns:
         Location configuration dictionary
-        
+
     Raises:
         KeyError: If location_key is not found
     """
@@ -380,7 +345,7 @@ def get_location_config(location_key: str) -> Dict:
 def get_all_location_keys() -> List[str]:
     """
     Get all available location keys.
-    
+
     Returns:
         List of location key strings
     """
