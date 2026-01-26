@@ -632,6 +632,65 @@
       color: #94a3b8;
       font-size: 14px;
     }
+
+    /* =========================================================================
+       UV INDEX BUTTON (Bottom Right)
+       ========================================================================= */
+    #uv-index-button {
+      position: fixed;
+      bottom: 80px;
+      right: 16px;
+      z-index: 1000;
+      min-width: 120px;
+      padding: 12px 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 27, 75, 0.9) 100%);
+      backdrop-filter: blur(12px);
+      color: #e2e8f0;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+      transition: all 0.3s;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #uv-index-button:hover {
+      background: linear-gradient(145deg, rgba(30, 27, 75, 0.95) 0%, rgba(15, 23, 42, 0.9) 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .uv-button-value {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .uv-button-label {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .uv-button-title {
+      font-size: 10px;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+
+    .uv-button-desc {
+      font-size: 9px;
+      color: #64748b;
+    }
+
+    .uv-low { color: #22c55e; }
+    .uv-moderate { color: #fbbf24; }
+    .uv-high { color: #f59e0b; }
+    .uv-very-high { color: #ef4444; }
+    .uv-extreme { color: #dc2626; }
+
   </style>
 </head>
 <body>
@@ -659,6 +718,15 @@
 
   <!-- map container -->
   <div id="map"></div>
+
+  <!-- UV Index Button (Static) -->
+  <div id="uv-index-button">
+    <div class="uv-button-value" id="uv-button-value">--</div>
+    <div class="uv-button-label">
+      <div class="uv-button-title">UV Index</div>
+      <div class="uv-button-desc" id="uv-button-desc">--</div>
+    </div>
+  </div>
 
   <!-- main hud panel -->
   <div id="hud" style="display: none;">
@@ -798,6 +866,10 @@
     // configuration
 
     const TOKEN_KEY = 'smartshift:mapboxToken';
+    const WEATHER_API_KEY = 'smartshift:openweatherApiKey';
+
+    // Default Mapbox token (public token provided)
+    const DEFAULT_MAPBOX_TOKEN = 'pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog';
 
     // dubai location configurations
     const locations = {
@@ -838,13 +910,27 @@
 
     // return visits, load token from local storage
     function loadToken() {
-      try { return localStorage.getItem(TOKEN_KEY) || ''; } catch(e) { return ''; }
+      try {
+        const saved = localStorage.getItem(TOKEN_KEY);
+        return saved || DEFAULT_MAPBOX_TOKEN;
+      } catch(e) {
+        return DEFAULT_MAPBOX_TOKEN;
+      }
     }
 
     // change token, remove token from local storage and reload page
     function resetToken() {
       localStorage.removeItem(TOKEN_KEY);
       location.reload();
+    }
+
+    // Weather API key management
+    function saveWeatherApiKey(key) {
+      try { localStorage.setItem(WEATHER_API_KEY, key); } catch(e) {}
+    }
+
+    function loadWeatherApiKey() {
+      try { return localStorage.getItem(WEATHER_API_KEY) || ''; } catch(e) { return ''; }
     }
 
     // ui helpers
@@ -1632,6 +1718,9 @@
         // Update astronomical event display
         updateAstronomicalEventDisplay(date);
 
+        // Update UV index button
+        updateUVIndexButton();
+
       } catch (e) {
         console.error('Error updating shadows:', e);
         setStatus('Error updating shadows', false);
@@ -1906,6 +1995,7 @@
         document.getElementById('timeSlider').value = currentMinutes;
         updateTimeDisplay();
         updateShadows();
+        updateUVIndexButton();
       }, animationSpeed);
     }
 
@@ -1937,9 +2027,64 @@
       document.getElementById('timeSlider').value = currentMinutes;
       updateTimeDisplay();
       updateShadows();
+      updateUVIndexButton();
       setTimeout(() => {
         setStatus('Reset to noon', false);
       }, 200);
+    }
+
+    // UV Index functionality
+
+    /**
+     * Get UV index category and color
+     */
+    function getUVCategory(uvIndex) {
+      if (uvIndex <= 2) return { level: 'Low', class: 'uv-low', color: '#22c55e' };
+      if (uvIndex <= 5) return { level: 'Moderate', class: 'uv-moderate', color: '#fbbf24' };
+      if (uvIndex <= 7) return { level: 'High', class: 'uv-high', color: '#f59e0b' };
+      if (uvIndex <= 10) return { level: 'Very High', class: 'uv-very-high', color: '#ef4444' };
+      return { level: 'Extreme', class: 'uv-extreme', color: '#dc2626' };
+    }
+
+    /**
+     * Calculate approximate UV index based on time and sun position
+     */
+    function calculateUVFromTime() {
+      const dateInput = document.getElementById('dateInput');
+      const date = dateInput.value ? new Date(dateInput.value) : new Date();
+      const hour = Math.floor(currentMinutes / 60);
+      const sunPos = calculateSunPosition(date, hour, 0);
+
+      if (sunPos.altitude <= 0) return 0;
+
+      // UV index is highest when sun is at maximum altitude
+      // Maximum UV at noon in Dubai during summer can reach 11-12
+      // Approximate formula based on altitude
+      const maxUV = 11; // Maximum UV in Dubai
+      const uvFactor = Math.sin(sunPos.altitude * Math.PI / 180);
+      const uvIndex = Math.round(maxUV * uvFactor * 0.9); // 0.9 factor for approximation
+
+      return Math.max(0, Math.min(12, uvIndex));
+    }
+
+    /**
+     * Update UV index button display
+     */
+    function updateUVIndexButton() {
+      const uvIndex = calculateUVFromTime();
+      const uvCategory = getUVCategory(uvIndex);
+
+      const uvValueEl = document.getElementById('uv-button-value');
+      const uvDescEl = document.getElementById('uv-button-desc');
+
+      if (uvValueEl) {
+        uvValueEl.textContent = uvIndex;
+        uvValueEl.className = `uv-button-value ${uvCategory.class}`;
+      }
+
+      if (uvDescEl) {
+        uvDescEl.textContent = uvCategory.level;
+      }
     }
 
     // initialization
@@ -2044,6 +2189,7 @@
       timeSlider.addEventListener('input', (e) => {
         currentMinutes = parseInt(e.target.value);
         updateTimeDisplay();
+        updateUVIndexButton(); // Update UV index in real-time as slider moves
 
         // Debounce shadow updates for smooth performance
         if (sliderTimeout) clearTimeout(sliderTimeout);
@@ -2057,12 +2203,16 @@
         currentMinutes = parseInt(e.target.value);
         updateTimeDisplay();
         updateShadows();
+        updateUVIndexButton();
       });
 
       // Date input
       const dateInput = document.getElementById('dateInput');
       dateInput.value = new Date().toISOString().split('T')[0];
-      dateInput.addEventListener('change', updateShadows);
+      dateInput.addEventListener('change', () => {
+        updateShadows();
+        updateUVIndexButton();
+      });
 
       // Astronomical event navigation buttons
       document.getElementById('springEquinoxBtn').addEventListener('click', () => navigateToEvent('springEquinox'));
@@ -2100,15 +2250,25 @@
         }
       });
 
+
       // Initialize time display
       updateTimeDisplay();
 
-      // Auto-start if token saved
+      // Initialize UV index button
+      updateUVIndexButton();
+
+      // Auto-start with default token or saved token
       const saved = loadToken();
       if (saved) {
         document.getElementById('token-overlay').classList.add('hidden');
         document.getElementById('hud').style.display = 'block';
         initMap(saved);
+      } else {
+        // Auto-start with default token
+        document.getElementById('token-overlay').classList.add('hidden');
+        document.getElementById('hud').style.display = 'block';
+        saveToken(DEFAULT_MAPBOX_TOKEN);
+        initMap(DEFAULT_MAPBOX_TOKEN);
       }
     });
   </script>
