@@ -602,3 +602,4 @@ if __name__ == "__main__":
         print(f"Solar Noon:   {position.solar_noon.strftime('%H:%M')}")
     print("=" * 60)
 
+
