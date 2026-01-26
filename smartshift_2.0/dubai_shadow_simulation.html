@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Dubai 3D Sun-Shadow Simulation | SmartShift</title>
+  <title>SmartShift: Intelligent Scheduling Engine</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
@@ -560,9 +560,7 @@
   </style>
 </head>
 <body>
-  <!-- =========================================================================
-       TOKEN ENTRY OVERLAY
-       ========================================================================= -->
+  <!-- token entry overlay -->
   <div id="token-overlay">
     <div id="token-form">
       <h2>🌇 Dubai Shadow Simulation</h2>
@@ -570,7 +568,6 @@
       <p>
         Enter your Mapbox access token to visualize<br>
         real-time sun positions and building shadows.<br>
-        <a href="https://account.mapbox.com/access-tokens/" target="_blank">Get your free token →</a>
       </p>
       <input type="text" id="tokenInput" placeholder="pk.eyJ1Ijoi..." />
       <button id="startBtn">Launch Simulation</button>
@@ -580,26 +577,20 @@
     </div>
   </div>
 
-  <!-- =========================================================================
-       LOADING OVERLAY
-       ========================================================================= -->
+  <!-- loading overlay -->
   <div id="loading-overlay">
     <div class="loading-text">Calculating shadows...</div>
   </div>
 
-  <!-- =========================================================================
-       MAP CONTAINER
-       ========================================================================= -->
+  <!-- map container -->
   <div id="map"></div>
 
-  <!-- =========================================================================
-       MAIN HUD PANEL
-       ========================================================================= -->
+  <!-- main hud panel -->
   <div id="hud" style="display: none;">
     <h1>☀️ Sun-Shadow Simulation</h1>
     <div class="subtitle">Dubai, UAE</div>
 
-    <!-- Location Navigation -->
+    <!-- location navigation -->
     <div class="section">
       <div class="section-title">Landmarks</div>
       <div class="loc-grid">
@@ -635,7 +626,7 @@
       </div>
     </div>
 
-    <!-- Time Control -->
+    <!-- time control -->
     <div class="section">
       <div class="section-title">Time Control</div>
       <div class="time-control">
@@ -658,7 +649,7 @@
         </div>
       </div>
 
-      <!-- Animation Controls -->
+      <!-- animation controls -->
       <div class="anim-controls">
         <button class="anim-btn" id="playBtn">▶ Play</button>
         <button class="anim-btn" id="resetBtn">↺ Reset</button>
@@ -671,7 +662,7 @@
       </div>
     </div>
 
-    <!-- Shadow Stats -->
+    <!-- Shadow Stats
     <div class="shadow-stats">
       <div class="stat-item">
         <div class="stat-value" id="buildingCount">3D</div>
@@ -685,16 +676,16 @@
         <div class="stat-value" id="avgShadowLen">--°</div>
         <div class="stat-label">Sun Alt</div>
       </div>
-    </div>
+    </div> -->
 
-    <!-- Status -->
+    <!-- status
     <div id="status">
       <span class="status-dot"></span>
       <span>Ready</span>
-    </div>
+    </div> -->
 
     <div id="hint">
-      🌞 Using Mapbox 3D DirectionalLight with real-time shadow casting<br>
+      Using Mapbox 3D DirectionalLight with real-time shadow casting<br>
       Drag slider to change time • Watch shadows move throughout the day
     </div>
 
@@ -732,10 +723,6 @@
       timezoneOffset: 4  // UTC+4
     };
 
-    // Meters per degree at Dubai's latitude
-    const METERS_PER_DEGREE_LAT = 111320;
-    const METERS_PER_DEGREE_LON = 111320 * Math.cos(DUBAI.latitude * Math.PI / 180);
-
     // =========================================================================
     // STATE
     // =========================================================================
@@ -746,8 +733,6 @@
     let currentMinutes = 720;  // Default to noon (12:00)
     let animationSpeed = 500;  // ms per frame
     let shadowsVisible = true;
-    let buildingsCache = [];   // Cache extracted buildings
-    let lastBuildingsUpdate = 0;
     let isUpdatingShadows = false;
 
     // =========================================================================
