@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+import pandas as pd
 
 # Import our custom modules
 from solar_position import SolarPositionCalculator, SunPosition
@@ -30,6 +31,14 @@ from config import (
     LANDMARK_LOCATIONS, SAMPLE_BUILDINGS,
     get_location_config, get_all_location_keys
 )
+
+# Import Meteostat for weather data
+try:
+    from meteostat import Point, Daily, Hourly
+    METEOSTAT_AVAILABLE = True
+except ImportError:
+    METEOSTAT_AVAILABLE = False
+    print("Warning: Meteostat not available. Install with: pip install meteostat")
 
 
 # flask app initialization
@@ -419,6 +428,125 @@ def get_shadow_at_point():
     })
 
 
+@app.route('/api/weather', methods=['GET'])
+def get_weather():
+    """
+    Get current weather data using Meteostat.
+
+    Query Parameters:
+        date: Date in YYYY-MM-DD format (optional, defaults to today)
+        hour: Hour 0-23 (optional, defaults to current hour)
+
+    Returns:
+        JSON with weather data including temperature, humidity, pressure, wind, visibility
+    """
+    if not METEOSTAT_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "Meteostat library not available. Install with: pip install meteostat"
+        }), 503
+
+    try:
+        # Parse request parameters
+        date_str = request.args.get('date')
+        hour = request.args.get('hour', type=int)
+
+        if date_str:
+            try:
+                year, month, day = map(int, date_str.split('-'))
+                dt = datetime(year, month, day)
+            except (ValueError, AttributeError):
+                dt = datetime.now()
+        else:
+            dt = datetime.now()
+
+        if hour is not None:
+            dt = dt.replace(hour=hour, minute=0, second=0, microsecond=0)
+
+        # Create location point for Dubai
+        location = Point(DUBAI.LATITUDE, DUBAI.LONGITUDE)
+
+        # Get hourly weather data
+        # Meteostat requires start and end times
+        start = dt.replace(minute=0, second=0, microsecond=0)
+        end = start + timedelta(hours=1)
+
+        # Fetch hourly data
+        data = Hourly(location, start, end)
+        data = data.fetch()
+
+        if data.empty:
+            # Try daily data as fallback
+            daily_data = Daily(location, start.date(), start.date())
+            daily_data = daily_data.fetch()
+
+            if not daily_data.empty:
+                # Use daily average values
+                row = daily_data.iloc[0]
+
+                # Helper function to safely get float values
+                def safe_float(value, default=0):
+                    try:
+                        if pd.isna(value):
+                            return default
+                        return float(value)
+                    except (ValueError, TypeError):
+                        return default
+
+                return jsonify({
+                    "success": True,
+                    "timestamp": dt.isoformat(),
+                    "source": "daily",
+                    "temperature": safe_float(row['tavg'] if 'tavg' in row.index else None, None),
+                    "humidity": safe_float(row['rhum'] if 'rhum' in row.index else None, None),
+                    "pressure": safe_float(row['pres'] if 'pres' in row.index else None, 1013),
+                    "wind_speed": safe_float(row['wspd'] if 'wspd' in row.index else None, 0),
+                    "wind_direction": safe_float(row['wdir'] if 'wdir' in row.index else None, 0),
+                    "visibility": 10.0,  # Default visibility
+                    "note": "Daily average data"
+                })
+
+            return jsonify({
+                "success": False,
+                "error": "No weather data available for this date"
+            }), 404
+
+        # Extract hourly data
+        row = data.iloc[0]
+
+        # Helper function to safely get float values from pandas Series
+        def safe_float(value, default=0):
+            try:
+                if pd.isna(value):
+                    return default
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+
+        # Meteostat column names: temp, rhum, pres, wspd, wdir, etc.
+        # Access pandas Series using bracket notation or .get() method
+        weather_data = {
+            "success": True,
+            "timestamp": dt.isoformat(),
+            "source": "hourly",
+            "temperature": safe_float(row['temp'] if 'temp' in row.index else None, None),
+            "humidity": safe_float(row['rhum'] if 'rhum' in row.index else None, None),
+            "pressure": safe_float(row['pres'] if 'pres' in row.index else None, 1013),
+            "wind_speed": safe_float(row['wspd'] if 'wspd' in row.index else None, 0),
+            "wind_direction": safe_float(row['wdir'] if 'wdir' in row.index else None, 0),
+            "visibility": safe_float(row['visib'] if 'visib' in row.index else None, 10.0)
+        }
+
+        return jsonify(weather_data)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "message": "Error fetching weather data from Meteostat"
+        }), 500
+
+
 # =============================================================================
 # HELPER FUNCTIONS FOR API
 # =============================================================================
@@ -496,7 +624,8 @@ def not_found(e):
             "/api/sun-path",
             "/api/buildings",
             "/api/locations",
-            "/api/shadow-at-point"
+            "/api/shadow-at-point",
+            "/api/weather"
         ]
     }), 404
 
@@ -531,6 +660,7 @@ if __name__ == "__main__":
     print("  GET /api/sun-path     - Sun path across sky")
     print("  GET /api/buildings    - Building list")
     print("  GET /api/locations    - Landmark locations")
+    print("  GET /api/weather      - Weather data (Meteostat)")
     print("=" * 60)
 
     app.run(
@@ -538,8 +668,3 @@ if __name__ == "__main__":
         port=API.PORT,
         debug=API.DEBUG
     )
-
-
-
-
-

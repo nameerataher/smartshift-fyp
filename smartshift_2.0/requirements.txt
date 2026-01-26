@@ -4,6 +4,10 @@
 flask>=3.0.0                    # Core web framework for API server
 flask-cors>=4.0.0               # Cross-Origin Resource Sharing support
 
+# Weather Data
+meteostat>=1.6.5                # Historical and current weather data
+pandas>=2.0.0                   # Data manipulation (required by Meteostat)
+
 # Packages used from Python standard library (no need to install)
 #   - math (trigonometric calculations)
 #   - datetime (date/time handling)
@@ -19,8 +23,3 @@ flask-cors>=4.0.0               # Cross-Origin Resource Sharing support
 # pytest>=7.4.0                 # Testing framework
 # black>=24.0.0                 # Code formatting
 # mypy>=1.8.0                   # Type checking
-
-
-
-
-
