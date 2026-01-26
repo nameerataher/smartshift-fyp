@@ -685,7 +685,7 @@
     </div> -->
 
     <div id="hint">
-      Using Mapbox 3D DirectionalLight with real-time shadow casting<br>
+      <br>
       Drag slider to change time • Watch shadows move throughout the day
     </div>
 
@@ -719,6 +719,10 @@
       timezoneOffset: 4  // UTC+4
     };
 
+    // Constants for coordinate conversion (must be after DUBAI is defined)
+    const METERS_PER_DEGREE_LAT = 111320; // meters per degree latitude (constant)
+    const METERS_PER_DEGREE_LON = 111320 * Math.cos(DUBAI.latitude * Math.PI / 180); // varies by latitude
+
     // state
 
     let map = null;
@@ -728,6 +732,8 @@
     let animationSpeed = 500;  // ms per frame
     let shadowsVisible = true;
     let isUpdatingShadows = false;
+    let buildingsCache = [];
+    let lastBuildingsUpdate = 0;
 
     // token management
 
@@ -749,14 +755,11 @@
 
     // ui helpers
 
-    // function setStatus(msg, isUpdating = false) {
-    //   const el = document.querySelector('#status span:last-child');
-    //   const dot = document.querySelector('.status-dot');
-    //   if (el) el.textContent = msg;
-    //   if (dot) {
-    //     dot.classList.toggle('updating', isUpdating);
-    //   }
-    // }
+    function setStatus(msg, isUpdating = false) {
+      // Status element is commented out, so we'll just log for now
+      // This prevents JavaScript errors when setStatus is called
+      console.log('Status:', msg);
+    }
 
     // convert minutes to hours and minutes
     function formatTime(minutes) {
@@ -1271,11 +1274,11 @@
         }
       }
 
-      // Update stats
-      document.getElementById('buildingCount').textContent = buildingsCache.length;
-      document.getElementById('shadowCount').textContent = features.length;
-      const avgLen = features.length > 0 ? Math.round(totalShadowLength / features.length) : 0;
-      document.getElementById('avgShadowLen').textContent = `${avgLen}m`;
+      // Update stats (elements are commented out, so we'll skip to avoid errors)
+      // document.getElementById('buildingCount').textContent = buildingsCache.length;
+      // document.getElementById('shadowCount').textContent = features.length;
+      // const avgLen = features.length > 0 ? Math.round(totalShadowLength / features.length) : 0;
+      // document.getElementById('avgShadowLen').textContent = `${avgLen}m`;
 
       // Log for debugging
       if (features.length > 0) {
@@ -1337,8 +1340,8 @@
                 "direction": [sunPos.azimuth, polarAngle],
                 "color": getTimeOfDayColor(sunPos.altitude, sunPos.azimuth),
                 "intensity": getSunIntensity(sunPos.altitude),
-                "cast-shadows": true,
-                "shadow-intensity": getShadowIntensity(sunPos.altitude)
+                "cast-shadows": shadowsVisible,
+                "shadow-intensity": shadowsVisible ? getShadowIntensity(sunPos.altitude) : 0
               }
             },
             {
@@ -1621,22 +1624,10 @@
         const btn = document.getElementById('toggleShadows');
         btn.textContent = shadowsVisible ? 'Disable Shadows' : 'Enable Shadows';
 
+        // Re-apply shadows by calling updateShadows which will rebuild the lights
         if (map) {
-          try {
-            // Update the directional light's cast-shadows property
-            const lights = map.getLights();
-            if (lights && lights.length > 0) {
-              const directionalLight = lights.find(l => l.id === 'sun-directional');
-              if (directionalLight) {
-                directionalLight.properties['cast-shadows'] = shadowsVisible;
-                directionalLight.properties['shadow-intensity'] = shadowsVisible ? getShadowIntensity(45) : 0;
-                map.setLights(lights);
-                console.log('Shadow casting', shadowsVisible ? 'enabled' : 'disabled');
-              }
-            }
-          } catch (e) {
-            console.error('Error toggling shadows:', e);
-          }
+          updateShadows();
+          console.log('Shadow casting', shadowsVisible ? 'enabled' : 'disabled');
         }
       });
 
