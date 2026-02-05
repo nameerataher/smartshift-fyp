@@ -8,7 +8,7 @@ Key Features
 - Solar Path: Calculates solar positions using NOAA Solar Position Calculation Algorithm in Python.
 - Shadow Prediction: Predicts sun shadows dynamically throughout the day using two key parameters, i.e, Altitude & Azimuth over shadow polygons. 
 - Heat Risk Model: A Simulation-Based Supervised Classification Model using RandomForestClassifier to predict localized heat risk at a given place & time by fetching accurate data upto 7 days through Open-Meteo's official SDK.
-- TODO: Intelligent Scheduling Engine: Optimizes worker schedules and pedestrian routes to align with shaded intervals and areas.
+- TODO: Intelligent Scheduling & Routing Engine: Optimizes worker schedules and pedestrian routes to align with shaded intervals and areas.
 - TODO: Real-Time Heat Alerts: Issues automatic warnings when conditions exceed safe exposure thresholds.
 - TODO: Dashboard Visualization: Interactive UI for monitoring shadows and worker routes.
 
@@ -22,11 +22,12 @@ System Architecture (Tentative)
 Heat risk scoring algorithm
 
 - TODO: Optimization Layer:
-Worker scheduling engine using dynamic optimization (e.g., linear programming, heuristic search)
+Worker scheduling engine using dynamic optimization (e.g., linear programming, heuristic search) and optimal routing for pedestrians
 Safe-zone prediction module
 
 - TODO: Output Layer:
 Shift schedule recommendations
+Optimal route recommendations
 Alert notifications for unsafe conditions
 Interactive Web Viewer
 
