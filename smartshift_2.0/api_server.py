@@ -32,13 +32,40 @@ from config import (
     get_location_config, get_all_location_keys
 )
 
-# Import Meteostat for weather data
+# import ml models for heat risk and schedule optimization
 try:
-    from meteostat import Point, Daily, Hourly
-    METEOSTAT_AVAILABLE = True
+    from heat_risk_model import (
+        HeatRiskModel, WeatherData, LocationContext, SunExposure,
+        HeatRiskPrediction
+    )
+    from schedule_optimizer import (
+        ScheduleOptimizer, Task, ShadeNavigator,
+        get_optimal_schedule, get_shaded_route
+    )
+    ML_MODELS_AVAILABLE = True
+except ImportError as e:
+    ML_MODELS_AVAILABLE = False
+    print(f"Warning: ML models not available. Install dependencies: {e}")
+
+# weather api configuration
+import requests
+import os
+
+# open-meteo official sdk with caching and retry
+try:
+    import openmeteo_requests
+    import requests_cache
+    from retry_requests import retry
+    WEATHER_API_AVAILABLE = True
+
+    # setup open-meteo client with cache and retry
+    cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+    openmeteo = openmeteo_requests.Client(session=retry_session)
 except ImportError:
-    METEOSTAT_AVAILABLE = False
-    print("Warning: Meteostat not available. Install with: pip install meteostat")
+    WEATHER_API_AVAILABLE = False
+    openmeteo = None
+    print("Warning: openmeteo-requests not available. Install with: pip install openmeteo-requests requests-cache retry-requests")
 
 
 # flask app initialization
@@ -58,6 +85,37 @@ shadow_calculator = ShadowCalculator(
     longitude=DUBAI.LONGITUDE,
     timezone_offset=DUBAI.TIMEZONE_OFFSET
 )
+
+# initialize ml models (lazy loading - trained on first use)
+heat_risk_model = None
+schedule_optimizer = None
+shade_navigator = None
+
+def get_heat_risk_model():
+    """lazy load and train heat risk model on first use."""
+    global heat_risk_model
+    if heat_risk_model is None and ML_MODELS_AVAILABLE:
+        print("initializing heat risk model...")
+        heat_risk_model = HeatRiskModel()
+        if not heat_risk_model.is_trained:
+            heat_risk_model.train(n_samples=5000, verbose=False)
+    return heat_risk_model
+
+def get_schedule_optimizer():
+    """lazy load schedule optimizer on first use."""
+    global schedule_optimizer
+    if schedule_optimizer is None and ML_MODELS_AVAILABLE:
+        print("initializing schedule optimizer...")
+        schedule_optimizer = ScheduleOptimizer(heat_risk_model=get_heat_risk_model())
+    return schedule_optimizer
+
+def get_shade_navigator():
+    """lazy load shade navigator on first use."""
+    global shade_navigator
+    if shade_navigator is None and ML_MODELS_AVAILABLE:
+        print("initializing shade navigator...")
+        shade_navigator = ShadeNavigator()
+    return shade_navigator
 
 
 # helper functions
@@ -428,123 +486,631 @@ def get_shadow_at_point():
     })
 
 
-@app.route('/api/weather', methods=['GET'])
-def get_weather():
-    """
-    Get current weather data using Meteostat.
+# global cache for 7-day hourly forecast
+weather_forecast_cache = {
+    "data": None,
+    "fetched_at": None,
+    "lat": None,
+    "lon": None
+}
 
-    Query Parameters:
-        date: Date in YYYY-MM-DD format (optional, defaults to today)
-        hour: Hour 0-23 (optional, defaults to current hour)
-
-    Returns:
-        JSON with weather data including temperature, humidity, pressure, wind, visibility
+def fetch_7day_forecast(lat, lon):
     """
-    if not METEOSTAT_AVAILABLE:
+    fetch 7-day hourly forecast from open-meteo.
+    caches the result to avoid repeated api calls.
+    """
+    global weather_forecast_cache
+
+    # check if we have cached data for this location (cache for 30 minutes)
+    now = datetime.now()
+    if (weather_forecast_cache["data"] is not None and
+        weather_forecast_cache["fetched_at"] is not None and
+        weather_forecast_cache["lat"] == lat and
+        weather_forecast_cache["lon"] == lon and
+        (now - weather_forecast_cache["fetched_at"]).total_seconds() < 1800):
+        return weather_forecast_cache["data"]
+
+    # open-meteo api parameters for 7-day hourly forecast
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": [
+            "temperature_2m", "relative_humidity_2m", "wind_speed_10m",
+            "wind_direction_10m", "cloud_cover", "uv_index", "is_day",
+            "wet_bulb_temperature_2m", "apparent_temperature", "precipitation"
+        ],
+        "daily": [
+            "temperature_2m_max", "temperature_2m_min", "sunrise", "sunset",
+            "uv_index_max"
+        ],
+        "timezone": "auto",
+        "forecast_days": 7
+    }
+
+    # fetch using sdk
+    responses = openmeteo.weather_api(url, params=params)
+    response = responses[0]
+
+    # extract hourly data
+    hourly = response.Hourly()
+
+    # get numpy arrays and convert to python lists
+    hourly_temp = hourly.Variables(0).ValuesAsNumpy().tolist()
+    hourly_humidity = hourly.Variables(1).ValuesAsNumpy().tolist()
+    hourly_wind_speed = hourly.Variables(2).ValuesAsNumpy().tolist()
+    hourly_wind_dir = hourly.Variables(3).ValuesAsNumpy().tolist()
+    hourly_cloud = hourly.Variables(4).ValuesAsNumpy().tolist()
+    hourly_uv = hourly.Variables(5).ValuesAsNumpy().tolist()
+    hourly_is_day = hourly.Variables(6).ValuesAsNumpy().tolist()
+    hourly_wet_bulb = hourly.Variables(7).ValuesAsNumpy().tolist()
+    hourly_feels_like = hourly.Variables(8).ValuesAsNumpy().tolist()
+    hourly_precip = hourly.Variables(9).ValuesAsNumpy().tolist()
+
+    # build hourly data with timestamps
+    utc_offset = response.UtcOffsetSeconds()
+    start_time = hourly.Time() + utc_offset
+    interval = hourly.Interval()
+
+    hourly_data = []
+    for i in range(len(hourly_temp)):
+        timestamp = start_time + (i * interval)
+        dt = datetime.utcfromtimestamp(timestamp)
+        hourly_data.append({
+            "datetime": dt.isoformat(),
+            "date": dt.strftime("%Y-%m-%d"),
+            "hour": dt.hour,
+            "day_offset": (dt.date() - datetime.utcnow().date()).days,
+            "temperature": round(hourly_temp[i], 1) if hourly_temp[i] == hourly_temp[i] else 25.0,
+            "humidity": round(hourly_humidity[i], 1) if hourly_humidity[i] == hourly_humidity[i] else 50.0,
+            "wind_speed": round(hourly_wind_speed[i], 1) if hourly_wind_speed[i] == hourly_wind_speed[i] else 10.0,
+            "wind_direction": round(hourly_wind_dir[i], 0) if hourly_wind_dir[i] == hourly_wind_dir[i] else 180,
+            "cloud_cover": round(hourly_cloud[i], 0) if hourly_cloud[i] == hourly_cloud[i] else 20,
+            "uv_index": round(hourly_uv[i], 1) if hourly_uv[i] == hourly_uv[i] else 0,
+            "is_day": bool(hourly_is_day[i]) if hourly_is_day[i] == hourly_is_day[i] else True,
+            "wet_bulb_temperature": round(hourly_wet_bulb[i], 1) if hourly_wet_bulb[i] == hourly_wet_bulb[i] else 20.0,
+            "apparent_temperature": round(hourly_feels_like[i], 1) if hourly_feels_like[i] == hourly_feels_like[i] else 25.0,
+            "precipitation": round(hourly_precip[i], 2) if hourly_precip[i] == hourly_precip[i] else 0.0
+        })
+
+    # extract daily data
+    daily = response.Daily()
+    daily_max = daily.Variables(0).ValuesAsNumpy().tolist()
+    daily_min = daily.Variables(1).ValuesAsNumpy().tolist()
+    daily_sunrise = daily.Variables(2).ValuesInt64AsNumpy().tolist()
+    daily_sunset = daily.Variables(3).ValuesInt64AsNumpy().tolist()
+    daily_uv_max = daily.Variables(4).ValuesAsNumpy().tolist()
+
+    daily_start = daily.Time() + utc_offset
+    daily_interval = daily.Interval()
+
+    daily_data = []
+    for i in range(len(daily_max)):
+        timestamp = daily_start + (i * daily_interval)
+        dt = datetime.utcfromtimestamp(timestamp)
+        daily_data.append({
+            "date": dt.strftime("%Y-%m-%d"),
+            "day_offset": i,
+            "temp_max": round(daily_max[i], 1) if daily_max[i] == daily_max[i] else 35.0,
+            "temp_min": round(daily_min[i], 1) if daily_min[i] == daily_min[i] else 20.0,
+            "sunrise": datetime.utcfromtimestamp(daily_sunrise[i] + utc_offset).strftime("%H:%M") if daily_sunrise[i] else "06:00",
+            "sunset": datetime.utcfromtimestamp(daily_sunset[i] + utc_offset).strftime("%H:%M") if daily_sunset[i] else "18:00",
+            "uv_index_max": round(daily_uv_max[i], 1) if daily_uv_max[i] == daily_uv_max[i] else 10.0
+        })
+
+    forecast_data = {
+        "location": {
+            "latitude": float(response.Latitude()),
+            "longitude": float(response.Longitude()),
+            "elevation": float(response.Elevation()),
+            "timezone": response.Timezone().decode() if isinstance(response.Timezone(), bytes) else str(response.Timezone())
+        },
+        "hourly": hourly_data,
+        "daily": daily_data
+    }
+
+    # cache the result
+    weather_forecast_cache["data"] = forecast_data
+    weather_forecast_cache["fetched_at"] = now
+    weather_forecast_cache["lat"] = lat
+    weather_forecast_cache["lon"] = lon
+
+    return forecast_data
+
+
+@app.route('/api/weather/forecast', methods=['GET'])
+def get_weather_forecast():
+    """
+    get 7-day hourly weather forecast from open-meteo.
+
+    this endpoint returns comprehensive hourly data for the next 7 days,
+    which the frontend caches and uses to update weather as the time slider moves.
+
+    query parameters:
+        lat: latitude (optional, defaults to dubai)
+        lon: longitude (optional, defaults to dubai)
+
+    returns:
+        json with hourly and daily forecast data for 7 days
+    """
+    if not WEATHER_API_AVAILABLE:
         return jsonify({
             "success": False,
-            "error": "Meteostat library not available. Install with: pip install meteostat"
+            "error": "open-meteo sdk not available"
         }), 503
 
     try:
-        # Parse request parameters
+        lat = float(request.args.get('lat', DUBAI.LATITUDE))
+        lon = float(request.args.get('lon', DUBAI.LONGITUDE))
+
+        forecast = fetch_7day_forecast(lat, lon)
+
+        return jsonify({
+            "success": True,
+            "source": "open-meteo",
+            **forecast
+        })
+
+    except Exception as e:
+        print(f"forecast api error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/api/weather', methods=['GET'])
+def get_weather():
+    """
+    get weather data for a specific date and hour using 7-day forecast.
+
+    uses cached 7-day forecast data to return weather for any hour
+    within the next 7 days.
+
+    query parameters:
+        date: date in yyyy-mm-dd format (optional, defaults to today)
+        hour: hour 0-23 (optional, defaults to current hour)
+        lat: latitude (optional, defaults to dubai)
+        lon: longitude (optional, defaults to dubai)
+
+    returns:
+        json with weather data for the specified time
+    """
+    if not WEATHER_API_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "open-meteo sdk not available"
+        }), 503
+
+    try:
+        # parse request parameters
+        lat = float(request.args.get('lat', DUBAI.LATITUDE))
+        lon = float(request.args.get('lon', DUBAI.LONGITUDE))
         date_str = request.args.get('date')
         hour = request.args.get('hour', type=int)
 
+        # determine target datetime
+        now = datetime.now()
         if date_str:
             try:
                 year, month, day = map(int, date_str.split('-'))
-                dt = datetime(year, month, day)
+                target_date = datetime(year, month, day).date()
             except (ValueError, AttributeError):
-                dt = datetime.now()
+                target_date = now.date()
         else:
-            dt = datetime.now()
+            target_date = now.date()
 
-        if hour is not None:
-            dt = dt.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if hour is None:
+            hour = now.hour
 
-        # Create location point for Dubai
-        location = Point(DUBAI.LATITUDE, DUBAI.LONGITUDE)
+        # fetch 7-day forecast
+        forecast = fetch_7day_forecast(lat, lon)
 
-        # Get hourly weather data
-        # Meteostat requires start and end times
-        start = dt.replace(minute=0, second=0, microsecond=0)
-        end = start + timedelta(hours=1)
+        # find matching hour in forecast
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        weather_at_time = None
 
-        # Fetch hourly data
-        data = Hourly(location, start, end)
-        data = data.fetch()
+        for hourly in forecast["hourly"]:
+            if hourly["date"] == target_date_str and hourly["hour"] == hour:
+                weather_at_time = hourly
+                break
 
-        if data.empty:
-            # Try daily data as fallback
-            daily_data = Daily(location, start.date(), start.date())
-            daily_data = daily_data.fetch()
-
-            if not daily_data.empty:
-                # Use daily average values
-                row = daily_data.iloc[0]
-
-                # Helper function to safely get float values
-                def safe_float(value, default=0):
-                    try:
-                        if pd.isna(value):
-                            return default
-                        return float(value)
-                    except (ValueError, TypeError):
-                        return default
-
-                return jsonify({
-                    "success": True,
-                    "timestamp": dt.isoformat(),
-                    "source": "daily",
-                    "temperature": safe_float(row['tavg'] if 'tavg' in row.index else None, None),
-                    "humidity": safe_float(row['rhum'] if 'rhum' in row.index else None, None),
-                    "pressure": safe_float(row['pres'] if 'pres' in row.index else None, 1013),
-                    "wind_speed": safe_float(row['wspd'] if 'wspd' in row.index else None, 0),
-                    "wind_direction": safe_float(row['wdir'] if 'wdir' in row.index else None, 0),
-                    "visibility": 10.0,  # Default visibility
-                    "note": "Daily average data"
-                })
-
+        if weather_at_time:
             return jsonify({
-                "success": False,
-                "error": "No weather data available for this date"
-            }), 404
+                "success": True,
+                "timestamp": weather_at_time["datetime"],
+                "source": "open-meteo",
+                "temperature": weather_at_time["temperature"],
+                "humidity": weather_at_time["humidity"],
+                "pressure": 1013.0,  # open-meteo doesn't include in hourly
+                "wind_speed": weather_at_time["wind_speed"],
+                "wind_direction": weather_at_time["wind_direction"],
+                "cloud_cover": weather_at_time["cloud_cover"],
+                "apparent_temperature": weather_at_time["apparent_temperature"],
+                "precipitation": weather_at_time["precipitation"],
+                "uv_index": weather_at_time["uv_index"],
+                "is_day": weather_at_time["is_day"],
+                "wet_bulb_temperature": weather_at_time["wet_bulb_temperature"]
+            })
+        else:
+            # date/hour not in forecast range - return closest match
+            return jsonify({
+                "success": True,
+                "timestamp": f"{target_date_str}T{hour:02d}:00:00",
+                "source": "open-meteo",
+                "temperature": forecast["hourly"][0]["temperature"] if forecast["hourly"] else 25.0,
+                "humidity": forecast["hourly"][0]["humidity"] if forecast["hourly"] else 50.0,
+                "note": "requested time outside 7-day forecast range, using current"
+            })
 
-        # Extract hourly data
-        row = data.iloc[0]
+    except Exception as e:
+        print(f"weather api error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
-        # Helper function to safely get float values from pandas Series
-        def safe_float(value, default=0):
-            try:
-                if pd.isna(value):
-                    return default
-                return float(value)
-            except (ValueError, TypeError):
-                return default
 
-        # Meteostat column names: temp, rhum, pres, wspd, wdir, etc.
-        # Access pandas Series using bracket notation or .get() method
-        weather_data = {
+# =============================================================================
+# ML-POWERED ENDPOINTS (HEAT RISK & SCHEDULE OPTIMIZATION)
+# =============================================================================
+
+@app.route('/api/heat-risk', methods=['GET', 'POST'])
+def get_heat_risk():
+    """
+    predict heat risk for a specific location and time.
+
+    this endpoint uses the trained ml model to assess whether it's
+    safe to be outside at a given location and time.
+
+    query parameters (get) or json body (post):
+        lat: latitude
+        lon: longitude
+        date: date in yyyy-mm-dd format (optional, defaults to today)
+        time: time in hh:mm format (optional, defaults to now)
+        temperature: temperature in celsius (optional, fetches from weather api)
+        humidity: humidity percentage (optional)
+        wind_speed: wind speed in km/h (optional)
+        surface_type: 'asphalt', 'concrete', 'grass', etc. (optional)
+        in_shadow: whether currently in shadow (optional, boolean)
+
+    returns:
+        json with heat risk prediction and safety recommendations
+    """
+    if not ML_MODELS_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "ml models not available. install scikit-learn and numpy."
+        }), 503
+
+    try:
+        # parse parameters from get or post
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            data = request.args.to_dict()
+
+        # required: location
+        lat = float(data.get('lat', DUBAI.LATITUDE))
+        lon = float(data.get('lon', DUBAI.LONGITUDE))
+
+        # parse datetime
+        date_str = data.get('date')
+        time_str = data.get('time')
+        dt = parse_datetime_param(date_str, time_str)
+
+        # weather parameters (use defaults if not provided)
+        temperature = float(data.get('temperature', 35.0))
+        humidity = float(data.get('humidity', 45.0))
+        wind_speed = float(data.get('wind_speed', 10.0))
+        surface_type = data.get('surface_type', 'mixed')
+        in_shadow = str(data.get('in_shadow', 'false')).lower() == 'true'
+
+        # get sun position
+        sun_pos = solar_calculator.get_sun_position(dt)
+
+        # calculate sun intensity
+        if sun_pos.altitude > 0:
+            sun_intensity = min(1.0, sun_pos.altitude / 60)
+        else:
+            sun_intensity = 0.0
+
+        # create input objects for model
+        weather = WeatherData(
+            temperature=temperature,
+            humidity=humidity,
+            wind_speed=wind_speed
+        )
+
+        location = LocationContext(
+            latitude=lat,
+            longitude=lon,
+            surface_type=surface_type,
+            urban_density=0.7
+        )
+
+        sun_exposure = SunExposure(
+            is_in_shadow=in_shadow,
+            current_sun_altitude=max(0, sun_pos.altitude),
+            current_sun_azimuth=sun_pos.azimuth,
+            minutes_in_sun_last_hour=30.0 if not in_shadow else 10.0,
+            direct_sun_intensity=0.0 if in_shadow else sun_intensity
+        )
+
+        # get prediction
+        model = get_heat_risk_model()
+        prediction = model.predict(weather, location, sun_exposure, dt)
+
+        return jsonify({
             "success": True,
             "timestamp": dt.isoformat(),
-            "source": "hourly",
-            "temperature": safe_float(row['temp'] if 'temp' in row.index else None, None),
-            "humidity": safe_float(row['rhum'] if 'rhum' in row.index else None, None),
-            "pressure": safe_float(row['pres'] if 'pres' in row.index else None, 1013),
-            "wind_speed": safe_float(row['wspd'] if 'wspd' in row.index else None, 0),
-            "wind_direction": safe_float(row['wdir'] if 'wdir' in row.index else None, 0),
-            "visibility": safe_float(row['visib'] if 'visib' in row.index else None, 10.0)
-        }
-
-        return jsonify(weather_data)
+            "location": {"lat": lat, "lon": lon},
+            "conditions": {
+                "temperature": temperature,
+                "humidity": humidity,
+                "wind_speed": wind_speed,
+                "surface_type": surface_type,
+                "in_shadow": in_shadow
+            },
+            "prediction": {
+                "risk_level": prediction.risk_level,
+                "risk_label": prediction.risk_label,
+                "confidence": round(prediction.risk_probability * 100, 1),
+                "class_probabilities": {
+                    k: round(v * 100, 1) for k, v in prediction.class_probabilities.items()
+                },
+                "wbgt_estimate": round(prediction.wbgt_estimate, 1),
+                "heat_index": round(prediction.heat_index, 1),
+                "recommended_max_exposure_minutes": prediction.recommended_max_exposure
+            },
+            "safety_message": prediction.safety_message,
+            "sun_position": {
+                "altitude": round(sun_pos.altitude, 1),
+                "azimuth": round(sun_pos.azimuth, 1),
+                "is_daylight": sun_pos.is_daylight
+            }
+        })
 
     except Exception as e:
         return jsonify({
             "success": False,
-            "error": str(e),
-            "message": "Error fetching weather data from Meteostat"
-        }), 500
+            "error": str(e)
+        }), 400
+
+
+@app.route('/api/schedule', methods=['GET', 'POST'])
+def get_optimal_task_schedule():
+    """
+    find the optimal time to schedule an outdoor task.
+
+    this endpoint uses ai planning to determine the best start time
+    for a task, minimizing heat exposure while completing the work.
+
+    query parameters (get) or json body (post):
+        task_name: name/description of the task
+        duration: duration in minutes
+        lat: latitude of task location
+        lon: longitude of task location
+        date: date in yyyy-mm-dd format
+        temperature: expected temperature (optional)
+        humidity: expected humidity (optional)
+        wind_speed: expected wind speed (optional)
+        earliest_start: earliest allowed start hour (default 6)
+        latest_end: latest allowed end hour (default 20)
+        requires_shade: whether task must be in shade (default false)
+        surface_type: ground surface type (default 'mixed')
+
+    returns:
+        json with optimal schedule recommendation and alternatives
+    """
+    if not ML_MODELS_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "ml models not available. install scikit-learn and numpy."
+        }), 503
+
+    try:
+        # parse parameters
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            data = request.args.to_dict()
+
+        # task parameters
+        task_name = data.get('task_name', 'outdoor task')
+        duration = int(data.get('duration', 60))
+        lat = float(data.get('lat', DUBAI.LATITUDE))
+        lon = float(data.get('lon', DUBAI.LONGITUDE))
+
+        # date
+        date_str = data.get('date')
+        if date_str:
+            year, month, day = map(int, date_str.split('-'))
+            date = datetime(year, month, day)
+        else:
+            date = datetime.now()
+
+        # weather (defaults for dubai)
+        temperature = float(data.get('temperature', 38.0))
+        humidity = float(data.get('humidity', 40.0))
+        wind_speed = float(data.get('wind_speed', 10.0))
+
+        # constraints
+        earliest_start = int(data.get('earliest_start', 6))
+        latest_end = int(data.get('latest_end', 20))
+        requires_shade = str(data.get('requires_shade', 'false')).lower() == 'true'
+        surface_type = data.get('surface_type', 'mixed')
+
+        # create task
+        task = Task(
+            name=task_name,
+            duration_minutes=duration,
+            location_lat=lat,
+            location_lon=lon,
+            earliest_start=earliest_start,
+            latest_end=latest_end,
+            requires_shade=requires_shade,
+            surface_type=surface_type
+        )
+
+        # create weather
+        weather = WeatherData(
+            temperature=temperature,
+            humidity=humidity,
+            wind_speed=wind_speed
+        )
+
+        # get recommendation
+        optimizer = get_schedule_optimizer()
+        recommendation = optimizer.find_best_schedule(task, date, weather)
+
+        return jsonify({
+            "success": True,
+            "task": task_name,
+            "date": date.strftime('%Y-%m-%d'),
+            "constraints": {
+                "duration_minutes": duration,
+                "earliest_start": earliest_start,
+                "latest_end": latest_end,
+                "requires_shade": requires_shade
+            },
+            "conditions": {
+                "temperature": temperature,
+                "humidity": humidity,
+                "wind_speed": wind_speed
+            },
+            "recommendation": {
+                "best_start_time": recommendation.best_slot.start_time.strftime('%H:%M'),
+                "end_time": recommendation.best_slot.end_time.strftime('%H:%M'),
+                "quality_score": round(recommendation.best_slot.quality_score, 1),
+                "heat_risk_score": round(recommendation.best_slot.heat_risk_score, 2),
+                "shade_percentage": round(recommendation.best_slot.shade_percentage, 1),
+                "is_feasible": recommendation.best_slot.is_feasible,
+                "risk_breakdown": recommendation.best_slot.risk_breakdown
+            },
+            "alternatives": [
+                {
+                    "start_time": slot.start_time.strftime('%H:%M'),
+                    "end_time": slot.end_time.strftime('%H:%M'),
+                    "quality_score": round(slot.quality_score, 1),
+                    "heat_risk_score": round(slot.heat_risk_score, 2),
+                    "shade_percentage": round(slot.shade_percentage, 1)
+                }
+                for slot in recommendation.alternative_slots
+            ],
+            "summary": recommendation.summary,
+            "analysis": recommendation.detailed_breakdown
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
+
+
+@app.route('/api/shaded-route', methods=['GET', 'POST'])
+def get_shaded_navigation_route():
+    """
+    find a shade-optimized route between two points.
+
+    this endpoint is for community users (cyclists, joggers, pedestrians)
+    who want to minimize sun exposure during their journey.
+
+    query parameters (get) or json body (post):
+        start_lat: starting point latitude
+        start_lon: starting point longitude
+        end_lat: destination latitude
+        end_lon: destination longitude
+        mode: 'walking', 'cycling', or 'driving' (default 'walking')
+        departure_time: departure time in hh:mm format (optional)
+        departure_date: departure date in yyyy-mm-dd format (optional)
+
+    returns:
+        json with shade-optimized route and segments
+    """
+    if not ML_MODELS_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "ml models not available. install scikit-learn and numpy."
+        }), 503
+
+    try:
+        # parse parameters
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            data = request.args.to_dict()
+
+        # coordinates
+        start_lat = float(data.get('start_lat', DUBAI.LATITUDE))
+        start_lon = float(data.get('start_lon', DUBAI.LONGITUDE))
+        end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
+
+        # mode
+        mode = data.get('mode', 'walking')
+        if mode not in ['walking', 'cycling', 'driving']:
+            mode = 'walking'
+
+        # departure time
+        date_str = data.get('departure_date')
+        time_str = data.get('departure_time')
+        departure_time = parse_datetime_param(date_str, time_str)
+
+        # get route
+        result = get_shaded_route(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            mode=mode,
+            departure_time=departure_time
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
+
+
+@app.route('/api/ml-status', methods=['GET'])
+def get_ml_status():
+    """
+    check status of ml models.
+
+    returns information about which ml models are loaded and trained.
+    """
+    global heat_risk_model, schedule_optimizer, shade_navigator
+
+    return jsonify({
+        "success": True,
+        "ml_available": ML_MODELS_AVAILABLE,
+        "models": {
+            "heat_risk_model": {
+                "loaded": heat_risk_model is not None,
+                "trained": heat_risk_model.is_trained if heat_risk_model else False
+            },
+            "schedule_optimizer": {
+                "loaded": schedule_optimizer is not None
+            },
+            "shade_navigator": {
+                "loaded": shade_navigator is not None
+            }
+        },
+        "endpoints": [
+            "/api/heat-risk",
+            "/api/schedule",
+            "/api/shaded-route"
+        ]
+    })
 
 
 # =============================================================================
@@ -625,7 +1191,11 @@ def not_found(e):
             "/api/buildings",
             "/api/locations",
             "/api/shadow-at-point",
-            "/api/weather"
+            "/api/weather",
+            "/api/heat-risk",
+            "/api/schedule",
+            "/api/shaded-route",
+            "/api/ml-status"
         ]
     }), 404
 
@@ -651,8 +1221,10 @@ if __name__ == "__main__":
     print(f"Location: Dubai ({DUBAI.LATITUDE}°N, {DUBAI.LONGITUDE}°E)")
     print(f"Timezone: UTC+{DUBAI.TIMEZONE_OFFSET}")
     print(f"Server:   http://{API.HOST}:{API.PORT}")
+    print(f"ML Models: {'Available' if ML_MODELS_AVAILABLE else 'Not Available'}")
+    print(f"Weather API: Open-Meteo ✓ (Free, No API Key)")
     print("-" * 60)
-    print("Endpoints:")
+    print("Shadow & Sun Endpoints:")
     print("  GET /api/health       - Server status")
     print("  GET /api/sun-position - Current sun position")
     print("  GET /api/shadows      - Current shadow data")
@@ -660,7 +1232,13 @@ if __name__ == "__main__":
     print("  GET /api/sun-path     - Sun path across sky")
     print("  GET /api/buildings    - Building list")
     print("  GET /api/locations    - Landmark locations")
-    print("  GET /api/weather      - Weather data (Meteostat)")
+    print("  GET /api/weather      - Weather data (Open-Meteo)")
+    print("-" * 60)
+    print("ML-Powered Endpoints:")
+    print("  GET/POST /api/heat-risk    - Heat risk prediction")
+    print("  GET/POST /api/schedule     - Optimal task scheduling")
+    print("  GET/POST /api/shaded-route - Shade-optimized navigation")
+    print("  GET /api/ml-status         - ML models status")
     print("=" * 60)
 
     app.run(
