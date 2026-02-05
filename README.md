@@ -7,25 +7,25 @@ Key Features
 - 3D Urban Modeling: Uses OSM to build 2D building footprints overlaid with 3D building maps via MapBox API to achieve LOD2 building model centered at Dubai City.
 - Solar Path: Calculates solar positions using NOAA Solar Position Calculation Algorithm in Python.
 - Shadow Prediction: Predicts sun shadows dynamically throughout the day using two key parameters, i.e, Altitude & Azimuth over shadow polygons. 
-- Intelligent Scheduling Engine: Optimizes worker routes and schedules to align with shaded intervals and areas.
-- Real-Time Heat Alerts: Issues automatic warnings when conditions exceed safe exposure thresholds.
-- Dashboard Visualization: Interactive UI for monitoring shadows and worker routes.
+- Heat Risk Model: A Simulation-Based Supervised Classification Model using RandomForestClassifier to predict localized heat risk at a given place & time by fetching accurate data upto 7 days through Open-Meteo's official SDK.
+- TODO: Intelligent Scheduling Engine: Optimizes worker schedules and pedestrian routes to align with shaded intervals and areas.
+- TODO: Real-Time Heat Alerts: Issues automatic warnings when conditions exceed safe exposure thresholds.
+- TODO: Dashboard Visualization: Interactive UI for monitoring shadows and worker routes.
 
 System Architecture (Tentative) 
 - Data Input Layer:
-OSM 2D -- Base Layer
-MapBox 3D Buildings -- overlay on OSM 
-Real-time temperature and humidity APIs
+(Base Layer): MapBox 3D Buildings | 
+(Real-time weather data): Open-Meteo SDK  
 
 - Processing Layer:
 3D geometry simulation for solar position-based shadow modeling
 Heat risk scoring algorithm
 
-- Optimization Layer:
+- TODO: Optimization Layer:
 Worker scheduling engine using dynamic optimization (e.g., linear programming, heuristic search)
 Safe-zone prediction module
 
-- Output Layer:
+- TODO: Output Layer:
 Shift schedule recommendations
 Alert notifications for unsafe conditions
 Interactive Web Viewer
