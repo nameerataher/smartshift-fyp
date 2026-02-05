@@ -719,12 +719,76 @@
   <!-- map container -->
   <div id="map"></div>
 
-  <!-- UV Index Button (Static) -->
-  <div id="uv-index-button">
-    <div class="uv-button-value" id="uv-button-value">--</div>
-    <div class="uv-button-label">
-      <div class="uv-button-title">UV Index</div>
-      <div class="uv-button-desc" id="uv-button-desc">--</div>
+  <!-- Heat Risk & Weather Panel (Left Side) -->
+  <div id="heat-weather-panel" style="
+    position: fixed;
+    left: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(145deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 27, 75, 0.9) 100%);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 16px;
+    padding: 16px;
+    min-width: 180px;
+    z-index: 1000;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  ">
+    <!-- Heat Risk Status -->
+    <div style="text-align: center; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+      <div style="font-size: 9px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">Current Heat Risk</div>
+      <div id="heat-risk-indicator" style="
+        font-size: 28px;
+        font-weight: 700;
+        color: #22c55e;
+        text-shadow: 0 0 20px rgba(34, 197, 94, 0.5);
+      ">LOW</div>
+      <div id="heat-safety-msg" style="font-size: 10px; color: #94a3b8; margin-top: 4px;">Safe for outdoor activity</div>
+    </div>
+
+    <!-- Weather Data (4 values from OpenMeteo) -->
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">
+      <div style="text-align: center; padding: 8px; background: rgba(251, 191, 36, 0.1); border-radius: 8px;">
+        <div style="font-size: 9px; color: #64748b;">TEMP</div>
+        <div id="panel-temp" style="font-size: 16px; font-weight: 600; color: #fbbf24;">--°C</div>
+      </div>
+      <div style="text-align: center; padding: 8px; background: rgba(56, 189, 248, 0.1); border-radius: 8px;">
+        <div style="font-size: 9px; color: #64748b;">HUMIDITY</div>
+        <div id="panel-humidity" style="font-size: 16px; font-weight: 600; color: #38bdf8;">--%</div>
+      </div>
+      <div style="text-align: center; padding: 8px; background: rgba(167, 139, 250, 0.1); border-radius: 8px;">
+        <div style="font-size: 9px; color: #64748b;">WIND</div>
+        <div id="panel-wind" style="font-size: 16px; font-weight: 600; color: #a78bfa;">-- km/h</div>
+      </div>
+      <div style="text-align: center; padding: 8px; background: rgba(244, 114, 182, 0.1); border-radius: 8px;">
+        <div style="font-size: 9px; color: #64748b;">UV INDEX</div>
+        <div id="panel-uv" style="font-size: 16px; font-weight: 600; color: #f472b6;">--</div>
+      </div>
+    </div>
+
+    <!-- WBGT (Key Heat Stress Metric) -->
+    <div style="text-align: center; padding: 10px; background: rgba(34, 211, 238, 0.1); border-radius: 8px; margin-bottom: 12px;">
+      <div style="font-size: 9px; color: #64748b;">WET BULB GLOBE TEMP (WBGT)</div>
+      <div id="panel-wbgt" style="font-size: 22px; font-weight: 700; color: #22d3ee;">--°C</div>
+      <div style="font-size: 9px; color: #64748b;">Heat stress indicator</div>
+    </div>
+
+    <!-- Check Heat Risk Button -->
+    <button id="checkHeatRiskBtn" style="
+      width: 100%;
+      padding: 10px;
+      background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    ">🌡️ Check Heat Risk</button>
+
+    <div style="font-size: 8px; color: #64748b; text-align: center; margin-top: 8px;">
+      Data: Open-Meteo (real-time)
     </div>
   </div>
 
@@ -862,62 +926,104 @@
       </div>
 
       <div id="ml-panel-content">
-        <!-- Heat Risk Display -->
+        <!-- Heat Risk Display - Shows 5 key metrics -->
         <div id="heat-risk-display" style="margin-bottom: 12px; padding: 10px; background: rgba(15, 23, 42, 0.6); border-radius: 10px; border: 1px solid rgba(71, 85, 105, 0.2);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
             <span style="font-size: 10px; color: #64748b; text-transform: uppercase;">current heat risk</span>
-            <span id="heat-risk-badge" style="padding: 2px 8px; border-radius: 4px; font-size: 9px; font-weight: 600; background: #22c55e; color: white;">--</span>
+            <span id="heat-risk-badge" style="padding: 4px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #22c55e; color: white;">--</span>
           </div>
-          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; font-size: 10px;">
-            <div style="text-align: center;">
-              <div style="color: #64748b;">WBGT</div>
-              <div id="wbgt-value" style="color: #e2e8f0; font-weight: 600;">--°C</div>
+
+          <!-- 5 Key Weather Metrics Grid -->
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; font-size: 9px; margin-bottom: 8px;">
+            <div style="text-align: center; padding: 6px; background: rgba(251, 191, 36, 0.15); border-radius: 6px;">
+              <div style="color: #94a3b8;">TEMP</div>
+              <div id="hr-temp" style="color: #fbbf24; font-weight: 600; font-size: 12px;">--°C</div>
             </div>
-            <div style="text-align: center;">
-              <div style="color: #64748b;">Heat Index</div>
-              <div id="heat-index-value" style="color: #e2e8f0; font-weight: 600;">--°C</div>
+            <div style="text-align: center; padding: 6px; background: rgba(56, 189, 248, 0.15); border-radius: 6px;">
+              <div style="color: #94a3b8;">HUMIDITY</div>
+              <div id="hr-humidity" style="color: #38bdf8; font-weight: 600; font-size: 12px;">--%</div>
+            </div>
+            <div style="text-align: center; padding: 6px; background: rgba(167, 139, 250, 0.15); border-radius: 6px;">
+              <div style="color: #94a3b8;">WIND</div>
+              <div id="hr-wind" style="color: #a78bfa; font-weight: 600; font-size: 12px;">-- km/h</div>
             </div>
           </div>
-          <div style="margin-top: 8px; font-size: 9px; color: #64748b; text-align: center;">
-            actual weather: <span id="actual-temp" style="color: #e2e8f0; font-weight: 600;">--°C</span>,
-            <span id="actual-humidity" style="color: #e2e8f0; font-weight: 600;">--%</span> humidity
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 9px;">
+            <div style="text-align: center; padding: 6px; background: rgba(244, 114, 182, 0.15); border-radius: 6px;">
+              <div style="color: #94a3b8;">UV INDEX</div>
+              <div id="hr-uv" style="color: #f472b6; font-weight: 600; font-size: 12px;">--</div>
+            </div>
+            <div style="text-align: center; padding: 6px; background: rgba(251, 146, 60, 0.15); border-radius: 6px;">
+              <div style="color: #94a3b8;">HEAT INDEX</div>
+              <div id="hr-heat-index" style="color: #fb923c; font-weight: 600; font-size: 12px;">--°C</div>
+            </div>
           </div>
-          <div id="safety-message" style="margin-top: 8px; padding: 6px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; font-size: 9px; color: #94a3b8; line-height: 1.4;">
-            click "check heat risk" to analyze current conditions
+
+          <div id="safety-message" style="margin-top: 10px; padding: 8px; background: rgba(34, 197, 94, 0.1); border-radius: 6px; font-size: 10px; color: #94a3b8; line-height: 1.4; text-align: center;">
+            Click "Check Heat Risk" to analyze current conditions
           </div>
         </div>
 
-        <!-- Task Scheduling -->
+        <!-- Task Scheduling with Location/Area Selection -->
         <div style="margin-bottom: 12px;">
           <div style="font-size: 10px; color: #64748b; text-transform: uppercase; margin-bottom: 8px;">📅 schedule outdoor task</div>
+
+          <!-- Task Name -->
           <input type="text" id="taskName" placeholder="task name (e.g., facade cleaning)"
                  style="width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px; margin-bottom: 6px;" />
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-            <input type="number" id="taskDuration" placeholder="duration (min)" value="60"
-                   style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px;" />
-            <select id="surfaceType" style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px;">
-              <option value="mixed">mixed surface</option>
-              <option value="asphalt">asphalt</option>
-              <option value="concrete">concrete</option>
-              <option value="grass">grass</option>
-              <option value="sand">sand</option>
-            </select>
+
+          <!-- Location/Area Selection -->
+          <div style="margin-bottom: 6px;">
+            <label style="font-size: 9px; color: #64748b;">📍 Task Location (click map or use current view)</label>
+            <div style="display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 4px;">
+              <input type="text" id="taskLocation" placeholder="Location name or coords" readonly
+                     style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 10px;" />
+              <button id="setTaskLocationBtn" class="loc-btn" style="padding: 8px 12px; font-size: 10px;">📍 Set</button>
+            </div>
+            <div id="taskLocationCoords" style="font-size: 8px; color: #64748b; margin-top: 2px;">Using map center</div>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <label style="font-size: 10px; color: #94a3b8; display: flex; align-items: center; gap: 4px;">
-              <input type="checkbox" id="requiresShade" style="accent-color: #6366f1;" />
-              requires shade
-            </label>
+
+          <!-- Duration Input -->
+          <div style="margin-bottom: 6px;">
+            <label style="font-size: 9px; color: #64748b;">Task Duration (minutes)</label>
+            <input type="number" id="taskDuration" placeholder="duration (min)" value="60" min="15" max="480"
+                   style="width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px;" />
           </div>
+
+          <!-- Time Bounds: Start Hour - End Hour -->
+          <div style="margin-bottom: 8px;">
+            <label style="font-size: 9px; color: #64748b;">Working Hours Window</label>
+            <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; margin-top: 4px;">
+              <select id="startHour" style="padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px;">
+                <option value="5">5:00 AM</option>
+                <option value="6" selected>6:00 AM</option>
+                <option value="7">7:00 AM</option>
+                <option value="8">8:00 AM</option>
+                <option value="9">9:00 AM</option>
+                <option value="10">10:00 AM</option>
+              </select>
+              <span style="color: #64748b; font-size: 10px;">to</span>
+              <select id="endHour" style="padding: 8px 6px; border-radius: 8px; border: 1px solid rgba(71, 85, 105, 0.4); background: rgba(15, 23, 42, 0.8); color: #e2e8f0; font-size: 11px;">
+                <option value="14">2:00 PM</option>
+                <option value="15">3:00 PM</option>
+                <option value="16">4:00 PM</option>
+                <option value="17">5:00 PM</option>
+                <option value="18" selected>6:00 PM</option>
+                <option value="19">7:00 PM</option>
+                <option value="20">8:00 PM</option>
+              </select>
+            </div>
+          </div>
+
           <button class="loc-btn" id="scheduleTaskBtn" style="width: 100%; padding: 10px; background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%); border-color: #22c55e; color: white;">
-            🕐 find optimal time
+            🕐 Find Optimal Time (Shadow + Heat Analysis)
           </button>
         </div>
 
-        <!-- Schedule Result -->
+        <!-- Schedule Result with Heat Risk & Shadow Info -->
         <div id="schedule-result" style="display: none; padding: 10px; background: rgba(34, 197, 94, 0.1); border-radius: 8px; border: 1px solid rgba(34, 197, 94, 0.3); margin-bottom: 12px;">
-          <div style="font-size: 10px; color: #22c55e; font-weight: 600; margin-bottom: 6px;">✓ recommended schedule</div>
-          <div id="schedule-details" style="font-size: 11px; color: #e2e8f0; line-height: 1.5;"></div>
+          <div style="font-size: 10px; color: #22c55e; font-weight: 600; margin-bottom: 6px;">✓ Recommended Schedule</div>
+          <div id="schedule-details" style="font-size: 11px; color: #e2e8f0; line-height: 1.6;"></div>
         </div>
 
         <!-- Shade Navigation -->
@@ -954,7 +1060,7 @@
 
         <!-- Quick Actions -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px;">
-          <button class="loc-btn" id="checkHeatRiskBtn" style="padding: 8px; font-size: 10px;">
+          <button class="loc-btn" id="checkHeatRiskBtn2" style="padding: 8px; font-size: 10px;">
             🌡️ check heat risk
           </button>
           <button class="loc-btn" id="mlStatusBtn" style="padding: 8px; font-size: 10px;">
@@ -2277,76 +2383,17 @@
 
     /**
      * update the weather ui elements with new data
+     * updates the left panel weather display with forecast data
      */
     function updateWeatherUI(weather) {
-      // update temperature display (find or create element)
-      let tempDisplay = document.getElementById('weather-temp-display');
-      let humidityDisplay = document.getElementById('weather-humidity-display');
-      let weatherPanel = document.getElementById('weather-info-panel');
-
-      // create weather info panel if it doesn't exist
-      if (!weatherPanel) {
-        const hud = document.getElementById('hud');
-        if (hud) {
-          weatherPanel = document.createElement('div');
-          weatherPanel.id = 'weather-info-panel';
-          weatherPanel.className = 'hud-section';
-          weatherPanel.innerHTML = `
-            <h3 style="margin: 0 0 8px 0; font-size: 12px; color: #94a3b8;">
-              ☁️ Live Weather (Open-Meteo)
-            </h3>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px;">
-              <div>
-                <span style="color: #64748b;">Temp:</span>
-                <span id="weather-temp-display" style="color: #fbbf24; font-weight: 600;">--°C</span>
-              </div>
-              <div>
-                <span style="color: #64748b;">Humidity:</span>
-                <span id="weather-humidity-display" style="color: #38bdf8;">--%</span>
-              </div>
-              <div>
-                <span style="color: #64748b;">Feels Like:</span>
-                <span id="weather-feels-display" style="color: #fb923c;">--°C</span>
-              </div>
-              <div>
-                <span style="color: #64748b;">Wind:</span>
-                <span id="weather-wind-display" style="color: #a78bfa;">-- km/h</span>
-              </div>
-              <div>
-                <span style="color: #64748b;">UV Index:</span>
-                <span id="weather-uv-display" style="color: #f472b6;">--</span>
-              </div>
-              <div>
-                <span style="color: #64748b;">Cloud:</span>
-                <span id="weather-cloud-display" style="color: #cbd5e1;">--%</span>
-              </div>
-              <div style="grid-column: span 2;">
-                <span style="color: #64748b;">Wet Bulb:</span>
-                <span id="weather-wetbulb-display" style="color: #22d3ee;">--°C</span>
-                <span style="color: #64748b; font-size: 10px;">(heat stress indicator)</span>
-              </div>
-            </div>
-          `;
-          // insert after the first section
-          const firstSection = hud.querySelector('.hud-section');
-          if (firstSection) {
-            firstSection.insertAdjacentElement('afterend', weatherPanel);
-          }
-        }
-      }
-
-      // update values
-      const tempEl = document.getElementById('weather-temp-display');
-      const humidityEl = document.getElementById('weather-humidity-display');
-      const feelsEl = document.getElementById('weather-feels-display');
-      const windEl = document.getElementById('weather-wind-display');
-      const uvEl = document.getElementById('weather-uv-display');
-      const cloudEl = document.getElementById('weather-cloud-display');
-      const wetbulbEl = document.getElementById('weather-wetbulb-display');
+      // update the left-side heat-weather-panel with weather data
+      const tempEl = document.getElementById('panel-temp');
+      const humidityEl = document.getElementById('panel-humidity');
+      const windEl = document.getElementById('panel-wind');
+      const uvEl = document.getElementById('panel-uv');
 
       if (tempEl) tempEl.textContent = `${weather.temperature}°C`;
       if (humidityEl) humidityEl.textContent = `${weather.humidity}%`;
-      if (feelsEl) feelsEl.textContent = `${weather.apparent_temperature}°C`;
       if (windEl) windEl.textContent = `${weather.wind_speed} km/h`;
       if (uvEl) {
         uvEl.textContent = weather.uv_index;
@@ -2356,15 +2403,6 @@
         else if (weather.uv_index >= 6) uvEl.style.color = '#eab308';
         else if (weather.uv_index >= 3) uvEl.style.color = '#84cc16';
         else uvEl.style.color = '#22c55e';
-      }
-      if (cloudEl) cloudEl.textContent = `${weather.cloud_cover}%`;
-      if (wetbulbEl) {
-        wetbulbEl.textContent = `${weather.wet_bulb_temperature}°C`;
-        // color code based on heat stress risk
-        if (weather.wet_bulb_temperature >= 32) wetbulbEl.style.color = '#dc2626';
-        else if (weather.wet_bulb_temperature >= 28) wetbulbEl.style.color = '#f97316';
-        else if (weather.wet_bulb_temperature >= 25) wetbulbEl.style.color = '#eab308';
-        else wetbulbEl.style.color = '#22d3ee';
       }
     }
 
@@ -2396,34 +2434,34 @@
 
     // check current heat risk at map center
     async function checkHeatRisk() {
+      // answers: "is it safe to be outside right now?"
+      // fetches real weather from open-meteo and predicts heat risk
       try {
+        // check if map is initialized
+        if (!map) {
+          alert('Please wait for the map to load first');
+          return;
+        }
+
         const center = map.getCenter();
         const dateInput = document.getElementById('dateInput');
         const date = dateInput.value || new Date().toISOString().split('T')[0];
         const time = formatTime(currentMinutes);
 
-        // update ui to show loading
-        document.getElementById('heat-risk-badge').textContent = '...';
-        document.getElementById('safety-message').textContent = 'fetching real-time weather data...';
+        // update ui to show loading on both panels
+        const badge = document.getElementById('heat-risk-badge');
+        const indicator = document.getElementById('heat-risk-indicator');
+        const safetyMsgLeft = document.getElementById('heat-safety-msg');
+        const safetyMsg = document.getElementById('safety-message');
 
-        // first, fetch real weather data from the API
-        const weatherResponse = await fetch(
-          `${API_BASE}/api/weather?date=${date}&hour=${Math.floor(currentMinutes / 60)}`
-        );
+        if (badge) badge.textContent = '...';
+        if (indicator) indicator.textContent = '...';
+        if (safetyMsgLeft) safetyMsgLeft.textContent = 'Fetching weather data...';
+        if (safetyMsg) safetyMsg.textContent = 'fetching real-time weather data...';
 
-        let weatherParams = '';
-        if (weatherResponse.ok) {
-          const weatherData = await weatherResponse.json();
-          if (weatherData.success) {
-            // use real weather data
-            weatherParams = `&temperature=${weatherData.temperature || 25}&humidity=${weatherData.humidity || 50}&wind_speed=${weatherData.wind_speed || 10}`;
-          }
-        }
-
-        document.getElementById('safety-message').textContent = 'analyzing heat conditions...';
-
+        // call heat-risk api (which now auto-fetches weather from open-meteo)
         const response = await fetch(
-          `${API_BASE}/api/heat-risk?lat=${center.lat}&lon=${center.lng}&date=${date}&time=${time}&surface_type=mixed${weatherParams}`
+          `${API_BASE}/api/heat-risk?lat=${center.lat}&lon=${center.lng}&date=${date}&time=${time}&surface_type=mixed`
         );
 
         if (!response.ok) {
@@ -2439,81 +2477,190 @@
         }
       } catch (error) {
         console.error('heat risk check failed:', error);
-        document.getElementById('safety-message').textContent =
-          'could not connect to ml api. make sure the server is running (python api_server.py)';
-        document.getElementById('heat-risk-badge').textContent = 'offline';
-        document.getElementById('heat-risk-badge').style.background = '#64748b';
+
+        // update error state on both panels (with null checks)
+        const safetyMsg = document.getElementById('safety-message');
+        const badge = document.getElementById('heat-risk-badge');
+        const indicator = document.getElementById('heat-risk-indicator');
+        const safetyMsgLeft = document.getElementById('heat-safety-msg');
+
+        if (safetyMsg) safetyMsg.textContent = 'Could not connect to API. Run: python api_server.py';
+        if (badge) {
+          badge.textContent = 'offline';
+          badge.style.background = '#64748b';
+        }
+        if (indicator) {
+          indicator.textContent = 'OFFLINE';
+          indicator.style.color = '#64748b';
+        }
+        if (safetyMsgLeft) safetyMsgLeft.textContent = 'Server not connected';
+
+        alert('Heat risk check failed: ' + error.message + '\n\nMake sure the server is running (python api_server.py)');
       }
     }
 
     // update heat risk display with api response
+    // updates both left panel and right panel displays
     function updateHeatRiskDisplay(data) {
       const prediction = data.prediction;
-      const badge = document.getElementById('heat-risk-badge');
-      const safetyMsg = document.getElementById('safety-message');
-
-      // update badge
-      badge.textContent = prediction.risk_label.toUpperCase();
+      const weather = data.weather;
       const colors = { low: '#22c55e', medium: '#f59e0b', high: '#ef4444' };
-      badge.style.background = colors[prediction.risk_label] || '#64748b';
 
-      // update metrics
-      document.getElementById('wbgt-value').textContent = `${prediction.wbgt_estimate}°C`;
-      document.getElementById('heat-index-value').textContent = `${prediction.heat_index}°C`;
+      // update right panel badge
+      const badge = document.getElementById('heat-risk-badge');
+      if (badge) {
+        badge.textContent = prediction.risk_label.toUpperCase();
+        badge.style.background = colors[prediction.risk_label] || '#64748b';
+      }
 
-      // show actual weather data used
-      if (data.conditions) {
-        document.getElementById('actual-temp').textContent = `${data.conditions.temperature}°C`;
-        document.getElementById('actual-humidity').textContent = `${data.conditions.humidity}%`;
+      // update right panel heat risk box with 5 metrics
+      if (weather) {
+        // Temperature
+        const hrTemp = document.getElementById('hr-temp');
+        if (hrTemp) hrTemp.textContent = `${weather.temperature}°C`;
+
+        // Humidity
+        const hrHumidity = document.getElementById('hr-humidity');
+        if (hrHumidity) hrHumidity.textContent = `${weather.humidity}%`;
+
+        // Wind Speed
+        const hrWind = document.getElementById('hr-wind');
+        if (hrWind) hrWind.textContent = `${weather.wind_speed} km/h`;
+
+        // UV Index with color coding
+        const hrUv = document.getElementById('hr-uv');
+        if (hrUv) {
+          hrUv.textContent = weather.uv_index;
+          if (weather.uv_index >= 11) hrUv.style.color = '#dc2626';
+          else if (weather.uv_index >= 8) hrUv.style.color = '#f97316';
+          else if (weather.uv_index >= 6) hrUv.style.color = '#eab308';
+          else if (weather.uv_index >= 3) hrUv.style.color = '#f472b6';
+          else hrUv.style.color = '#22c55e';
+        }
+
+        // Heat Index with color coding
+        const hrHeatIndex = document.getElementById('hr-heat-index');
+        if (hrHeatIndex) {
+          hrHeatIndex.textContent = `${prediction.heat_index}°C`;
+          if (prediction.heat_index >= 41) hrHeatIndex.style.color = '#dc2626';
+          else if (prediction.heat_index >= 33) hrHeatIndex.style.color = '#f97316';
+          else if (prediction.heat_index >= 27) hrHeatIndex.style.color = '#eab308';
+          else hrHeatIndex.style.color = '#22c55e';
+        }
       }
 
       // update safety message
-      safetyMsg.textContent = data.safety_message;
-      safetyMsg.style.background = `${colors[prediction.risk_label]}15`;
+      const safetyMsg = document.getElementById('safety-message');
+      if (safetyMsg) {
+        safetyMsg.textContent = data.safety_message ||
+          (prediction.risk_label === 'low' ? 'Safe for outdoor activity' :
+           prediction.risk_label === 'medium' ? 'Take breaks, stay hydrated' :
+           'Avoid outdoor work if possible');
+        safetyMsg.style.background = `${colors[prediction.risk_label]}15`;
+      }
+
+      // update left panel heat risk indicator
+      const indicator = document.getElementById('heat-risk-indicator');
+      const safetyMsgLeft = document.getElementById('heat-safety-msg');
+      if (indicator) {
+        indicator.textContent = prediction.risk_label.toUpperCase();
+        indicator.style.color = colors[prediction.risk_label] || '#64748b';
+        indicator.style.textShadow = `0 0 20px ${colors[prediction.risk_label]}50`;
+      }
+      if (safetyMsgLeft) {
+        const safetyMessages = {
+          low: 'Safe for outdoor activity',
+          medium: 'Take breaks, stay hydrated',
+          high: 'Avoid outdoor work if possible'
+        };
+        safetyMsgLeft.textContent = safetyMessages[prediction.risk_label] || data.safety_message;
+      }
+
+      // update left panel weather values (4 key metrics from open-meteo)
+      if (weather) {
+        const tempEl = document.getElementById('panel-temp');
+        const humidityEl = document.getElementById('panel-humidity');
+        const windEl = document.getElementById('panel-wind');
+        const uvEl = document.getElementById('panel-uv');
+
+        if (tempEl) tempEl.textContent = `${weather.temperature}°C`;
+        if (humidityEl) humidityEl.textContent = `${weather.humidity}%`;
+        if (windEl) windEl.textContent = `${weather.wind_speed} km/h`;
+        if (uvEl) {
+          uvEl.textContent = weather.uv_index;
+          if (weather.uv_index >= 11) uvEl.style.color = '#dc2626';
+          else if (weather.uv_index >= 8) uvEl.style.color = '#f97316';
+          else if (weather.uv_index >= 6) uvEl.style.color = '#eab308';
+          else if (weather.uv_index >= 3) uvEl.style.color = '#84cc16';
+          else uvEl.style.color = '#22c55e';
+        }
+      }
+
+      // update wbgt on left panel
+      const wbgtEl = document.getElementById('panel-wbgt');
+      if (wbgtEl) {
+        wbgtEl.textContent = `${prediction.wbgt_estimate}°C`;
+        if (prediction.wbgt_estimate >= 32) wbgtEl.style.color = '#dc2626';
+        else if (prediction.wbgt_estimate >= 28) wbgtEl.style.color = '#f97316';
+        else if (prediction.wbgt_estimate >= 25) wbgtEl.style.color = '#eab308';
+        else wbgtEl.style.color = '#22d3ee';
+      }
+
+      // Note: All metrics are now updated above in the new unified display
+      // No need for duplicate updates
     }
 
     // find optimal schedule for task
+    // task location coordinates (set by user clicking map or defaults to center)
+    let taskLocationCoords = null;
+    let selectingTaskLocation = false;
+
     async function findOptimalSchedule() {
+      // find optimal time to schedule task within specified time bounds
+      // analyzes shadow coverage and heat risk at the specified location
       try {
+        if (!map) {
+          alert('Please wait for map to load');
+          return;
+        }
+
         const taskName = document.getElementById('taskName').value || 'outdoor task';
         const duration = parseInt(document.getElementById('taskDuration').value) || 60;
-        const surfaceType = document.getElementById('surfaceType').value;
-        const requiresShade = document.getElementById('requiresShade').checked;
 
-        const center = map.getCenter();
+        // get time bounds from UI (user can specify working hours window)
+        const startHour = parseInt(document.getElementById('startHour').value) || 6;
+        const endHour = parseInt(document.getElementById('endHour').value) || 18;
+
+        // use task location if set, otherwise use map center
+        const location = taskLocationCoords || {
+          lat: map.getCenter().lat,
+          lng: map.getCenter().lng
+        };
+
         const dateInput = document.getElementById('dateInput');
         const date = dateInput.value || new Date().toISOString().split('T')[0];
 
-        // show loading
+        // show loading with location info
         const resultDiv = document.getElementById('schedule-result');
         const detailsDiv = document.getElementById('schedule-details');
         resultDiv.style.display = 'block';
-        detailsDiv.innerHTML = '<span style="color: #94a3b8;">fetching weather forecast...</span>';
+        detailsDiv.innerHTML = `<span style="color: #94a3b8;">
+          📍 Analyzing location (${location.lat.toFixed(4)}, ${location.lng.toFixed(4)})<br>
+          🕐 Time window: ${startHour}:00 - ${endHour}:00<br>
+          ⏳ Calculating shadow & heat risk...
+        </span>`;
 
-        // fetch real weather data for the date
-        const weatherResponse = await fetch(`${API_BASE}/api/weather?date=${date}`);
-        let weatherParams = {};
-
-        if (weatherResponse.ok) {
-          const weatherData = await weatherResponse.json();
-          if (weatherData.success) {
-            weatherParams.temperature = weatherData.temperature || 30;
-            weatherParams.humidity = weatherData.humidity || 50;
-            weatherParams.wind_speed = weatherData.wind_speed || 10;
-          }
-        }
-
-        detailsDiv.innerHTML = '<span style="color: #94a3b8;">finding optimal time...</span>';
-
+        // call schedule API (assumes shade required, uses mixed surface)
         const params = new URLSearchParams({
           task_name: taskName,
           duration: duration,
-          lat: center.lat,
-          lon: center.lng,
+          lat: location.lat,
+          lon: location.lng,
           date: date,
-          surface_type: surfaceType,
-          requires_shade: requiresShade,
-          ...weatherParams
+          start_hour: startHour,
+          end_hour: endHour,
+          requires_shade: true,  // always require shade for outdoor workers
+          surface_type: 'mixed'
         });
 
         const response = await fetch(`${API_BASE}/api/schedule?${params}`);
@@ -2541,23 +2688,50 @@
       const rec = data.recommendation;
       const detailsDiv = document.getElementById('schedule-details');
 
-      // quality indicator color
+      // quality indicator color based on score
       const qualityColor = rec.quality_score >= 70 ? '#22c55e' :
                           rec.quality_score >= 50 ? '#f59e0b' : '#ef4444';
 
+      // heat risk color
+      const heatRiskPercent = rec.heat_risk_score * 100;
+      const heatRiskColor = heatRiskPercent <= 30 ? '#22c55e' :
+                           heatRiskPercent <= 60 ? '#f59e0b' : '#ef4444';
+      const heatRiskLabel = heatRiskPercent <= 30 ? 'LOW' :
+                           heatRiskPercent <= 60 ? 'MEDIUM' : 'HIGH';
+
       detailsDiv.innerHTML = `
-        <div style="margin-bottom: 6px;">
-          <strong style="color: ${qualityColor};">best time: ${rec.best_start_time} - ${rec.end_time}</strong>
+        <div style="margin-bottom: 8px;">
+          <strong style="color: ${qualityColor}; font-size: 14px;">⏰ Best Time: ${rec.best_start_time} - ${rec.end_time}</strong>
         </div>
-        <div style="font-size: 10px; color: #94a3b8;">
-          quality: ${rec.quality_score}/100 • heat risk: ${(rec.heat_risk_score * 100).toFixed(0)}% • shade: ${rec.shade_percentage}%
+
+        <!-- Shadow & Heat Risk Analysis -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+          <div style="text-align: center; padding: 6px; background: rgba(34, 197, 94, 0.15); border-radius: 6px;">
+            <div style="font-size: 8px; color: #64748b;">SHADOW</div>
+            <div style="font-size: 14px; font-weight: 600; color: #22c55e;">${rec.shade_percentage}%</div>
+          </div>
+          <div style="text-align: center; padding: 6px; background: ${heatRiskColor}20; border-radius: 6px;">
+            <div style="font-size: 8px; color: #64748b;">HEAT RISK</div>
+            <div style="font-size: 14px; font-weight: 600; color: ${heatRiskColor};">${heatRiskLabel}</div>
+          </div>
         </div>
-        ${data.alternatives.length > 0 ? `
-          <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.1);">
-            <div style="font-size: 9px; color: #64748b; margin-bottom: 4px;">alternatives:</div>
-            ${data.alternatives.slice(0, 3).map(alt =>
-              `<div style="font-size: 9px; color: #94a3b8;">${alt.start_time} (quality: ${alt.quality_score})</div>`
-            ).join('')}
+
+        <div style="font-size: 10px; color: #94a3b8; margin-bottom: 6px;">
+          📊 Schedule Quality: <span style="color: ${qualityColor}; font-weight: 600;">${rec.quality_score}/100</span>
+        </div>
+
+        ${data.alternatives && data.alternatives.length > 0 ? `
+          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 9px; color: #64748b; margin-bottom: 6px;">📅 Alternative Times:</div>
+            ${data.alternatives.slice(0, 3).map(alt => {
+              const altHeatColor = alt.heat_risk_score * 100 <= 30 ? '#22c55e' :
+                                  alt.heat_risk_score * 100 <= 60 ? '#f59e0b' : '#ef4444';
+              return `<div style="font-size: 10px; color: #e2e8f0; display: flex; justify-content: space-between; margin-bottom: 2px;">
+                <span>${alt.start_time}</span>
+                <span style="color: #94a3b8;">shade: ${alt.shade_percentage}%</span>
+                <span style="color: ${altHeatColor};">risk: ${(alt.heat_risk_score * 100).toFixed(0)}%</span>
+              </div>`;
+            }).join('')}
           </div>
         ` : ''}
       `;
@@ -2582,11 +2756,23 @@
       map.getCanvas().style.cursor = 'crosshair';
     }
 
-    // handle map click for route points
+    // handle map click for route points and task location
     function handleMapClickForRoute(e) {
-      if (!selectingRoutePoints) return;
-
       const coords = [e.lngLat.lng, e.lngLat.lat];
+
+      // check if selecting task location
+      if (selectingTaskLocation) {
+        taskLocationCoords = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+        document.getElementById('taskLocation').value = `${e.lngLat.lat.toFixed(4)}, ${e.lngLat.lng.toFixed(4)}`;
+        document.getElementById('taskLocationCoords').textContent = `📍 Location set at ${e.lngLat.lat.toFixed(4)}°N, ${e.lngLat.lng.toFixed(4)}°E`;
+        document.getElementById('setTaskLocationBtn').textContent = '📍 Set';
+        document.getElementById('setTaskLocationBtn').style.background = '';
+        selectingTaskLocation = false;
+        map.getCanvas().style.cursor = '';
+        return;
+      }
+
+      if (!selectingRoutePoints) return;
 
       if (!routeStartCoords) {
         // set start point
@@ -2620,6 +2806,11 @@
 
     // find shaded route
     async function findShadedRoute() {
+      // find shade-optimized route for pedestrians/cyclists
+      // uses mapbox directions api for realistic routes that:
+      // - follow actual roads and paths (not straight lines)
+      // - avoid highways for pedestrians/cyclists
+      // - consider bridges, water bodies, safe crossings
       try {
         if (!routeStartCoords || !routeEndCoords) {
           alert('please set start and end points on the map first');
@@ -2635,8 +2826,9 @@
         const resultDiv = document.getElementById('route-result');
         const detailsDiv = document.getElementById('route-details');
         resultDiv.style.display = 'block';
-        detailsDiv.innerHTML = '<span style="color: #94a3b8;">calculating shaded route...</span>';
+        detailsDiv.innerHTML = '<span style="color: #94a3b8;">fetching route from mapbox...</span>';
 
+        // pass mapbox token to api for realistic routing
         const params = new URLSearchParams({
           start_lat: routeStartCoords[1],
           start_lon: routeStartCoords[0],
@@ -2644,7 +2836,8 @@
           end_lon: routeEndCoords[0],
           mode: mode,
           departure_date: date,
-          departure_time: time
+          departure_time: time,
+          mapbox_token: mapboxgl.accessToken  // pass token for directions api
         });
 
         const response = await fetch(`${API_BASE}/api/shaded-route?${params}`);
@@ -2663,67 +2856,97 @@
         }
       } catch (error) {
         console.error('route finding failed:', error);
-        document.getElementById('route-details').innerHTML =
-          '<span style="color: #ef4444;">could not connect to ml api. start server with: python api_server.py</span>';
+        const detailsDiv = document.getElementById('route-details');
+        if (detailsDiv) {
+          detailsDiv.innerHTML = `<span style="color: #ef4444;">Error: ${error.message}<br>Make sure server is running: python api_server.py</span>`;
+        }
       }
     }
 
     // display route result
     function displayRouteResult(data) {
-      const route = data.route;
+      // data comes directly from API (not nested under 'route')
       const detailsDiv = document.getElementById('route-details');
       const scoreSpan = document.getElementById('shade-score');
 
       // update shade score badge
-      scoreSpan.textContent = `${route.shade_score}/100`;
-      scoreSpan.style.background = route.shade_score >= 70 ? '#22c55e' :
-                                   route.shade_score >= 50 ? '#f59e0b' : '#ef4444';
+      const shadeScore = data.shade_score || 0;
+      scoreSpan.textContent = `${Math.round(shadeScore)}/100`;
+      scoreSpan.style.background = shadeScore >= 70 ? '#22c55e' :
+                                   shadeScore >= 50 ? '#f59e0b' : '#ef4444';
 
+      // calculate heat risk level from percentage
+      const heatRisk = data.average_heat_risk || 0;
+      const riskLevel = heatRisk <= 30 ? 'low' : heatRisk <= 60 ? 'moderate' : 'high';
       const riskColors = { low: '#22c55e', moderate: '#f59e0b', high: '#ef4444' };
+
+      // format distance and duration
+      const distanceKm = ((data.total_distance || 0) / 1000).toFixed(2);
+      const durationMin = Math.round((data.total_duration || 0) / 60);
 
       detailsDiv.innerHTML = `
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-          <div>📏 ${(route.total_distance_meters / 1000).toFixed(2)} km</div>
-          <div>⏱️ ${route.total_duration_minutes} min</div>
+          <div>📏 ${distanceKm} km</div>
+          <div>⏱️ ${durationMin} min</div>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-          <div>🌴 ${route.average_shade_coverage}% shade</div>
-          <div style="color: ${riskColors[route.heat_risk_level]};">⚠️ ${route.heat_risk_level} risk</div>
+          <div>🌴 ${Math.round(data.average_shade_coverage || 0)}% shade</div>
+          <div style="color: ${riskColors[riskLevel]};">⚠️ ${riskLevel} risk</div>
         </div>
         <div style="margin-top: 6px; font-size: 9px; color: #64748b;">
-          ☀️ estimated sun exposure: ${route.sun_exposure_minutes} min
+          ☀️ estimated sun exposure: ${Math.round(data.sun_exposure_minutes || 0)} min
         </div>
       `;
     }
 
     // draw route on map
     function drawRouteOnMap(data) {
+      // draw shade-optimized route on map
+      // uses actual road geometry from mapbox directions api
+      // (follows real roads, avoids highways for pedestrians/cyclists)
+
       // remove existing route layer if present
       if (map.getSource('shaded-route')) {
         map.removeLayer('shaded-route-line');
         map.removeSource('shaded-route');
       }
 
-      // create route coordinates from segments
-      const coordinates = data.segments.map(seg => [seg.start[1], seg.start[0]]);
-      // add final point
-      if (data.segments.length > 0) {
-        const lastSeg = data.segments[data.segments.length - 1];
-        coordinates.push([lastSeg.end[1], lastSeg.end[0]]);
+      // use actual route geometry from mapbox if available
+      // geometry format: [[lon, lat], [lon, lat], ...]
+      let coordinates;
+
+      if (data.geometry && data.geometry.length > 1) {
+        // use real road geometry from mapbox directions api
+        coordinates = data.geometry;
+        console.log(`Drawing realistic route with ${coordinates.length} points from Mapbox`);
+      } else {
+        // fallback to segment-based coordinates
+        coordinates = data.segments.map(seg => [seg.start[1], seg.start[0]]);
+        if (data.segments.length > 0) {
+          const lastSeg = data.segments[data.segments.length - 1];
+          coordinates.push([lastSeg.end[1], lastSeg.end[0]]);
+        }
+        console.log('Using fallback segment coordinates');
       }
 
-      // add source and layer
+      // add source and layer for the route
       map.addSource('shaded-route', {
         type: 'geojson',
         data: {
           type: 'Feature',
-          properties: {},
+          properties: {
+            shade_score: data.shade_score,
+            mode: data.mode
+          },
           geometry: {
             type: 'LineString',
             coordinates: coordinates
           }
         }
       });
+
+      // style the route line based on mode
+      const routeColor = data.mode === 'cycling' ? '#22c55e' : '#38bdf8';
 
       map.addLayer({
         id: 'shaded-route-line',
@@ -2734,9 +2957,9 @@
           'line-cap': 'round'
         },
         paint: {
-          'line-color': '#38bdf8',
-          'line-width': 5,
-          'line-opacity': 0.8
+          'line-color': routeColor,
+          'line-width': 6,
+          'line-opacity': 0.85
         }
       });
 
@@ -2856,11 +3079,21 @@
       });
 
       // ML features event listeners
+      // Both left panel and right panel heat risk buttons call the same function
       document.getElementById('checkHeatRiskBtn').addEventListener('click', checkHeatRisk);
+      document.getElementById('checkHeatRiskBtn2').addEventListener('click', checkHeatRisk);
       document.getElementById('scheduleTaskBtn').addEventListener('click', findOptimalSchedule);
       document.getElementById('setPointsBtn').addEventListener('click', enableRoutePointSelection);
       document.getElementById('findRouteBtn').addEventListener('click', findShadedRoute);
       document.getElementById('mlStatusBtn').addEventListener('click', checkMLStatus);
+
+      // Task location selection for scheduling
+      document.getElementById('setTaskLocationBtn').addEventListener('click', () => {
+        selectingTaskLocation = true;
+        document.getElementById('taskLocation').value = 'Click on map...';
+        document.getElementById('setTaskLocationBtn').textContent = '🎯 Click map';
+        document.getElementById('setTaskLocationBtn').style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
+      });
 
       // Close suggestions when clicking outside
       document.addEventListener('click', (e) => {
