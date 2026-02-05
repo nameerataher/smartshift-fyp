@@ -764,22 +764,24 @@ def get_heat_risk():
     """
     predict heat risk for a specific location and time.
 
-    this endpoint uses the trained ml model to assess whether it's
-    safe to be outside at a given location and time.
+    answers the question: "is it safe to be outside right now?"
+
+    target users:
+    - community workers (facade cleaners, construction, road maintenance)
+    - joggers, cyclists, pedestrians seeking low-heat routes
+
+    automatically fetches real weather data from open-meteo for accurate predictions.
 
     query parameters (get) or json body (post):
         lat: latitude
         lon: longitude
         date: date in yyyy-mm-dd format (optional, defaults to today)
         time: time in hh:mm format (optional, defaults to now)
-        temperature: temperature in celsius (optional, fetches from weather api)
-        humidity: humidity percentage (optional)
-        wind_speed: wind speed in km/h (optional)
         surface_type: 'asphalt', 'concrete', 'grass', etc. (optional)
         in_shadow: whether currently in shadow (optional, boolean)
 
     returns:
-        json with heat risk prediction and safety recommendations
+        json with heat risk prediction, weather data, and safety recommendations
     """
     if not ML_MODELS_AVAILABLE:
         return jsonify({
@@ -794,7 +796,7 @@ def get_heat_risk():
         else:
             data = request.args.to_dict()
 
-        # required: location
+        # location (defaults to dubai)
         lat = float(data.get('lat', DUBAI.LATITUDE))
         lon = float(data.get('lon', DUBAI.LONGITUDE))
 
@@ -803,34 +805,59 @@ def get_heat_risk():
         time_str = data.get('time')
         dt = parse_datetime_param(date_str, time_str)
 
-        # weather parameters (use defaults if not provided)
-        temperature = float(data.get('temperature', 35.0))
-        humidity = float(data.get('humidity', 45.0))
-        wind_speed = float(data.get('wind_speed', 10.0))
+        # fetch real weather data from open-meteo (7-day forecast cache)
+        forecast = fetch_7day_forecast(lat, lon)
+        target_date_str = dt.strftime("%Y-%m-%d")
+        hour = dt.hour
+
+        # find weather for this specific hour
+        weather_data_from_api = None
+        for hourly in forecast["hourly"]:
+            if hourly["date"] == target_date_str and hourly["hour"] == hour:
+                weather_data_from_api = hourly
+                break
+
+        # use real weather data or fallback
+        if weather_data_from_api:
+            temperature = weather_data_from_api["temperature"]
+            humidity = weather_data_from_api["humidity"]
+            wind_speed = weather_data_from_api["wind_speed"]
+            uv_index = weather_data_from_api["uv_index"]
+            cloud_cover = weather_data_from_api.get("cloud_cover", 0)
+        else:
+            # fallback to provided params or defaults
+            temperature = float(data.get('temperature', 30.0))
+            humidity = float(data.get('humidity', 50.0))
+            wind_speed = float(data.get('wind_speed', 10.0))
+            uv_index = float(data.get('uv_index', 5.0))
+            cloud_cover = 0
+
         surface_type = data.get('surface_type', 'mixed')
         in_shadow = str(data.get('in_shadow', 'false')).lower() == 'true'
 
-        # get sun position
+        # get sun position for this datetime
         sun_pos = solar_calculator.get_sun_position(dt)
 
-        # calculate sun intensity
+        # calculate sun intensity based on altitude
         if sun_pos.altitude > 0:
             sun_intensity = min(1.0, sun_pos.altitude / 60)
         else:
             sun_intensity = 0.0
 
-        # create input objects for model
+        # create input objects for the ml model
         weather = WeatherData(
             temperature=temperature,
             humidity=humidity,
-            wind_speed=wind_speed
+            wind_speed=wind_speed,
+            uv_index=uv_index,
+            cloud_cover=cloud_cover
         )
 
         location = LocationContext(
             latitude=lat,
             longitude=lon,
             surface_type=surface_type,
-            urban_density=0.7
+            urban_density=0.7  # dubai is densely urban
         )
 
         sun_exposure = SunExposure(
@@ -841,21 +868,27 @@ def get_heat_risk():
             direct_sun_intensity=0.0 if in_shadow else sun_intensity
         )
 
-        # get prediction
+        # get prediction from trained ml model
         model = get_heat_risk_model()
         prediction = model.predict(weather, location, sun_exposure, dt)
 
+        # build response with weather data and prediction
+        # this answers: "is it safe to be outside right now?"
         return jsonify({
             "success": True,
             "timestamp": dt.isoformat(),
             "location": {"lat": lat, "lon": lon},
-            "conditions": {
-                "temperature": temperature,
-                "humidity": humidity,
-                "wind_speed": wind_speed,
-                "surface_type": surface_type,
-                "in_shadow": in_shadow
+
+            # real-time weather data from open-meteo
+            "weather": {
+                "temperature": round(temperature, 1),
+                "humidity": round(humidity, 1),
+                "wind_speed": round(wind_speed, 1),
+                "uv_index": round(uv_index, 1),
+                "source": "open-meteo" if weather_data_from_api else "fallback"
             },
+
+            # ml model prediction
             "prediction": {
                 "risk_level": prediction.risk_level,
                 "risk_label": prediction.risk_label,
@@ -864,14 +897,19 @@ def get_heat_risk():
                     k: round(v * 100, 1) for k, v in prediction.class_probabilities.items()
                 },
                 "wbgt_estimate": round(prediction.wbgt_estimate, 1),
-                "heat_index": round(prediction.heat_index, 1),
-                "recommended_max_exposure_minutes": prediction.recommended_max_exposure
+                "heat_index": round(prediction.heat_index, 1)
             },
+
+            # safety recommendation for workers and community
             "safety_message": prediction.safety_message,
+            "is_safe_outside": prediction.risk_level == 0,  # true if low risk
+
+            # sun position data
             "sun_position": {
                 "altitude": round(sun_pos.altitude, 1),
                 "azimuth": round(sun_pos.azimuth, 1),
-                "is_daylight": sun_pos.is_daylight
+                "is_daylight": sun_pos.is_daylight,
+                "in_shadow": in_shadow
             }
         })
 
@@ -887,25 +925,31 @@ def get_optimal_task_schedule():
     """
     find the optimal time to schedule an outdoor task.
 
-    this endpoint uses ai planning to determine the best start time
-    for a task, minimizing heat exposure while completing the work.
+    answers: "given today's conditions, what's the best time to schedule this task?"
+
+    uses ai planning to determine the best start time for outdoor work,
+    maximizing shadow exposure and minimizing heat risk.
+
+    target users:
+    - municipality planners (scheduling outdoor maintenance)
+    - construction supervisors (planning work shifts)
+    - facade cleaning companies (booking building cleaning slots)
+    - joggers, cyclists (planning exercise times)
 
     query parameters (get) or json body (post):
         task_name: name/description of the task
-        duration: duration in minutes
+        duration: duration in minutes (e.g., 60, 120)
         lat: latitude of task location
         lon: longitude of task location
         date: date in yyyy-mm-dd format
-        temperature: expected temperature (optional)
-        humidity: expected humidity (optional)
-        wind_speed: expected wind speed (optional)
-        earliest_start: earliest allowed start hour (default 6)
-        latest_end: latest allowed end hour (default 20)
+        start_hour: earliest allowed start hour (default 6)
+        end_hour: latest allowed end hour (default 18)
         requires_shade: whether task must be in shade (default false)
         surface_type: ground surface type (default 'mixed')
 
     returns:
-        json with optimal schedule recommendation and alternatives
+        json with optimal schedule recommendation, ranked alternatives,
+        and heat risk breakdown for each time slot
     """
     if not ML_MODELS_AVAILABLE:
         return jsonify({
@@ -914,7 +958,7 @@ def get_optimal_task_schedule():
         }), 503
 
     try:
-        # parse parameters
+        # parse parameters from request
         if request.method == 'POST':
             data = request.get_json() or {}
         else:
@@ -926,7 +970,7 @@ def get_optimal_task_schedule():
         lat = float(data.get('lat', DUBAI.LATITUDE))
         lon = float(data.get('lon', DUBAI.LONGITUDE))
 
-        # date
+        # date selection
         date_str = data.get('date')
         if date_str:
             year, month, day = map(int, date_str.split('-'))
@@ -934,14 +978,33 @@ def get_optimal_task_schedule():
         else:
             date = datetime.now()
 
-        # weather (defaults for dubai)
-        temperature = float(data.get('temperature', 38.0))
-        humidity = float(data.get('humidity', 40.0))
-        wind_speed = float(data.get('wind_speed', 10.0))
+        # time bounds - user can specify working hours window
+        # e.g., start_hour=9, end_hour=17 for 9am-5pm window
+        earliest_start = int(data.get('start_hour', data.get('earliest_start', 6)))
+        latest_end = int(data.get('end_hour', data.get('latest_end', 18)))
+
+        # fetch real weather forecast from open-meteo for this date
+        forecast = fetch_7day_forecast(lat, lon)
+        target_date_str = date.strftime("%Y-%m-%d")
+
+        # get average weather for the day from hourly forecast
+        day_hours = [h for h in forecast["hourly"]
+                     if h["date"] == target_date_str and earliest_start <= h["hour"] <= latest_end]
+
+        if day_hours:
+            # use real weather data from forecast
+            temperature = sum(h["temperature"] for h in day_hours) / len(day_hours)
+            humidity = sum(h["humidity"] for h in day_hours) / len(day_hours)
+            wind_speed = sum(h["wind_speed"] for h in day_hours) / len(day_hours)
+            weather_source = "open-meteo"
+        else:
+            # fallback defaults
+            temperature = 35.0
+            humidity = 50.0
+            wind_speed = 10.0
+            weather_source = "fallback"
 
         # constraints
-        earliest_start = int(data.get('earliest_start', 6))
-        latest_end = int(data.get('latest_end', 20))
         requires_shade = str(data.get('requires_shade', 'false')).lower() == 'true'
         surface_type = data.get('surface_type', 'mixed')
 
@@ -1018,6 +1081,12 @@ def get_shaded_navigation_route():
     """
     find a shade-optimized route between two points.
 
+    uses mapbox directions api for realistic pedestrian/cycling routes that:
+    - follow actual roads and paths (not straight lines)
+    - avoid highways for pedestrians and cyclists
+    - consider bridges, water bodies, and safe crossings
+    - provide turn-by-turn navigation geometry
+
     this endpoint is for community users (cyclists, joggers, pedestrians)
     who want to minimize sun exposure during their journey.
 
@@ -1029,9 +1098,10 @@ def get_shaded_navigation_route():
         mode: 'walking', 'cycling', or 'driving' (default 'walking')
         departure_time: departure time in hh:mm format (optional)
         departure_date: departure date in yyyy-mm-dd format (optional)
+        mapbox_token: mapbox access token for directions api (optional)
 
     returns:
-        json with shade-optimized route and segments
+        json with shade-optimized route, segments, and geometry
     """
     if not ML_MODELS_AVAILABLE:
         return jsonify({
@@ -1052,25 +1122,54 @@ def get_shaded_navigation_route():
         end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
         end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
 
-        # mode
+        # mode (walking/cycling are safe for pedestrians, driving for vehicles)
         mode = data.get('mode', 'walking')
         if mode not in ['walking', 'cycling', 'driving']:
             mode = 'walking'
+
+        # mapbox token for realistic routing
+        mapbox_token = data.get('mapbox_token')
 
         # departure time
         date_str = data.get('departure_date')
         time_str = data.get('departure_time')
         departure_time = parse_datetime_param(date_str, time_str)
 
-        # get route
-        result = get_shaded_route(
-            start_lat=start_lat,
-            start_lon=start_lon,
-            end_lat=end_lat,
-            end_lon=end_lon,
+        # get shade navigator and find route
+        navigator = get_shade_navigator()
+        route = navigator.find_shaded_route(
+            start=(start_lat, start_lon),
+            end=(end_lat, end_lon),
             mode=mode,
-            departure_time=departure_time
+            departure_time=departure_time,
+            mapbox_token=mapbox_token
         )
+
+        # build response with route geometry for map display
+        result = {
+            "success": True,
+            "mode": mode,
+            "departure_time": departure_time.isoformat(),
+            "total_distance": round(route.total_distance, 1),
+            "total_duration": round(route.total_duration, 1),
+            "average_shade_coverage": round(route.average_shade_coverage * 100, 1),
+            "average_heat_risk": round(route.average_heat_risk * 100, 1),
+            "sun_exposure_minutes": round(route.sun_exposure_minutes, 1),
+            "shade_score": round(route.shade_score, 1),
+            "comparison": route.comparison_to_fastest,
+            "geometry": route.route_geometry,  # actual route path from mapbox
+            "segments": [
+                {
+                    "start": [seg.start_lat, seg.start_lon],
+                    "end": [seg.end_lat, seg.end_lon],
+                    "distance": round(seg.distance_meters, 1),
+                    "duration": round(seg.duration_seconds, 1),
+                    "shade_coverage": round(seg.shade_coverage * 100, 1),
+                    "heat_risk": round(seg.heat_risk * 100, 1)
+                }
+                for seg in route.segments[:50]  # limit to 50 segments for response size
+            ]
+        }
 
         return jsonify(result)
 
