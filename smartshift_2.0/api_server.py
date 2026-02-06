@@ -50,6 +50,8 @@ except ImportError as e:
 # weather api configuration
 import requests
 import os
+import sqlite3
+import uuid
 
 # open-meteo official sdk with caching and retry
 try:
@@ -66,6 +68,45 @@ except ImportError:
     WEATHER_API_AVAILABLE = False
     openmeteo = None
     print("Warning: openmeteo-requests not available. Install with: pip install openmeteo-requests requests-cache retry-requests")
+
+# sqlite database for storing schedule feedback and user preferences
+DB_PATH = os.path.join(os.path.dirname(__file__), "smartshift.db")
+
+def init_db():
+    """initialize sqlite database tables for scheduling feedback."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS schedule_requests (
+            id TEXT PRIMARY KEY,
+            task_name TEXT,
+            lat REAL,
+            lon REAL,
+            date TEXT,
+            start_hour INTEGER,
+            end_hour INTEGER,
+            duration_minutes INTEGER,
+            recommended_start TEXT,
+            recommended_end TEXT,
+            heat_risk_score REAL,
+            shade_percentage REAL,
+            created_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS schedule_feedback (
+            id TEXT PRIMARY KEY,
+            request_id TEXT,
+            action TEXT, -- accept or reject
+            chosen_start TEXT,
+            chosen_end TEXT,
+            note TEXT,
+            created_at TEXT,
+            FOREIGN KEY(request_id) REFERENCES schedule_requests(id)
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
 # flask app initialization
@@ -85,6 +126,9 @@ shadow_calculator = ShadowCalculator(
     longitude=DUBAI.LONGITUDE,
     timezone_offset=DUBAI.TIMEZONE_OFFSET
 )
+
+# initialize sqlite database for schedule feedback
+init_db()
 
 # initialize ml models (lazy loading - trained on first use)
 heat_risk_model = None
@@ -1005,8 +1049,29 @@ def get_optimal_task_schedule():
             weather_source = "fallback"
 
         # constraints
-        requires_shade = str(data.get('requires_shade', 'false')).lower() == 'true'
+        requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
         surface_type = data.get('surface_type', 'mixed')
+
+        # optional bounding box for area-based scheduling
+        # if provided, sample center + corners for shadow coverage
+        area_points = None
+        if all(k in data for k in ['bbox_min_lat', 'bbox_min_lon', 'bbox_max_lat', 'bbox_max_lon']):
+            try:
+                min_lat = float(data.get('bbox_min_lat'))
+                min_lon = float(data.get('bbox_min_lon'))
+                max_lat = float(data.get('bbox_max_lat'))
+                max_lon = float(data.get('bbox_max_lon'))
+                center_lat = (min_lat + max_lat) / 2
+                center_lon = (min_lon + max_lon) / 2
+                area_points = [
+                    (min_lon, min_lat),
+                    (min_lon, max_lat),
+                    (max_lon, min_lat),
+                    (max_lon, max_lat),
+                    (center_lon, center_lat)
+                ]
+            except Exception:
+                area_points = None
 
         # create task
         task = Task(
@@ -1017,7 +1082,8 @@ def get_optimal_task_schedule():
             earliest_start=earliest_start,
             latest_end=latest_end,
             requires_shade=requires_shade,
-            surface_type=surface_type
+            surface_type=surface_type,
+            area_points=area_points
         )
 
         # create weather
@@ -1031,8 +1097,37 @@ def get_optimal_task_schedule():
         optimizer = get_schedule_optimizer()
         recommendation = optimizer.find_best_schedule(task, date, weather)
 
+        # store schedule request in sqlite for learning from user feedback
+        request_id = str(uuid.uuid4())
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO schedule_requests (
+                id, task_name, lat, lon, date, start_hour, end_hour,
+                duration_minutes, recommended_start, recommended_end,
+                heat_risk_score, shade_percentage, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            request_id,
+            task_name,
+            lat,
+            lon,
+            date.strftime('%Y-%m-%d'),
+            earliest_start,
+            latest_end,
+            duration,
+            recommendation.best_slot.start_time.strftime('%H:%M'),
+            recommendation.best_slot.end_time.strftime('%H:%M'),
+            float(recommendation.best_slot.heat_risk_score),
+            float(recommendation.best_slot.shade_percentage),
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+
         return jsonify({
             "success": True,
+            "request_id": request_id,
             "task": task_name,
             "date": date.strftime('%Y-%m-%d'),
             "constraints": {
@@ -1053,6 +1148,7 @@ def get_optimal_task_schedule():
                 "heat_risk_score": round(recommendation.best_slot.heat_risk_score, 2),
                 "shade_percentage": round(recommendation.best_slot.shade_percentage, 1),
                 "is_feasible": recommendation.best_slot.is_feasible,
+                "location": f"{lat:.4f}, {lon:.4f}",
                 "risk_breakdown": recommendation.best_slot.risk_breakdown
             },
             "alternatives": [
@@ -1074,6 +1170,102 @@ def get_optimal_task_schedule():
             "success": False,
             "error": str(e)
         }), 400
+
+
+@app.route('/api/schedule/feedback', methods=['POST'])
+def save_schedule_feedback():
+    """
+    store user feedback for schedule recommendations.
+
+    this data is used to learn user preferences over time.
+    """
+    try:
+        data = request.get_json() or {}
+        request_id = data.get('request_id')
+        action = data.get('action')  # accept or reject
+        chosen_start = data.get('chosen_start')
+        chosen_end = data.get('chosen_end')
+        note = data.get('note', '')
+
+        if not request_id or action not in ['accept', 'reject']:
+            return jsonify({"success": False, "error": "invalid request_id or action"}), 400
+
+        feedback_id = str(uuid.uuid4())
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO schedule_feedback (
+                id, request_id, action, chosen_start, chosen_end, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            feedback_id,
+            request_id,
+            action,
+            chosen_start,
+            chosen_end,
+            note,
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": True, "feedback_id": feedback_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/schedule/history', methods=['GET'])
+def get_schedule_history():
+    """
+    return recent schedule requests and feedback.
+
+    this can be used to analyze user preferences and improve recommendations.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, task_name, lat, lon, date, start_hour, end_hour,
+                   duration_minutes, recommended_start, recommended_end,
+                   heat_risk_score, shade_percentage, created_at
+            FROM schedule_requests
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+        requests_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT id, request_id, action, chosen_start, chosen_end, note, created_at
+            FROM schedule_feedback
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+        feedback_rows = cur.fetchall()
+
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "requests": [
+                {
+                    "id": r[0], "task_name": r[1], "lat": r[2], "lon": r[3],
+                    "date": r[4], "start_hour": r[5], "end_hour": r[6],
+                    "duration_minutes": r[7], "recommended_start": r[8],
+                    "recommended_end": r[9], "heat_risk_score": r[10],
+                    "shade_percentage": r[11], "created_at": r[12]
+                } for r in requests_rows
+            ],
+            "feedback": [
+                {
+                    "id": f[0], "request_id": f[1], "action": f[2],
+                    "chosen_start": f[3], "chosen_end": f[4], "note": f[5],
+                    "created_at": f[6]
+                } for f in feedback_rows
+            ]
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/shaded-route', methods=['GET', 'POST'])
