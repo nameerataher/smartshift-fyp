@@ -19,15 +19,15 @@ target users:
 |------------------------|---------------------------------|----------------------------------|
 | sun_exposure_duration  | shadow engine (this project)    | from shadow_calculator.py        |
 | time_of_day            | system timestamp                | datetime.now()                   |
-| temperature            | era5 / meteostat                | pip install meteostat            |
-| humidity               | era5 / meteostat                | same as above                    |
-| wind_speed             | era5 / meteostat                | same as above                    |
+| temperature            | open-meteo sdk                  | openmeteo-requests               |
+| humidity               | open-meteo sdk                  | openmeteo-requests               |
+| wind_speed             | open-meteo sdk                  | openmeteo-requests               |
 | surface_type           | osm / mapbox                    | mapbox api or osm overpass       |
 | past_exposure_window   | derived feature                 | rolling sum of sun exposure      |
 
 weather data sources:
-- meteostat: free historical weather api (pip install meteostat)
-  docs: https://dev.meteostat.net/python/
+- open-meteo sdk: free hourly forecast data (no api key required)
+  docs: https://open-meteo.com/
 - era5: copernicus climate data store (requires account)
   docs: https://cds.climate.copernicus.eu/
 
@@ -85,6 +85,21 @@ import joblib
 # import project modules
 from config import DUBAI, HEAT_SAFETY
 from solar_position import SolarPositionCalculator
+
+# open-meteo sdk for real-time weather data (no api key required)
+try:
+    import openmeteo_requests
+    import requests_cache
+    from retry_requests import retry
+    OPENMETEO_AVAILABLE = True
+    # cache and retry for stability
+    _cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+    _retry_session = retry(_cache_session, retries=5, backoff_factor=0.2)
+    _openmeteo = openmeteo_requests.Client(session=_retry_session)
+except ImportError:
+    OPENMETEO_AVAILABLE = False
+    _openmeteo = None
+    print("warning: openmeteo-requests not available. install to fetch live weather data")
 
 
 # -----------------------------------------------------------------------------
@@ -157,6 +172,62 @@ class HeatRiskPrediction:
 # -----------------------------------------------------------------------------
 # heat index and wbgt calculations
 # -----------------------------------------------------------------------------
+
+def fetch_openmeteo_weather(latitude: float, longitude: float, dt: Optional[datetime] = None) -> WeatherData:
+    """
+    fetch weather data from open-meteo sdk for a specific location and time.
+
+    this provides the real-time inputs used by the heat risk model:
+    temperature, humidity, wind speed, uv index.
+    """
+    # fall back to defaults if sdk not available
+    if not OPENMETEO_AVAILABLE or _openmeteo is None:
+        return WeatherData(temperature=30.0, humidity=50.0, wind_speed=10.0, uv_index=5.0)
+
+    # use current time if not provided
+    if dt is None:
+        dt = datetime.now()
+
+    # open-meteo api parameters (hourly forecast)
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": [
+            "temperature_2m",
+            "relative_humidity_2m",
+            "wind_speed_10m",
+            "uv_index"
+        ],
+        "timezone": "auto",
+        "forecast_days": 7
+    }
+
+    responses = _openmeteo.weather_api(url, params=params)
+    response = responses[0]
+    hourly = response.Hourly()
+
+    # extract hourly arrays
+    hourly_temp = hourly.Variables(0).ValuesAsNumpy()
+    hourly_humidity = hourly.Variables(1).ValuesAsNumpy()
+    hourly_wind = hourly.Variables(2).ValuesAsNumpy()
+    hourly_uv = hourly.Variables(3).ValuesAsNumpy()
+
+    # map to target hour index
+    utc_offset = response.UtcOffsetSeconds()
+    start_time = hourly.Time() + utc_offset
+    interval = hourly.Interval()
+
+    # compute index for the requested hour
+    target_timestamp = int(dt.timestamp())
+    index = max(0, min(len(hourly_temp) - 1, int((target_timestamp - start_time) / interval)))
+
+    return WeatherData(
+        temperature=float(hourly_temp[index]),
+        humidity=float(hourly_humidity[index]),
+        wind_speed=float(hourly_wind[index]),
+        uv_index=float(hourly_uv[index])
+    )
 
 def calculate_heat_index(temperature: float, humidity: float) -> float:
     """
@@ -1049,4 +1120,5 @@ if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("model ready for integration with smartshift api")
     print("=" * 70)
+
 
