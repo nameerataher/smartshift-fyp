@@ -89,8 +89,9 @@ from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 
 # import project modules
-from config import DUBAI, SHADOW
+from config import DUBAI, SHADOW, SAMPLE_BUILDINGS
 from solar_position import SolarPositionCalculator
+from shadow_calculator import ShadowCalculator, Building
 from heat_risk_model import (
     HeatRiskModel, WeatherData, LocationContext, SunExposure,
     HeatRiskPrediction, calculate_heat_index, estimate_wbgt,
@@ -122,6 +123,7 @@ class Task:
     requires_shade: bool = False   # must the task be in shade?
     priority: int = 1              # 1=normal, 2=high, 3=critical
     surface_type: str = 'mixed'    # ground surface at location
+    area_points: Optional[List[Tuple[float, float]]] = None  # optional area sampling points
 
 
 @dataclass
@@ -197,6 +199,48 @@ class ShadeOptimizedRoute:
 # -----------------------------------------------------------------------------
 # schedule quality scoring functions
 # -----------------------------------------------------------------------------
+
+def build_sample_buildings() -> List[Building]:
+    """build building list from sample config for shadow calculations."""
+    buildings = []
+    for b in SAMPLE_BUILDINGS:
+        buildings.append(Building(
+            id=b["id"],
+            name=b.get("name"),
+            height=b["height"],
+            footprint=[(pt[0], pt[1]) for pt in b["footprint"]]
+        ))
+    return buildings
+
+
+def point_in_polygon(point: Tuple[float, float], polygon: List[Tuple[float, float]]) -> bool:
+    """
+    ray-casting point-in-polygon test.
+    returns true if point is inside polygon.
+    """
+    x, y = point
+    inside = False
+    n = len(polygon)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        intersect = ((yi > y) != (yj > y)) and \
+                    (x < (xj - xi) * (y - yi) / (yj - yi + 1e-9) + xi)
+        if intersect:
+            inside = not inside
+        j = i
+    return inside
+
+
+def is_point_in_any_shadow(point: Tuple[float, float], shadow_polygons: List[List[Tuple[float, float]]]) -> bool:
+    """check if a point is inside any shadow polygon."""
+    for poly in shadow_polygons:
+        if point_in_polygon(point, poly):
+            return True
+    return False
 
 def calculate_time_preference_score(hour: float) -> float:
     """
@@ -390,6 +434,14 @@ class ScheduleOptimizer:
             timezone_offset=DUBAI.TIMEZONE_OFFSET
         )
 
+        # shadow calculator for local shade analysis
+        self.shadow_calculator = ShadowCalculator(
+            latitude=DUBAI.LATITUDE,
+            longitude=DUBAI.LONGITUDE,
+            timezone_offset=DUBAI.TIMEZONE_OFFSET
+        )
+        self.buildings = build_sample_buildings()
+
         # ml model for schedule quality prediction (optional enhancement)
         self.quality_model: Optional[GradientBoostingRegressor] = None
         self.quality_scaler: Optional[StandardScaler] = None
@@ -491,24 +543,29 @@ class ScheduleOptimizer:
             # get sun position
             sun_pos = self.solar_calculator.get_sun_position(current_time)
 
-            # estimate sun exposure (simplified - would use shadow engine in production)
-            # assume partial shade availability in urban areas
+            # estimate sun exposure using actual shadow geometry
             is_daylight = sun_pos.altitude > 0
 
             if is_daylight:
                 # sun intensity based on altitude
                 sun_intensity = min(1.0, sun_pos.altitude / 60)
 
-                # shade estimate based on time (more shade early/late)
-                hour = current_time.hour + current_time.minute / 60
-                if 10 <= hour <= 15:
-                    shade_estimate = 0.2  # less shade at midday (sun high)
-                else:
-                    shade_estimate = 0.5  # more shade from buildings early/late
+                # calculate building shadows for this time
+                analysis = self.shadow_calculator.calculate_shadows_for_buildings(
+                    self.buildings, current_time
+                )
+                shadow_polygons = [s.polygon for s in analysis.shadows]
 
-                if task.requires_shade:
-                    # assume worker seeks shade actively
-                    shade_estimate = min(0.8, shade_estimate + 0.3)
+                # evaluate shade coverage for the task area
+                # if area_points provided, sample multiple points
+                area_points = task.area_points or [(task.location_lon, task.location_lat)]
+                in_shadow_count = 0
+                for pt_lon, pt_lat in area_points:
+                    if is_point_in_any_shadow((pt_lon, pt_lat), shadow_polygons):
+                        in_shadow_count += 1
+
+                # shade_estimate = fraction of area points in shadow
+                shade_estimate = in_shadow_count / max(len(area_points), 1)
             else:
                 sun_intensity = 0.0
                 shade_estimate = 1.0
