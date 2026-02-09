@@ -28,8 +28,6 @@ target users:
 weather data sources:
 - open-meteo sdk: free hourly forecast data (no api key required)
   docs: https://open-meteo.com/
-- era5: copernicus climate data store (requires account)
-  docs: https://cds.climate.copernicus.eu/
 
 surface type data:
 - openstreetmap: query via overpass api for surface tags
@@ -158,9 +156,13 @@ class SunExposure:
 class HeatRiskPrediction:
     """
     output from the heat risk model.
+
+    provides both classification (low/medium/high) and continuous score (0-1)
+    for flexible use in optimization algorithms
     """
     risk_level: int                 # 0=low, 1=medium, 2=high
     risk_label: str                 # 'low', 'medium', 'high'
+    risk_score: float               # continuous risk score 0-1 (0=safe, 1=dangerous)
     risk_probability: float         # confidence of predicted class
     class_probabilities: Dict[str, float]  # probabilities for each class
     wbgt_estimate: float            # estimated wet bulb globe temp
@@ -916,9 +918,16 @@ class HeatRiskModel:
         recommended_exposure = get_recommended_exposure(risk_level, wbgt)
         safety_message = get_safety_message(risk_level, recommended_exposure)
 
+        # compute continuous risk score (0-1) for optimization
+        # weighted average: low=0, medium=0.5, high=1.0
+        risk_score = (probabilities[0] * 0.0 +
+                      probabilities[1] * 0.5 +
+                      probabilities[2] * 1.0)
+
         return HeatRiskPrediction(
             risk_level=risk_level,
             risk_label=risk_label,
+            risk_score=float(risk_score),
             risk_probability=float(probabilities[risk_level]),
             class_probabilities={
                 'low': float(probabilities[0]),
