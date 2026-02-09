@@ -73,9 +73,11 @@ except ImportError:
 DB_PATH = os.path.join(os.path.dirname(__file__), "smartshift.db")
 
 def init_db():
-    """initialize sqlite database tables for scheduling feedback."""
+    """initialize sqlite database tables for scheduling and routing."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+
+    # schedule requests table - stores all scheduling requests
     cur.execute("""
         CREATE TABLE IF NOT EXISTS schedule_requests (
             id TEXT PRIMARY KEY,
@@ -90,14 +92,17 @@ def init_db():
             recommended_end TEXT,
             heat_risk_score REAL,
             shade_percentage REAL,
+            quality_score REAL,
             created_at TEXT
         )
     """)
+
+    # schedule feedback table - stores user accept/reject decisions
     cur.execute("""
         CREATE TABLE IF NOT EXISTS schedule_feedback (
             id TEXT PRIMARY KEY,
             request_id TEXT,
-            action TEXT, -- accept or reject
+            action TEXT,
             chosen_start TEXT,
             chosen_end TEXT,
             note TEXT,
@@ -105,6 +110,40 @@ def init_db():
             FOREIGN KEY(request_id) REFERENCES schedule_requests(id)
         )
     """)
+
+    # route history table - stores all route requests and selections
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS route_history (
+            id TEXT PRIMARY KEY,
+            start_lat REAL,
+            start_lon REAL,
+            end_lat REAL,
+            end_lon REAL,
+            start_name TEXT,
+            end_name TEXT,
+            travel_mode TEXT,
+            distance_km REAL,
+            duration_min REAL,
+            shade_coverage REAL,
+            heat_risk_score REAL,
+            route_geometry TEXT,
+            created_at TEXT
+        )
+    """)
+
+    # user preferences table - learns from user behavior over time
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            id TEXT PRIMARY KEY,
+            preference_type TEXT,
+            preference_key TEXT,
+            preference_value TEXT,
+            weight REAL DEFAULT 1.0,
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -113,6 +152,14 @@ def init_db():
 
 app = Flask(__name__, static_folder='.')
 CORS(app, origins=API.CORS_ORIGINS)
+
+# register v2 api blueprint (new unified architecture)
+try:
+    from api_v2 import api_v2
+    app.register_blueprint(api_v2)
+    print("✓ registered v2 api blueprint with unified architecture")
+except ImportError as e:
+    print(f"warning: could not register v2 api: {e}")
 
 # Initialize calculators
 solar_calculator = SolarPositionCalculator(
@@ -828,7 +875,7 @@ def get_heat_risk():
         json with heat risk prediction, weather data, and safety recommendations
     """
     if not ML_MODELS_AVAILABLE:
-        return jsonify({
+                return jsonify({
             "success": False,
             "error": "ml models not available. install scikit-learn and numpy."
         }), 503
@@ -918,48 +965,56 @@ def get_heat_risk():
 
         # build response with weather data and prediction
         # this answers: "is it safe to be outside right now?"
-        return jsonify({
-            "success": True,
-            "timestamp": dt.isoformat(),
+        response_payload = {
+                    "success": True,
+                    "timestamp": dt.isoformat(),
             "location": {"lat": lat, "lon": lon},
+        }
 
-            # real-time weather data from open-meteo
-            "weather": {
-                "temperature": round(temperature, 1),
-                "humidity": round(humidity, 1),
-                "wind_speed": round(wind_speed, 1),
-                "uv_index": round(uv_index, 1),
-                "source": "open-meteo" if weather_data_from_api else "fallback"
+        # include nested objects for frontend compatibility
+        # (frontend expects data.prediction and data.weather)
+        response_payload["weather"] = {
+            "temperature": round(float(temperature), 1),
+            "humidity": round(float(humidity), 1),
+            "wind_speed": round(float(wind_speed), 1),
+            "uv_index": round(float(uv_index), 1),
+            "cloud_cover": round(float(cloud_cover), 1),
+        }
+
+        response_payload["prediction"] = {
+            "risk_level": int(prediction.risk_level),
+            "risk_label": str(prediction.risk_label),
+            "risk_score": round(float(getattr(prediction, "risk_score", prediction.risk_probability)), 4),
+            "risk_probability": round(float(prediction.risk_probability), 4),
+            "confidence": round(float(prediction.risk_probability) * 100, 1),
+            "class_probabilities": {
+                k: round(float(v), 4) for k, v in prediction.class_probabilities.items()
             },
-
-            # ml model prediction
-            "prediction": {
-                "risk_level": prediction.risk_level,
-                "risk_label": prediction.risk_label,
-                "confidence": round(prediction.risk_probability * 100, 1),
-                "class_probabilities": {
-                    k: round(v * 100, 1) for k, v in prediction.class_probabilities.items()
-                },
-                "wbgt_estimate": round(prediction.wbgt_estimate, 1),
-                "heat_index": round(prediction.heat_index, 1)
+            "class_probabilities_percent": {
+                k: round(float(v) * 100, 1) for k, v in prediction.class_probabilities.items()
             },
+            "wbgt_estimate": round(float(prediction.wbgt_estimate), 1),
+            "heat_index": round(float(prediction.heat_index), 1),
+            "recommended_max_exposure": int(getattr(prediction, "recommended_max_exposure", 0)),
+            "safety_message": str(getattr(prediction, "safety_message", "")),
+        }
 
-            # safety recommendation for workers and community
-            "safety_message": prediction.safety_message,
-            "is_safe_outside": prediction.risk_level == 0,  # true if low risk
-
-            # sun position data
-            "sun_position": {
-                "altitude": round(sun_pos.altitude, 1),
-                "azimuth": round(sun_pos.azimuth, 1),
-                "is_daylight": sun_pos.is_daylight,
-                "in_shadow": in_shadow
-            }
+        # keep backward-compatible top-level fields too
+        response_payload.update({
+            "risk_level": response_payload["prediction"]["risk_level"],
+            "risk_label": response_payload["prediction"]["risk_label"],
+            "risk_score": response_payload["prediction"]["risk_score"],
+            "confidence": response_payload["prediction"]["confidence"],
+            "class_probabilities": response_payload["prediction"]["class_probabilities_percent"],
+            "wbgt_estimate": response_payload["prediction"]["wbgt_estimate"],
+            "heat_index": response_payload["prediction"]["heat_index"],
         })
 
+        return jsonify(response_payload)
+
     except Exception as e:
-        return jsonify({
-            "success": False,
+            return jsonify({
+                "success": False,
             "error": str(e)
         }), 400
 
@@ -1337,9 +1392,39 @@ def get_shaded_navigation_route():
             mapbox_token=mapbox_token
         )
 
+        # store route in database for learning and history
+        route_id = str(uuid.uuid4())
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO route_history (id, start_lat, start_lon, end_lat, end_lon,
+                    start_name, end_name, travel_mode, distance_km, duration_min,
+                    shade_coverage, heat_risk_score, route_geometry, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                route_id,
+                start_lat, start_lon,
+                end_lat, end_lon,
+                data.get('start_name', ''),
+                data.get('end_name', ''),
+                mode,
+                round(route.total_distance, 2),
+                round(route.total_duration, 1),
+                round(route.average_shade_coverage, 2),
+                round(route.average_heat_risk, 2),
+                json.dumps(route.route_geometry) if route.route_geometry else '',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            print(f"warning: could not store route in database: {db_err}")
+
         # build response with route geometry for map display
         result = {
             "success": True,
+            "route_id": route_id,
             "mode": mode,
             "departure_time": departure_time.isoformat(),
             "total_distance": round(route.total_distance, 1),
@@ -1370,6 +1455,51 @@ def get_shaded_navigation_route():
             "success": False,
             "error": str(e)
         }), 400
+
+
+@app.route('/api/route/history', methods=['GET'])
+def get_route_history():
+    """
+    retrieve route history for analytics and learning.
+
+    returns recent route requests and their outcomes.
+    """
+    try:
+        limit = int(request.args.get('limit', 50))
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, start_lat, start_lon, end_lat, end_lon,
+                   start_name, end_name, travel_mode, distance_km, duration_min,
+                   shade_coverage, heat_risk_score, created_at
+            FROM route_history
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = cur.fetchall()
+        conn.close()
+
+        routes = []
+        for row in rows:
+            routes.append({
+                "id": row[0],
+                "start": {"lat": row[1], "lon": row[2], "name": row[5]},
+                "end": {"lat": row[3], "lon": row[4], "name": row[6]},
+                "mode": row[7],
+                "distance_km": row[8],
+                "duration_min": row[9],
+                "shade_coverage": row[10],
+                "heat_risk_score": row[11],
+                "created_at": row[12]
+            })
+
+        return jsonify({
+            "success": True,
+            "count": len(routes),
+            "routes": routes
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route('/api/ml-status', methods=['GET'])
