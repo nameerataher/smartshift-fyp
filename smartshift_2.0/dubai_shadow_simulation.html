@@ -691,6 +691,186 @@
     .uv-very-high { color: #ef4444; }
     .uv-extreme { color: #dc2626; }
 
+    /* =========================================================================
+       HEAT ALERT BANNER
+       ========================================================================= */
+    #heat-alert-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 3000;
+      padding: 12px 20px;
+      background: linear-gradient(90deg, #dc2626 0%, #ef4444 50%, #dc2626 100%);
+      color: white;
+      font-weight: 600;
+      text-align: center;
+      font-size: 13px;
+      display: none;
+      animation: pulse-alert 2s infinite;
+      box-shadow: 0 4px 20px rgba(220, 38, 38, 0.5);
+    }
+
+    #heat-alert-banner.visible {
+      display: block;
+    }
+
+    @keyframes pulse-alert {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.85; }
+    }
+
+    /* =========================================================================
+       MOBILE RESPONSIVE STYLES
+       ========================================================================= */
+    @media (max-width: 768px) {
+      #hud {
+        position: fixed;
+        top: auto;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-height: 50vh;
+        border-radius: 20px 20px 0 0;
+        padding: 16px;
+      }
+
+      #sun-panel {
+        top: 10px;
+        right: 10px;
+        left: 10px;
+        width: auto;
+        padding: 12px;
+      }
+
+      #heat-weather-panel {
+        position: fixed;
+        left: 10px;
+        top: auto;
+        bottom: 55vh;
+        transform: none;
+        min-width: 150px;
+        padding: 12px;
+      }
+
+      .loc-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .sun-info {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 6px;
+      }
+
+      #scheduleModal > div,
+      #routeModal > div {
+        width: 95vw;
+        max-height: 90vh;
+        padding: 16px;
+      }
+
+      .current-time {
+        font-size: 22px;
+      }
+
+      #token-form {
+        padding: 24px;
+        margin: 16px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #hud h1 {
+        font-size: 16px;
+      }
+
+      .section {
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+
+      .section-title {
+        font-size: 10px;
+      }
+
+      #heat-weather-panel {
+        min-width: 120px;
+        padding: 10px;
+      }
+
+      #sun-panel {
+        padding: 10px;
+      }
+
+      .sun-stat {
+        padding: 6px 8px;
+      }
+
+      .sun-stat-value {
+        font-size: 14px;
+      }
+    }
+
+    /* =========================================================================
+       GPS TRACKING INDICATOR
+       ========================================================================= */
+    .gps-tracking-active {
+      position: relative;
+    }
+
+    .gps-tracking-active::before {
+      content: '';
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      width: 12px;
+      height: 12px;
+      background: #22c55e;
+      border-radius: 50%;
+      border: 2px solid #0f172a;
+      animation: gps-pulse 1.5s infinite;
+    }
+
+    @keyframes gps-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.7; }
+    }
+
+    /* Alternative slot buttons */
+    .alt-slot-btn {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      margin-bottom: 6px;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(71, 85, 105, 0.4);
+      border-radius: 8px;
+      transition: all 0.2s;
+    }
+
+    .alt-slot-btn:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+
+    .alt-slot-accept {
+      padding: 4px 8px;
+      background: #22c55e;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 9px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .alt-slot-accept:hover {
+      background: #16a34a;
+      transform: scale(1.05);
+    }
+
   </style>
 </head>
 <body>
@@ -700,23 +880,23 @@
       <h2>🌇 Dubai Shadow Simulation</h2>
       <div class="subtitle">SmartShift 2.0</div>
       <p>
-        Enter your Mapbox access token to visualize<br>
-        real-time sun positions and building shadows.<br>
+        Real-time sun positions and building shadows<br>
+        with AI-powered scheduling.
       </p>
-      <input type="text" id="tokenInput" placeholder="pk.eyJ1Ijoi..." />
-      <button id="startBtn">Launch Simulation</button>
-      <p style="font-size: 11px; color: #475569; margin-top: 16px;">
-        Free tier: 50,000 map loads/month
+      <input type="text" id="tokenInput" placeholder="Leave empty to use default token" style="opacity: 0.7;" />
+      <button id="startBtn">🚀 Launch Simulation</button>
+      <p style="font-size: 11px; color: #22c55e; margin-top: 16px;">
+        ✓ Default token ready - just click Launch!
       </p>
     </div>
   </div>
 
   <!-- schedule task modal -->
-  <div id="scheduleModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center;">
-    <div style="background: #0f172a; border-radius: 16px; padding: 20px; width: 420px; max-width: 90vw; border: 1px solid rgba(99,102,241,0.4);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h3 style="margin: 0; color: #e2e8f0; font-size: 16px;">🕐 schedule outdoor task</h3>
-        <button id="closeScheduleModal" class="loc-btn" style="padding: 4px 8px;">close</button>
+  <div id="scheduleModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+    <div style="background: linear-gradient(145deg, #0f172a 0%, #1e1b4b 100%); border-radius: 20px; padding: 24px; width: 440px; max-width: 90vw; max-height: 85vh; overflow-y: auto; border: 1px solid rgba(99,102,241,0.4); box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; position: sticky; top: -24px; background: linear-gradient(145deg, #0f172a 0%, #1e1b4b 100%); padding: 10px 0; margin-top: -10px; z-index: 1;">
+        <h3 style="margin: 0; color: #e2e8f0; font-size: 18px; font-weight: 700;">🕐 SCHEDULE OUTDOOR TASK</h3>
+        <button id="closeScheduleModal" class="loc-btn" style="padding: 6px 10px; font-size: 16px; line-height: 1;">✕</button>
       </div>
 
       <input type="text" id="taskName" placeholder="task name (e.g., facade cleaning)"
@@ -816,36 +996,93 @@
   </div>
 
   <!-- shade-optimized route modal -->
-  <div id="routeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center;">
-    <div style="background: #0f172a; border-radius: 16px; padding: 20px; width: 420px; max-width: 90vw; border: 1px solid rgba(99,102,241,0.4);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <h3 style="margin: 0; color: #e2e8f0; font-size: 16px;">🗺️ shade-optimized route</h3>
-        <button id="closeRouteModal" class="loc-btn" style="padding: 4px 8px;">close</button>
+  <div id="routeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; backdrop-filter: blur(4px);">
+    <div style="background: linear-gradient(145deg, #0f172a 0%, #1e1b4b 100%); border-radius: 20px; padding: 24px; width: 440px; max-width: 90vw; max-height: 85vh; overflow-y: auto; border: 1px solid rgba(99,102,241,0.4); box-shadow: 0 25px 50px rgba(0,0,0,0.5);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0; color: #e2e8f0; font-size: 18px; font-weight: 700;">🗺️ SHADE-OPTIMIZED ROUTE</h3>
+        <button id="closeRouteModal" class="loc-btn" style="padding: 6px 10px; font-size: 16px; line-height: 1;">✕</button>
       </div>
 
-      <div style="display: grid; grid-template-columns: 1fr; gap: 6px; margin-bottom: 8px;">
-        <input type="text" id="routeFrom" placeholder="from location"
-               style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71,85,105,0.4); background: rgba(15,23,42,0.8); color: #e2e8f0; font-size: 10px;" />
-        <input type="text" id="routeTo" placeholder="to location"
-               style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71,85,105,0.4); background: rgba(15,23,42,0.8); color: #e2e8f0; font-size: 10px;" />
+      <!-- google maps style from/to inputs -->
+      <div style="position: relative; margin-bottom: 12px;">
+        <!-- from/to indicator line -->
+        <div style="position: absolute; left: 14px; top: 18px; bottom: 18px; width: 2px; background: linear-gradient(180deg, #22c55e 0%, #38bdf8 100%);"></div>
+
+        <!-- from input -->
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 2px solid white; z-index: 1;"></div>
+          <div style="flex: 1; position: relative;">
+            <input type="text" id="routeFrom" placeholder="📍 From: Search location or click map"
+                   style="width: 100%; padding: 12px 40px 12px 12px; border-radius: 10px; border: 1px solid rgba(71,85,105,0.4); background: rgba(15,23,42,0.9); color: #e2e8f0; font-size: 11px;" />
+            <button id="gpsFromBtn" style="position: absolute; right: 6px; top: 50%; transform: translateY(-50%); padding: 4px 8px; background: rgba(34,197,94,0.3); border: 1px solid #22c55e; border-radius: 6px; color: #22c55e; font-size: 10px; cursor: pointer;" title="Use GPS">📡</button>
+          </div>
+        </div>
+
+        <!-- to input -->
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 12px; height: 12px; border-radius: 50%; background: #38bdf8; border: 2px solid white; z-index: 1;"></div>
+          <div style="flex: 1; position: relative;">
+            <input type="text" id="routeTo" placeholder="📍 To: Search destination"
+                   style="width: 100%; padding: 12px 12px; border-radius: 10px; border: 1px solid rgba(71,85,105,0.4); background: rgba(15,23,42,0.9); color: #e2e8f0; font-size: 11px;" />
+          </div>
+        </div>
       </div>
-      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;">
-        <select id="travelMode" style="padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(71,85,105,0.4); background: rgba(15,23,42,0.8); color: #e2e8f0; font-size: 11px;">
-          <option value="walking">🚶 walking</option>
-          <option value="cycling">🚴 cycling</option>
-        </select>
-        <button class="loc-btn" id="setPointsBtn" style="padding: 8px; font-size: 10px;">📍 set points on map</button>
+
+      <!-- travel mode selector -->
+      <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+        <button id="modeWalking" class="loc-btn" style="flex: 1; padding: 10px; background: linear-gradient(135deg, #16a34a 0%, #22c55e 100%); border-color: #22c55e; color: white;">
+          🚶 Walking
+        </button>
+        <button id="modeCycling" class="loc-btn" style="flex: 1; padding: 10px;">
+          🚴 Cycling
+        </button>
+        <button class="loc-btn" id="setPointsBtn" style="padding: 10px; font-size: 10px;">📍 Map</button>
       </div>
-      <button class="loc-btn" id="findRouteBtn" style="width: 100%; padding: 10px; background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%); border-color: #38bdf8; color: white;">
-        🗺️ find shaded route
+
+      <select id="travelMode" style="display: none;">
+        <option value="walking" selected>walking</option>
+        <option value="cycling">cycling</option>
+      </select>
+
+      <button class="loc-btn" id="findRouteBtn" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%); border-color: #38bdf8; color: white; font-size: 12px; font-weight: 600;">
+        🗺️ FIND SHADED ROUTE
       </button>
 
-      <div id="route-result" style="display: none; padding: 10px; background: rgba(14,165,233,0.1); border-radius: 8px; border: 1px solid rgba(14,165,233,0.3); margin-top: 10px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <span style="font-size: 10px; color: #38bdf8; font-weight: 600;">🌴 shade-optimized route</span>
-          <span id="shade-score" style="padding: 2px 6px; border-radius: 4px; font-size: 9px; background: #22c55e; color: white;">--/100</span>
+      <!-- route result with gps-like display -->
+      <div id="route-result" style="display: none; padding: 12px; background: rgba(14,165,233,0.1); border-radius: 12px; border: 1px solid rgba(14,165,233,0.3); margin-top: 12px;">
+        <!-- header with shade score -->
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div id="gps-indicator" class="gps-tracking-active" style="width: 24px; height: 24px; background: linear-gradient(135deg, #38bdf8, #0ea5e9); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+              <span style="font-size: 12px;">📍</span>
+            </div>
+            <span style="font-size: 12px; color: #38bdf8; font-weight: 600;">SHADE ROUTE READY</span>
+          </div>
+          <span id="shade-score" style="padding: 4px 10px; border-radius: 6px; font-size: 11px; background: #22c55e; color: white; font-weight: 600;">--/100</span>
         </div>
-        <div id="route-details" style="font-size: 10px; color: #e2e8f0; line-height: 1.5;"></div>
+
+        <!-- route stats -->
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px;">
+          <div style="text-align: center; padding: 8px; background: rgba(34, 197, 94, 0.15); border-radius: 8px;">
+            <div style="font-size: 8px; color: #64748b;">DISTANCE</div>
+            <div id="route-distance" style="font-size: 14px; font-weight: 600; color: #22c55e;">-- km</div>
+          </div>
+          <div style="text-align: center; padding: 8px; background: rgba(56, 189, 248, 0.15); border-radius: 8px;">
+            <div style="font-size: 8px; color: #64748b;">DURATION</div>
+            <div id="route-duration" style="font-size: 14px; font-weight: 600; color: #38bdf8;">-- min</div>
+          </div>
+          <div style="text-align: center; padding: 8px; background: rgba(167, 139, 250, 0.15); border-radius: 8px;">
+            <div style="font-size: 8px; color: #64748b;">SHADE</div>
+            <div id="route-shade" style="font-size: 14px; font-weight: 600; color: #a78bfa;">--%</div>
+          </div>
+        </div>
+
+        <div id="route-details" style="font-size: 10px; color: #e2e8f0; line-height: 1.6;"></div>
+
+        <!-- start navigation button -->
+        <button id="startNavigationBtn" style="width: 100%; margin-top: 10px; padding: 12px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); border: none; border-radius: 10px; color: white; font-size: 12px; font-weight: 600; cursor: pointer;">
+          🧭 START NAVIGATION
+        </button>
       </div>
     </div>
   </div>
@@ -853,6 +1090,12 @@
   <!-- loading overlay -->
   <div id="loading-overlay">
     <div class="loading-text">Calculating shadows...</div>
+  </div>
+
+  <!-- heat alert banner -->
+  <div id="heat-alert-banner">
+    ⚠️ <span id="heat-alert-text">HIGH HEAT RISK DETECTED - Avoid prolonged outdoor exposure</span>
+    <button onclick="dismissHeatAlert()" style="margin-left: 20px; padding: 4px 12px; background: rgba(255,255,255,0.2); border: 1px solid white; border-radius: 4px; color: white; cursor: pointer; font-size: 11px;">Dismiss</button>
   </div>
 
   <!-- map container -->
@@ -914,6 +1157,22 @@
 
     <!-- check heat risk button moved to the current heat risk box -->
 
+    <!-- heatmap layer toggle -->
+    <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(71, 85, 105, 0.3);">
+      <button id="toggleHeatmapBtn" style="
+        width: 100%;
+        padding: 10px;
+        background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+        border: none;
+        border-radius: 8px;
+        color: white;
+        font-size: 10px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+      ">🔥 SHOW HEAT MAP</button>
+    </div>
+
     <div style="font-size: 8px; color: #64748b; text-align: center; margin-top: 8px;">
       Data: Open-Meteo (real-time)
       </div>
@@ -935,7 +1194,7 @@
   ">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
       <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px;">Sun & Time</div>
-      <button id="sunPanelToggle" class="loc-btn" style="padding: 4px 8px; font-size: 9px;">minimize</button>
+      <button id="sunPanelToggle" class="loc-btn" style="padding: 4px 8px; font-size: 14px; line-height: 1;" title="Minimize">─</button>
     </div>
     <div id="sun-panel-content">
       <!-- sun position metrics -->
@@ -1016,13 +1275,13 @@
   <!-- main hud panel (left) -->
   <div id="hud" style="display: none;">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-      <h1 style="margin: 0;">SmartShift: Your Intelligent Task Scheduler</h1>
-      <button id="hudToggleBtn" class="loc-btn" style="padding: 4px 8px; font-size: 9px;">minimize</button>
+      <h1 style="margin: 0;">SMARTSHIFT</h1>
+      <button id="hudToggleBtn" class="loc-btn" style="padding: 4px 8px; font-size: 14px; line-height: 1;" title="Minimize">─</button>
     </div>
 
     <!-- location navigation -->
     <div class="section">
-      <div class="section-title">Location Search</div>
+      <div class="section-title">LOCATION SEARCH</div>
 
       <!-- Location Search (above landmarks) -->
       <div style="margin-top: 8px; position: relative;">
@@ -1072,19 +1331,22 @@
     <!-- ML-Powered Scheduling Section -->
     <div class="section" id="ml-section">
       <div class="section-title" style="cursor: pointer;" onclick="toggleMLPanel()">
-        🤖 AI Scheduling & Navigation
+        🤖 AI SCHEDULING & NAVIGATION
         <span id="ml-toggle-icon" style="margin-left: auto; font-size: 12px;">▼</span>
       </div>
 
       <div id="ml-panel-content">
         <!-- Heat Risk Display - Shows 5 key metrics -->
         <div id="heat-risk-display" style="margin-bottom: 12px; padding: 10px; background: rgba(15, 23, 42, 0.6); border-radius: 10px; border: 1px solid rgba(71, 85, 105, 0.2);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-            <span style="font-size: 10px; color: #64748b; text-transform: uppercase;">current heat risk</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-size: 10px; color: #64748b; text-transform: uppercase;">CURRENT HEAT RISK</span>
             <span id="heat-risk-badge" style="padding: 4px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #22c55e; color: white;">--</span>
           </div>
-          <div id="heat-risk-area" style="font-size: 9px; color: #64748b; margin-bottom: 8px;">
-            area: map center
+          <div id="heat-risk-area" style="font-size: 9px; color: #64748b; margin-bottom: 4px;">
+            📍 Area: Map Center
+          </div>
+          <div id="heat-risk-time" style="font-size: 9px; color: #64748b; margin-bottom: 8px;">
+            🕐 Time: --:-- | Date: --
           </div>
 
           <!-- 5 Key Weather Metrics Grid -->
@@ -1142,19 +1404,7 @@
           </button>
         </div>
 
-        <!-- Quick Actions -->
-        <div style="display: grid; grid-template-columns: 1fr; gap: 6px; margin-top: 10px;">
-          <button class="loc-btn" id="mlStatusBtn" style="padding: 8px; font-size: 10px;">
-            ⚙️ ml status
-          </button>
-        </div>
       </div>
-    </div>
-
-    <!-- Footer -->
-    <div class="footer-controls">
-      <button class="footer-btn" id="resetToken">Change Token</button>
-      <button class="footer-btn" id="toggleShadows">Disable Shadows</button>
     </div>
   </div>
 
@@ -1191,10 +1441,14 @@
     let map = null;
     let animationInterval = null;
     let isPlaying = false;
-    let currentMinutes = 720;  // Default to noon (12:00)
+    // initialize to current time (dubai utc+4)
+    const nowDubai = new Date(new Date().toLocaleString("en-US", {timeZone: "Asia/Dubai"}));
+    let currentMinutes = nowDubai.getHours() * 60 + nowDubai.getMinutes();
     let animationSpeed = 500;  // ms per frame
     let shadowsVisible = true;
     let isUpdatingShadows = false;
+    let heatAlertDismissed = false;
+    let heatmapVisible = false;
 
     // weather forecast cache - stores 7 days of hourly data
     let weatherForecastCache = null;
@@ -1248,6 +1502,181 @@
       const hours = Math.floor(minutes / 60);
       const mins = minutes % 60;
       return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
+    }
+
+    // heat alert management
+    function showHeatAlert(message) {
+      if (heatAlertDismissed) return;
+      const banner = document.getElementById('heat-alert-banner');
+      const text = document.getElementById('heat-alert-text');
+      if (banner && text) {
+        text.textContent = message || 'HIGH HEAT RISK DETECTED - Avoid prolonged outdoor exposure';
+        banner.classList.add('visible');
+      }
+    }
+
+    function dismissHeatAlert() {
+      const banner = document.getElementById('heat-alert-banner');
+      if (banner) {
+        banner.classList.remove('visible');
+        heatAlertDismissed = true;
+        // reset after 30 minutes
+        setTimeout(() => { heatAlertDismissed = false; }, 30 * 60 * 1000);
+      }
+    }
+
+    function checkAndShowHeatAlert(riskLevel) {
+      if (riskLevel === 'high' || riskLevel === 2) {
+        showHeatAlert('⚠️ HIGH HEAT RISK - Limit outdoor exposure, stay hydrated, seek shade');
+      } else if (riskLevel === 'medium' || riskLevel === 1) {
+        // show a less severe warning
+        const banner = document.getElementById('heat-alert-banner');
+        if (banner && !heatAlertDismissed) {
+          banner.style.background = 'linear-gradient(90deg, #f59e0b 0%, #fbbf24 50%, #f59e0b 100%)';
+          document.getElementById('heat-alert-text').textContent =
+            '⚡ MODERATE HEAT RISK - Take regular breaks and stay hydrated';
+          banner.classList.add('visible');
+        }
+      }
+    }
+
+    // update heat risk time display
+    function updateHeatRiskTimeDisplay() {
+      const timeEl = document.getElementById('heat-risk-time');
+      if (timeEl) {
+        const dateInput = document.getElementById('dateInput');
+        const dateStr = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
+        timeEl.textContent = `🕐 Time: ${formatTime(currentMinutes)} | Date: ${dateStr}`;
+      }
+    }
+
+    // heat/uv heatmap layer toggle
+    async function toggleHeatmapLayer() {
+      if (!map) return;
+
+      const btn = document.getElementById('toggleHeatmapBtn');
+      heatmapVisible = !heatmapVisible;
+
+      if (heatmapVisible) {
+        // v2 heatmap: fetch comfort grid geojson from backend
+        // we visualize "danger" density by weighting (1 - comfort_score)
+        try {
+          const bounds = map.getBounds();
+          const sw = bounds.getSouthWest();
+          const ne = bounds.getNorthEast();
+
+          const dateInput = document.getElementById('dateInput');
+          const date = (dateInput && dateInput.value) ? dateInput.value : new Date().toISOString().split('T')[0];
+          const time = formatTime(currentMinutes);
+          const timeISO = new Date(`${date}T${time}:00`).toISOString();
+
+          const payload = {
+            bbox: {
+              min_lat: sw.lat,
+              max_lat: ne.lat,
+              min_lon: sw.lng,
+              max_lon: ne.lng
+            },
+            grid_size_meters: 25,
+            time: timeISO
+          };
+
+          const resp = await fetch(`${API_BASE}/api/v2/heatmap`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const json = await resp.json();
+          if (!json.success) throw new Error(json.error || 'heatmap fetch failed');
+
+          if (!map.getSource('comfort-heatmap')) {
+            map.addSource('comfort-heatmap', { type: 'geojson', data: json.geojson });
+            map.addLayer({
+              id: 'comfort-heatmap-layer',
+              type: 'heatmap',
+              source: 'comfort-heatmap',
+              maxzoom: 18,
+              paint: {
+                // weight: higher weight = more dangerous (lower comfort)
+                'heatmap-weight': [
+                  'interpolate', ['linear'], ['get', 'comfort_score'],
+                  0, 1,
+                  1, 0
+                ],
+                'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 0, 0.8, 18, 2.5],
+                // blue=comfortable, red=dangerous (based on density)
+                'heatmap-color': [
+                  'interpolate', ['linear'], ['heatmap-density'],
+                  0, 'rgba(59,130,246,0)',
+                  0.2, 'rgba(34,211,238,0.6)',
+                  0.4, 'rgba(34,197,94,0.75)',
+                  0.6, 'rgba(245,158,11,0.85)',
+                  0.8, 'rgba(249,115,22,0.9)',
+                  1, 'rgba(239,68,68,0.95)'
+                ],
+                'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 0, 6, 18, 30],
+                'heatmap-opacity': 0.75
+              }
+            });
+          } else {
+            map.getSource('comfort-heatmap').setData(json.geojson);
+            map.setLayoutProperty('comfort-heatmap-layer', 'visibility', 'visible');
+          }
+        } catch (err) {
+          console.error('heatmap load failed:', err);
+        }
+
+        btn.textContent = '🔥 HIDE HEAT MAP';
+        btn.style.background = 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)';
+      } else {
+        if (map.getLayer('comfort-heatmap-layer')) map.setLayoutProperty('comfort-heatmap-layer', 'visibility', 'none');
+        btn.textContent = '🔥 SHOW HEAT MAP';
+        btn.style.background = 'linear-gradient(135deg, #ef4444 0%, #f97316 100%)';
+      }
+    }
+
+    // generate heat points for heatmap visualization
+    function generateHeatPoints(centerLat, centerLng, weather) {
+      const points = [];
+      const gridSize = 20; // number of points in each direction
+      const spread = 0.02; // degrees spread from center
+
+      const baseTemp = weather ? weather.temperature : 30;
+      const sunAltitude = weather ? weather.sunAltitude || 45 : 45;
+
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const lat = centerLat - spread + (i / gridSize) * spread * 2;
+          const lng = centerLng - spread + (j / gridSize) * spread * 2;
+
+          // calculate intensity based on:
+          // - distance from center (urban heat island effect)
+          // - sun altitude
+          // - random variation for realism
+          const distFromCenter = Math.sqrt(
+            Math.pow(lat - centerLat, 2) + Math.pow(lng - centerLng, 2)
+          );
+
+          const urbanHeat = 1 - (distFromCenter / spread) * 0.3;
+          const sunFactor = Math.max(0, sunAltitude / 90);
+          const randomVar = 0.8 + Math.random() * 0.4;
+
+          const intensity = Math.min(1, Math.max(0,
+            urbanHeat * sunFactor * randomVar * (baseTemp / 40)
+          ));
+
+          points.push({
+            type: 'Feature',
+            properties: { intensity: intensity },
+            geometry: {
+              type: 'Point',
+              coordinates: [lng, lat]
+            }
+          });
+        }
+      }
+
+      return points;
     }
 
     // populate time dropdown with 24-hour options (every 30 minutes)
@@ -2225,21 +2654,31 @@
     }
 
     function initMap(token) {
-      mapboxgl.accessToken = token;
+      console.log('initMap called with token:', token ? token.substring(0, 10) + '...' : 'none');
 
-      const downtown = locations.downtown;
+      try {
+        mapboxgl.accessToken = token;
 
-      map = new mapboxgl.Map({
-        container: 'map',
-        style: 'mapbox://styles/mapbox/standard',
-        center: downtown.center,
-        zoom: downtown.zoom,
-        pitch: downtown.pitch,
-        bearing: downtown.bearing,
-        antialias: true
-      });
+        const downtown = locations.downtown;
 
-      map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+        map = new mapboxgl.Map({
+          container: 'map',
+          style: 'mapbox://styles/mapbox/standard',
+          center: downtown.center,
+          zoom: downtown.zoom,
+          pitch: downtown.pitch,
+          bearing: downtown.bearing,
+          antialias: true
+        });
+
+        map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right');
+
+        console.log('Map object created successfully');
+      } catch (err) {
+        console.error('Error creating map:', err);
+        alert('Error initializing map: ' + err.message);
+        return;
+      }
 
       map.on('load', () => {
         setStatus('Map loaded! Initializing 3D lighting...');
@@ -2659,15 +3098,19 @@
     // update heat risk display with api response
     // updates both left panel and right panel displays
     function updateHeatRiskDisplay(data) {
-      const prediction = data.prediction;
-      const weather = data.weather;
+      // support both response shapes:
+      // - new shape: { prediction: {...}, weather: {...} }
+      // - legacy shape: { risk_label, heat_index, ... } (no nested objects)
+      const prediction = data.prediction || data;
+      const weather = data.weather || data.weather_data || data;
       const colors = { low: '#22c55e', medium: '#f59e0b', high: '#ef4444' };
 
       // update right panel badge
       const badge = document.getElementById('heat-risk-badge');
       if (badge) {
-        badge.textContent = prediction.risk_label.toUpperCase();
-        badge.style.background = colors[prediction.risk_label] || '#64748b';
+        const label = (prediction && prediction.risk_label) ? String(prediction.risk_label) : 'unknown';
+        badge.textContent = label.toUpperCase();
+        badge.style.background = colors[label] || '#64748b';
       }
 
       // update area label for heat risk box
@@ -2818,20 +3261,32 @@
           ⏳ Calculating shadow & heat risk...
         </span>`;
 
-        // call schedule API (assumes shade required, uses mixed surface)
-        const params = new URLSearchParams({
+        // call v2 scheduling api (unified space-time model)
+        // this treats the chosen point as a "work zone" with a radius
+        const payloadV2 = {
           task_name: taskName,
-          duration: duration,
-          lat: location.lat,
-          lon: location.lng,
+          task_duration_minutes: duration,
           date: date,
           start_hour: startHour,
           end_hour: endHour,
-          requires_shade: true,  // always require shade for outdoor workers
-          surface_type: 'mixed'
-        });
+          recommendation_count: 5,
+          rank_by: 'shade',
+          work_zone: {
+            zone_id: `ui_zone_${Date.now()}`,
+            name: 'selected work zone',
+            lat: location.lat,
+            lon: location.lng,
+            radius: 50,
+            is_facade: false,
+            zone_type: 'general'
+          }
+        };
 
-        const response = await fetch(`${API_BASE}/api/schedule?${params}`);
+        const response = await fetch(`${API_BASE}/api/v2/schedule`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payloadV2)
+        });
 
         if (!response.ok) {
           throw new Error('api request failed');
@@ -2853,35 +3308,56 @@
 
     // display schedule result
     function displayScheduleResult(data) {
-      const rec = data.recommendation;
+      // supports both:
+      // - v2: data.recommendation.best_schedule
+      // - legacy: data.recommendation.best_start_time
+      const rec = data.recommendation || {};
       const detailsDiv = document.getElementById('schedule-details');
       lastScheduleRequestId = data.request_id || null;
       lastScheduleRecommendation = rec;
 
-      // quality indicator color based on score
-      const qualityColor = rec.quality_score >= 70 ? '#22c55e' :
-                          rec.quality_score >= 50 ? '#f59e0b' : '#ef4444';
+      const isV2 = !!rec.best_schedule;
+      const best = isV2 ? rec.best_schedule : rec;
 
-      // heat risk color
-      const heatRiskPercent = rec.heat_risk_score * 100;
+      const bestStart = isV2
+        ? new Date(best.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : best.best_start_time;
+      const bestEnd = isV2
+        ? new Date(best.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : best.end_time;
+
+      // v2 exposes comfort_score (0-1). we display it as /100 for consistency.
+      const comfortScore = isV2 ? (best.comfort_score || 0) : ((rec.quality_score || 0) / 100);
+      const comfortScore100 = Math.round(comfortScore * 100);
+
+      const qualityColor = comfortScore100 >= 70 ? '#22c55e' :
+                          comfortScore100 >= 50 ? '#f59e0b' : '#ef4444';
+
+      const heatRiskScore = isV2 ? (best.heat_risk_score || 0) : (rec.heat_risk_score || 0);
+      const heatRiskPercent = heatRiskScore * 100;
       const heatRiskColor = heatRiskPercent <= 30 ? '#22c55e' :
                            heatRiskPercent <= 60 ? '#f59e0b' : '#ef4444';
       const heatRiskLabel = heatRiskPercent <= 30 ? 'LOW' :
                            heatRiskPercent <= 60 ? 'MEDIUM' : 'HIGH';
 
+      const shadePct = isV2 ? (best.shadow_percentage || 0) : (rec.shade_percentage || 0);
+      const areaText = (rec.work_zone && rec.work_zone.name)
+        ? rec.work_zone.name
+        : (rec.location || 'map center');
+
       detailsDiv.innerHTML = `
         <div style="margin-bottom: 6px;">
-          <strong style="color: ${qualityColor}; font-size: 14px;">⏰ Best Time: ${rec.best_start_time} - ${rec.end_time}</strong>
+          <strong style="color: ${qualityColor}; font-size: 14px;">⏰ Best Time: ${bestStart} - ${bestEnd}</strong>
         </div>
         <div style="font-size: 9px; color: #64748b; margin-bottom: 8px;">
-          📍 area: ${rec.location || 'map center'}
+          📍 area: ${areaText}
         </div>
 
         <!-- Shadow & Heat Risk Analysis -->
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
           <div style="text-align: center; padding: 6px; background: rgba(34, 197, 94, 0.15); border-radius: 6px;">
             <div style="font-size: 8px; color: #64748b;">SHADOW</div>
-            <div style="font-size: 14px; font-weight: 600; color: #22c55e;">${rec.shade_percentage}%</div>
+            <div style="font-size: 14px; font-weight: 600; color: #22c55e;">${Math.round(shadePct)}%</div>
           </div>
           <div style="text-align: center; padding: 6px; background: ${heatRiskColor}20; border-radius: 6px;">
             <div style="font-size: 8px; color: #64748b;">HEAT RISK</div>
@@ -2890,44 +3366,97 @@
         </div>
 
         <div style="font-size: 10px; color: #94a3b8; margin-bottom: 6px;">
-          📊 Schedule Quality: <span style="color: ${qualityColor}; font-weight: 600;">${rec.quality_score}/100</span>
+          📊 Comfort Score: <span style="color: ${qualityColor}; font-weight: 600;">${comfortScore100}/100</span>
+          ${isV2 && rec.recommendation_reason ? `<div style="margin-top:6px; font-size: 9px; color:#e2e8f0;">${rec.recommendation_reason}</div>` : ``}
         </div>
 
-        ${data.alternatives && data.alternatives.length > 0 ? `
-          <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.1);">
-            <div style="font-size: 9px; color: #64748b; margin-bottom: 6px;">📅 Alternative Times:</div>
-            ${data.alternatives.slice(0, 3).map(alt => {
-              const altHeatColor = alt.heat_risk_score * 100 <= 30 ? '#22c55e' :
-                                  alt.heat_risk_score * 100 <= 60 ? '#f59e0b' : '#ef4444';
-              return `<div style="font-size: 10px; color: #e2e8f0; display: flex; justify-content: space-between; margin-bottom: 2px;">
-                <span>${alt.start_time}</span>
-                <span style="color: #94a3b8;">shade: ${alt.shade_percentage}%</span>
-                <span style="color: ${altHeatColor};">risk: ${(alt.heat_risk_score * 100).toFixed(0)}%</span>
+        ${((isV2 && rec.alternatives && rec.alternatives.length > 0) || (!isV2 && data.alternatives && data.alternatives.length > 0)) ? `
+          <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1);">
+            <div style="font-size: 9px; color: #64748b; margin-bottom: 8px;">📅 ALTERNATIVE TIMES:</div>
+            ${(isV2 ? rec.alternatives : data.alternatives).slice(0, 4).map((alt, idx) => {
+              const altHeat = (alt.heat_risk_score || 0);
+              const altHeatColor = altHeat * 100 <= 30 ? '#22c55e' :
+                                  altHeat * 100 <= 60 ? '#f59e0b' : '#ef4444';
+              const altHeatLabel = altHeat * 100 <= 30 ? 'LOW' :
+                                  altHeat * 100 <= 60 ? 'MED' : 'HIGH';
+              const altStart = isV2
+                ? new Date(alt.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : alt.start_time;
+              const altShade = isV2 ? (alt.shadow_percentage || 0) : (alt.shade_percentage || 0);
+              return `<div class="alt-slot-btn" data-alt-idx="${idx}">
+                <div>
+                  <div style="font-size: 11px; font-weight: 600; color: #e2e8f0;">${altStart}</div>
+                  <div style="font-size: 9px; color: #94a3b8;">
+                    🌥️ ${Math.round(altShade)}% shade |
+                    <span style="color: ${altHeatColor};">🌡️ ${altHeatLabel}</span>
+                  </div>
+                </div>
+                <button class="alt-slot-accept" onclick="acceptAlternativeSlot(${idx}, '${alt.start_time}')">
+                  ✓ Accept
+                </button>
               </div>`;
             }).join('')}
           </div>
         ` : ''}
       `;
+
+      // store alternatives for later use
+      window.lastScheduleAlternatives = isV2 ? (rec.alternatives || []) : (data.alternatives || []);
     }
 
     // send user feedback to server (accept or reject schedule)
-    async function sendScheduleFeedback(action) {
-      if (!lastScheduleRequestId || !lastScheduleRecommendation) return;
+    async function sendScheduleFeedback(action, startTime = null, endTime = null) {
+      if (!lastScheduleRequestId) return;
       try {
         const payload = {
           request_id: lastScheduleRequestId,
           action: action,
-          chosen_start: lastScheduleRecommendation.best_start_time,
-          chosen_end: lastScheduleRecommendation.end_time,
+          chosen_start: startTime || (lastScheduleRecommendation ? lastScheduleRecommendation.best_start_time : null),
+          chosen_end: endTime || (lastScheduleRecommendation ? lastScheduleRecommendation.end_time : null),
           note: ''
         };
-        await fetch(`${API_BASE}/api/schedule/feedback`, {
+        const response = await fetch(`${API_BASE}/api/schedule/feedback`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
+        const result = await response.json();
+        if (result.success) {
+          console.log('schedule feedback saved:', action);
+        }
       } catch (err) {
         console.error('feedback save failed:', err);
+      }
+    }
+
+    // accept an alternative time slot
+    function acceptAlternativeSlot(idx, startTime) {
+      const alternatives = window.lastScheduleAlternatives || [];
+      if (idx >= 0 && idx < alternatives.length) {
+        const alt = alternatives[idx];
+        // send feedback with this alternative
+        sendScheduleFeedback('accept', alt.start_time, alt.end_time || startTime);
+
+        // show confirmation
+        const resultDiv = document.getElementById('schedule-result');
+        if (resultDiv) {
+          resultDiv.style.borderColor = '#22c55e';
+          resultDiv.style.background = 'rgba(34,197,94,0.2)';
+          const detailsDiv = document.getElementById('schedule-details');
+          if (detailsDiv) {
+            detailsDiv.innerHTML = `
+              <div style="text-align: center; padding: 10px;">
+                <div style="font-size: 24px; margin-bottom: 8px;">✅</div>
+                <div style="font-size: 12px; color: #22c55e; font-weight: 600;">Schedule Accepted!</div>
+                <div style="font-size: 11px; color: #e2e8f0; margin-top: 4px;">${startTime}</div>
+                <div style="font-size: 9px; color: #94a3b8; margin-top: 8px;">Saved to your task history</div>
+              </div>
+            `;
+          }
+        }
+
+        // close modal after delay
+        setTimeout(() => closeModal('scheduleModal'), 2000);
       }
     }
 
@@ -3022,25 +3551,36 @@
         resultDiv.style.display = 'block';
         detailsDiv.innerHTML = '<span style="color: #94a3b8;">fetching route from mapbox...</span>';
 
-        // pass mapbox token to api for realistic routing
-        const params = new URLSearchParams({
-          start_lat: routeStartCoords[1],
-          start_lon: routeStartCoords[0],
-          end_lat: routeEndCoords[1],
-          end_lon: routeEndCoords[0],
+        // v2 route api: base routing (mapbox) + environmental reranking
+        // departure_time is used to evaluate comfort at eta
+        const departureTimeISO = new Date(`${date}T${time}:00`).toISOString();
+        const payloadV2 = {
+          start: { lat: routeStartCoords[1], lon: routeStartCoords[0] },
+          end: { lat: routeEndCoords[1], lon: routeEndCoords[0] },
           mode: mode,
-          departure_date: date,
-          departure_time: time,
-          mapbox_token: mapboxgl.accessToken  // pass token for directions api
+          departure_time: departureTimeISO,
+          mapbox_token: mapboxgl.accessToken,
+          alternatives: 3
+        };
+
+        const response = await fetch(`${API_BASE}/api/v2/route`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payloadV2)
         });
 
-        const response = await fetch(`${API_BASE}/api/shaded-route?${params}`);
+        // if backend returns 4xx/5xx, show the real error message (not just "api request failed")
+        let data = null;
+        try { data = await response.json(); } catch (e) {}
 
         if (!response.ok) {
-          throw new Error('api request failed');
+          const msg = (data && (data.error || data.message)) ? (data.error || data.message) : `api request failed (${response.status})`;
+          throw new Error(msg);
         }
 
-        const data = await response.json();
+        if (!data) {
+          throw new Error('api returned empty response');
+        }
 
         if (data.success) {
           displayRouteResult(data);
@@ -3059,36 +3599,60 @@
 
     // display route result
     function displayRouteResult(data) {
-      // data comes directly from API (not nested under 'route')
+      // supports both:
+      // - v2: data.recommendation.recommended_route
+      // - legacy: data.* top-level fields
       const detailsDiv = document.getElementById('route-details');
       const scoreSpan = document.getElementById('shade-score');
+      const resultDiv = document.getElementById('route-result');
 
-      // update shade score badge
-      const shadeScore = data.shade_score || 0;
-      scoreSpan.textContent = `${Math.round(shadeScore)}/100`;
-      scoreSpan.style.background = shadeScore >= 70 ? '#22c55e' :
-                                   shadeScore >= 50 ? '#f59e0b' : '#ef4444';
+      // show result section
+      if (resultDiv) resultDiv.style.display = 'block';
+
+      const isV2 = !!(data.recommendation && data.recommendation.recommended_route);
+      const rec = isV2 ? data.recommendation : null;
+      const route = isV2 ? rec.recommended_route : data;
+
+      // update score badge (use comfort score for v2)
+      const score100 = isV2 ? Math.round((route.comfort_score || 0) * 100) : Math.round((data.shade_score || 0));
+      scoreSpan.textContent = `${score100}/100`;
+      scoreSpan.style.background = score100 >= 70 ? '#22c55e' :
+                                   score100 >= 50 ? '#f59e0b' : '#ef4444';
 
       // calculate heat risk level from percentage
-      const heatRisk = data.average_heat_risk || 0;
-      const riskLevel = heatRisk <= 30 ? 'low' : heatRisk <= 60 ? 'moderate' : 'high';
-      const riskColors = { low: '#22c55e', moderate: '#f59e0b', high: '#ef4444' };
+      let heatRiskPct = 0;
+      if (isV2 && route.risk_distribution) {
+        const r = route.risk_distribution;
+        const total = (r.high || 0) + (r.medium || 0) + (r.low || 0);
+        heatRiskPct = total > 0 ? (((r.high || 0) + 0.5 * (r.medium || 0)) / total) * 100 : 0;
+      } else {
+        heatRiskPct = data.average_heat_risk || 0;
+      }
+      const riskLevel = heatRiskPct <= 30 ? 'LOW' : heatRiskPct <= 60 ? 'MEDIUM' : 'HIGH';
+      const riskColors = { LOW: '#22c55e', MEDIUM: '#f59e0b', HIGH: '#ef4444' };
 
       // format distance and duration
-      const distanceKm = ((data.total_distance || 0) / 1000).toFixed(2);
-      const durationMin = Math.round((data.total_duration || 0) / 60);
+      const distanceKm = (((route.distance_meters || data.total_distance || 0)) / 1000).toFixed(1);
+      const durationMin = Math.round(((route.duration_seconds || data.total_duration || 0)) / 60);
+
+      // update the stats boxes
+      const distanceEl = document.getElementById('route-distance');
+      const durationEl = document.getElementById('route-duration');
+      const shadeEl = document.getElementById('route-shade');
+
+      if (distanceEl) distanceEl.textContent = `${distanceKm} km`;
+      if (durationEl) durationEl.textContent = `${durationMin} min`;
+      if (shadeEl) shadeEl.textContent = `${Math.round(route.shade_coverage_percent || data.average_shade_coverage || 0)}%`;
 
       detailsDiv.innerHTML = `
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-          <div>📏 ${distanceKm} km</div>
-          <div>⏱️ ${durationMin} min</div>
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+          <div style="padding: 4px 8px; background: ${riskColors[riskLevel]}20; border-radius: 6px; border: 1px solid ${riskColors[riskLevel]};">
+            <span style="color: ${riskColors[riskLevel]}; font-weight: 600;">🌡️ ${riskLevel} HEAT RISK</span>
+          </div>
         </div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
-          <div>🌴 ${Math.round(data.average_shade_coverage || 0)}% shade</div>
-          <div style="color: ${riskColors[riskLevel]};">⚠️ ${riskLevel} risk</div>
-        </div>
-        <div style="margin-top: 6px; font-size: 9px; color: #64748b;">
-          ☀️ estimated sun exposure: ${Math.round(data.sun_exposure_minutes || 0)} min
+        <div style="font-size: 9px; color: #94a3b8; margin-top: 6px;">
+          ☀️ Sun exposure: ~${Math.round(route.sun_exposure_minutes || data.sun_exposure_minutes || 0)} min
+          ${isV2 && rec && rec.recommendation_reason ? `<br>📌 ${rec.recommendation_reason}` : ''}
         </div>
       `;
     }
@@ -3105,14 +3669,19 @@
         map.removeSource('shaded-route');
       }
 
-      // use actual route geometry from mapbox if available
-      // geometry format: [[lon, lat], [lon, lat], ...]
+      // supports:
+      // - v2 geojson line: data.recommendation.recommended_route.geometry.coordinates
+      // - legacy geometry array: data.geometry
+      // geometry format: [[lon, lat], ...]
       let coordinates;
 
-      if (data.geometry && data.geometry.length > 1) {
-        // use real road geometry from mapbox directions api
+      const isV2 = !!(data.recommendation && data.recommendation.recommended_route && data.recommendation.recommended_route.geometry);
+      if (isV2) {
+        coordinates = data.recommendation.recommended_route.geometry.coordinates || [];
+        console.log(`Drawing v2 route with ${coordinates.length} points`);
+      } else if (data.geometry && data.geometry.length > 1) {
         coordinates = data.geometry;
-        console.log(`Drawing realistic route with ${coordinates.length} points from Mapbox`);
+        console.log(`Drawing legacy route with ${coordinates.length} points from Mapbox`);
       } else {
         // fallback to segment-based coordinates
         coordinates = data.segments.map(seg => [seg.start[1], seg.start[0]]);
@@ -3129,8 +3698,8 @@
         data: {
           type: 'Feature',
           properties: {
-            shade_score: data.shade_score,
-            mode: data.mode
+            score: isV2 ? (data.recommendation.recommended_route.comfort_score || 0) : data.shade_score,
+            mode: isV2 ? (data.recommendation.travel_mode || 'walking') : data.mode
           },
           geometry: {
             type: 'LineString',
@@ -3140,7 +3709,8 @@
       });
 
       // style the route line based on mode
-      const routeColor = data.mode === 'cycling' ? '#22c55e' : '#38bdf8';
+      const routeMode = isV2 ? (data.recommendation.travel_mode || 'walking') : data.mode;
+      const routeColor = routeMode === 'cycling' ? '#22c55e' : '#38bdf8';
 
       map.addLayer({
         id: 'shaded-route-line',
@@ -3203,16 +3773,53 @@
 
     // Event listeners
     document.addEventListener('DOMContentLoaded', () => {
-      // Token form
-      document.getElementById('startBtn').addEventListener('click', () => {
-        start(document.getElementById('tokenInput').value.trim());
-      });
+      // initialize date to today
+      const dateInput = document.getElementById('dateInput');
+      if (dateInput) {
+        dateInput.value = new Date().toISOString().split('T')[0];
+      }
 
-      document.getElementById('tokenInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') start(document.getElementById('tokenInput').value.trim());
-      });
+      // initialize time slider and dropdown to current time
+      const timeSlider = document.getElementById('timeSlider');
+      if (timeSlider) {
+        timeSlider.value = currentMinutes;
+        document.getElementById('currentTime').textContent = formatTime(currentMinutes);
+      }
 
-      document.getElementById('resetToken').addEventListener('click', resetToken);
+      // populate time dropdown
+      populateTimeDropdown();
+      const timeDropdownInit = document.getElementById('timeDropdown');
+      if (timeDropdownInit) {
+        // find closest 30-minute slot
+        const closestMinutes = Math.round(currentMinutes / 30) * 30;
+        timeDropdownInit.value = closestMinutes;
+      }
+
+      // update heat risk time display
+      updateHeatRiskTimeDisplay();
+
+      // Token form - setup event listeners for manual token entry
+      const startBtn = document.getElementById('startBtn');
+      const tokenInput = document.getElementById('tokenInput');
+
+      if (startBtn) {
+        startBtn.addEventListener('click', () => {
+          console.log('Start button clicked');
+          const inputToken = tokenInput ? tokenInput.value.trim() : '';
+          const token = inputToken || DEFAULT_MAPBOX_TOKEN;
+          start(token);
+        });
+      }
+
+      if (tokenInput) {
+        tokenInput.addEventListener('keypress', (e) => {
+          if (e.key === 'Enter') {
+            console.log('Enter pressed in token input');
+            const token = tokenInput.value.trim() || DEFAULT_MAPBOX_TOKEN;
+            start(token);
+          }
+        });
+      }
 
       // Location buttons
       document.querySelectorAll('[data-loc]').forEach(btn => {
@@ -3272,47 +3879,95 @@
         }
       });
 
-      // ML features event listeners
-      document.getElementById('checkHeatRiskBtn').addEventListener('click', checkHeatRisk);
-      document.getElementById('scheduleTaskBtn').addEventListener('click', findOptimalSchedule);
-      document.getElementById('setPointsBtn').addEventListener('click', enableRoutePointSelection);
-      document.getElementById('findRouteBtn').addEventListener('click', findShadedRoute);
-      document.getElementById('mlStatusBtn').addEventListener('click', checkMLStatus);
-      document.getElementById('hudToggleBtn').addEventListener('click', toggleHudPanel);
-      document.getElementById('sunPanelToggle').addEventListener('click', toggleSunPanel);
+      // ML features event listeners - wrapped in try-catch for safety
+      try {
+        const checkBtn = document.getElementById('checkHeatRiskBtn');
+        if (checkBtn) checkBtn.addEventListener('click', checkHeatRisk);
+
+        const schedBtn = document.getElementById('scheduleTaskBtn');
+        if (schedBtn) schedBtn.addEventListener('click', findOptimalSchedule);
+
+        const pointsBtn = document.getElementById('setPointsBtn');
+        if (pointsBtn) pointsBtn.addEventListener('click', enableRoutePointSelection);
+
+        const routeBtn = document.getElementById('findRouteBtn');
+        if (routeBtn) routeBtn.addEventListener('click', findShadedRoute);
+
+        const hudBtn = document.getElementById('hudToggleBtn');
+        if (hudBtn) hudBtn.addEventListener('click', toggleHudPanel);
+
+        const sunBtn = document.getElementById('sunPanelToggle');
+        if (sunBtn) sunBtn.addEventListener('click', toggleSunPanel);
+
+        const heatmapBtn = document.getElementById('toggleHeatmapBtn');
+        if (heatmapBtn) heatmapBtn.addEventListener('click', toggleHeatmapLayer);
+      } catch (err) {
+        console.warn('Error setting up ML event listeners:', err);
+      }
 
       // Task location selection for scheduling
-      document.getElementById('setTaskLocationBtn').addEventListener('click', () => {
-        selectingTaskLocation = true;
-        document.getElementById('taskLocation').value = 'Click on map...';
-        document.getElementById('setTaskLocationBtn').textContent = '🎯 Click map';
-        document.getElementById('setTaskLocationBtn').style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
-      });
+      try {
+        const setTaskLocBtn = document.getElementById('setTaskLocationBtn');
+        if (setTaskLocBtn) {
+          setTaskLocBtn.addEventListener('click', () => {
+            selectingTaskLocation = true;
+            const taskLocInput = document.getElementById('taskLocation');
+            if (taskLocInput) taskLocInput.value = 'Click on map...';
+            setTaskLocBtn.textContent = '🎯 Click map';
+            setTaskLocBtn.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
+          });
+        }
+      } catch (err) {
+        console.warn('Error setting up task location btn:', err);
+      }
 
-      // modals
-      document.getElementById('openScheduleModal').addEventListener('click', () => openModal('scheduleModal'));
-      document.getElementById('openRouteModal').addEventListener('click', () => openModal('routeModal'));
-      document.getElementById('closeScheduleModal').addEventListener('click', () => closeModal('scheduleModal'));
-      document.getElementById('closeRouteModal').addEventListener('click', () => closeModal('routeModal'));
+      // modals - wrapped in try-catch for safety
+      try {
+        const openSchedModal = document.getElementById('openScheduleModal');
+        if (openSchedModal) openSchedModal.addEventListener('click', () => openModal('scheduleModal'));
 
-      // schedule feedback buttons
-      document.getElementById('acceptScheduleBtn').addEventListener('click', () => sendScheduleFeedback('accept'));
-      document.getElementById('rejectScheduleBtn').addEventListener('click', () => sendScheduleFeedback('reject'));
+        const openRouteModalBtn = document.getElementById('openRouteModal');
+        if (openRouteModalBtn) openRouteModalBtn.addEventListener('click', () => openModal('routeModal'));
+
+        const closeSchedModal = document.getElementById('closeScheduleModal');
+        if (closeSchedModal) closeSchedModal.addEventListener('click', () => closeModal('scheduleModal'));
+
+        const closeRouteModalBtn = document.getElementById('closeRouteModal');
+        if (closeRouteModalBtn) closeRouteModalBtn.addEventListener('click', () => closeModal('routeModal'));
+
+        // schedule feedback buttons
+        const acceptBtn = document.getElementById('acceptScheduleBtn');
+        if (acceptBtn) acceptBtn.addEventListener('click', () => sendScheduleFeedback('accept'));
+
+        const rejectBtn = document.getElementById('rejectScheduleBtn');
+        if (rejectBtn) rejectBtn.addEventListener('click', () => sendScheduleFeedback('reject'));
+      } catch (err) {
+        console.warn('Error setting up modal event listeners:', err);
+      }
 
       // gps location for task
-      document.getElementById('gpsTaskLocationBtn').addEventListener('click', () => {
-        if (!navigator.geolocation) {
-          alert('gps not supported in this browser');
-          return;
+      try {
+        const gpsBtn = document.getElementById('gpsTaskLocationBtn');
+        if (gpsBtn) {
+          gpsBtn.addEventListener('click', () => {
+            if (!navigator.geolocation) {
+              alert('gps not supported in this browser');
+              return;
+            }
+            navigator.geolocation.getCurrentPosition((pos) => {
+              taskLocationCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+              const taskLocInput = document.getElementById('taskLocation');
+              if (taskLocInput) taskLocInput.value = `${taskLocationCoords.lat.toFixed(4)}, ${taskLocationCoords.lng.toFixed(4)}`;
+              const taskLocCoords = document.getElementById('taskLocationCoords');
+              if (taskLocCoords) taskLocCoords.textContent = `📍 gps: ${taskLocationCoords.lat.toFixed(4)}°, ${taskLocationCoords.lng.toFixed(4)}°`;
+            }, () => {
+              alert('unable to fetch gps location');
+            });
+          });
         }
-        navigator.geolocation.getCurrentPosition((pos) => {
-          taskLocationCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          document.getElementById('taskLocation').value = `${taskLocationCoords.lat.toFixed(4)}, ${taskLocationCoords.lng.toFixed(4)}`;
-          document.getElementById('taskLocationCoords').textContent = `📍 gps: ${taskLocationCoords.lat.toFixed(4)}°, ${taskLocationCoords.lng.toFixed(4)}°`;
-        }, () => {
-          alert('unable to fetch gps location');
-        });
-      });
+      } catch (err) {
+        console.warn('Error setting up GPS button:', err);
+      }
 
       // task location search (building or area names)
       const taskLocationSearch = document.getElementById('taskLocationSearch');
@@ -3381,6 +4036,77 @@
         });
       }
 
+      // travel mode buttons
+      const modeWalking = document.getElementById('modeWalking');
+      const modeCycling = document.getElementById('modeCycling');
+      const travelModeSelect = document.getElementById('travelMode');
+
+      if (modeWalking) {
+        modeWalking.addEventListener('click', () => {
+          modeWalking.style.background = 'linear-gradient(135deg, #16a34a 0%, #22c55e 100%)';
+          modeWalking.style.borderColor = '#22c55e';
+          modeWalking.style.color = 'white';
+          modeCycling.style.background = '';
+          modeCycling.style.borderColor = '';
+          modeCycling.style.color = '';
+          travelModeSelect.value = 'walking';
+        });
+      }
+
+      if (modeCycling) {
+        modeCycling.addEventListener('click', () => {
+          modeCycling.style.background = 'linear-gradient(135deg, #16a34a 0%, #22c55e 100%)';
+          modeCycling.style.borderColor = '#22c55e';
+          modeCycling.style.color = 'white';
+          modeWalking.style.background = '';
+          modeWalking.style.borderColor = '';
+          modeWalking.style.color = '';
+          travelModeSelect.value = 'cycling';
+        });
+      }
+
+      // gps button for route from location
+      const gpsFromBtn = document.getElementById('gpsFromBtn');
+      if (gpsFromBtn) {
+        gpsFromBtn.addEventListener('click', () => {
+          if (navigator.geolocation) {
+            gpsFromBtn.textContent = '⏳';
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                const lat = pos.coords.latitude;
+                const lng = pos.coords.longitude;
+                routeStartCoords = [lng, lat];
+                routeFrom.value = `📍 Current Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+                gpsFromBtn.textContent = '✓';
+                gpsFromBtn.style.background = 'rgba(34,197,94,0.5)';
+              },
+              (err) => {
+                console.error('GPS error:', err);
+                gpsFromBtn.textContent = '❌';
+                setTimeout(() => { gpsFromBtn.textContent = '📡'; }, 2000);
+              },
+              { enableHighAccuracy: true, timeout: 10000 }
+            );
+          } else {
+            alert('GPS not available on this device');
+          }
+        });
+      }
+
+      // start navigation button
+      const startNavBtn = document.getElementById('startNavigationBtn');
+      if (startNavBtn) {
+        startNavBtn.addEventListener('click', () => {
+          if (routeStartCoords && routeEndCoords) {
+            // zoom map to fit route and close modal
+            closeModal('routeModal');
+            // show navigation active indicator
+            startNavBtn.textContent = '🧭 NAVIGATION ACTIVE';
+            startNavBtn.style.background = 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)';
+          }
+        });
+      }
+
       // Close suggestions when clicking outside
       document.addEventListener('click', (e) => {
         const target = e.target;
@@ -3393,39 +4119,41 @@
       });
 
       // Time slider - update shadows dynamically as you drag
-      const timeSlider = document.getElementById('timeSlider');
+      const timeSliderEl = document.getElementById('timeSlider');
       let sliderTimeout = null;
 
-      timeSlider.addEventListener('input', (e) => {
-        currentMinutes = parseInt(e.target.value);
-        updateTimeDisplay();
-        updateUVIndexButton();
-        updateWeatherDisplay(); // auto-update weather as slider moves
-        const dropdown = document.getElementById('timeDropdown');
-        if (dropdown) dropdown.value = Math.floor(currentMinutes / 30) * 30;
+      if (timeSliderEl) {
+        timeSliderEl.addEventListener('input', (e) => {
+          currentMinutes = parseInt(e.target.value);
+          updateTimeDisplay();
+          updateUVIndexButton();
+          updateWeatherDisplay(); // auto-update weather as slider moves
+          const dropdown = document.getElementById('timeDropdown');
+          if (dropdown) dropdown.value = Math.floor(currentMinutes / 30) * 30;
 
-        // Debounce shadow updates for smooth performance
-        if (sliderTimeout) clearTimeout(sliderTimeout);
-        sliderTimeout = setTimeout(() => {
+          // Debounce shadow updates for smooth performance
+          if (sliderTimeout) clearTimeout(sliderTimeout);
+          sliderTimeout = setTimeout(() => {
+            updateShadows();
+          }, 100);
+        });
+
+        // Also update on change (when user releases slider)
+        timeSliderEl.addEventListener('change', (e) => {
+          currentMinutes = parseInt(e.target.value);
+          updateTimeDisplay();
           updateShadows();
-        }, 100);
-      });
-
-      // Also update on change (when user releases slider)
-      timeSlider.addEventListener('change', (e) => {
-        currentMinutes = parseInt(e.target.value);
-        updateTimeDisplay();
-        updateShadows();
-        updateUVIndexButton();
-        updateWeatherDisplay();
-        const dropdown = document.getElementById('timeDropdown');
-        if (dropdown) dropdown.value = Math.floor(currentMinutes / 30) * 30;
-      });
+          updateUVIndexButton();
+          updateWeatherDisplay();
+          const dropdown = document.getElementById('timeDropdown');
+          if (dropdown) dropdown.value = Math.floor(currentMinutes / 30) * 30;
+        });
+      }
 
       // time dropdown selection
-      const timeDropdown = document.getElementById('timeDropdown');
-      if (timeDropdown) {
-        timeDropdown.addEventListener('change', (e) => {
+      const timeDropdownEl = document.getElementById('timeDropdown');
+      if (timeDropdownEl) {
+        timeDropdownEl.addEventListener('change', (e) => {
           currentMinutes = parseInt(e.target.value);
           const slider = document.getElementById('timeSlider');
           if (slider) slider.value = currentMinutes;
@@ -3437,50 +4165,55 @@
       }
 
       // Date input
-      const dateInput = document.getElementById('dateInput');
-      dateInput.value = new Date().toISOString().split('T')[0];
-      dateInput.addEventListener('change', () => {
-        updateShadows();
-        updateUVIndexButton();
-        updateWeatherDisplay(); // update weather when date changes
-      });
+      const dateInputEl = document.getElementById('dateInput');
+      if (dateInputEl) {
+        dateInputEl.value = new Date().toISOString().split('T')[0];
+        dateInputEl.addEventListener('change', () => {
+          updateShadows();
+          updateUVIndexButton();
+          updateWeatherDisplay(); // update weather when date changes
+        });
+      }
 
-      // Astronomical event navigation buttons
-      document.getElementById('springEquinoxBtn').addEventListener('click', () => navigateToEvent('springEquinox'));
-      document.getElementById('summerSolsticeBtn').addEventListener('click', () => navigateToEvent('summerSolstice'));
-      document.getElementById('autumnEquinoxBtn').addEventListener('click', () => navigateToEvent('autumnEquinox'));
-      document.getElementById('winterSolsticeBtn').addEventListener('click', () => navigateToEvent('winterSolstice'));
+      // Astronomical event navigation buttons - with null checks
+      try {
+        const springBtn = document.getElementById('springEquinoxBtn');
+        if (springBtn) springBtn.addEventListener('click', () => navigateToEvent('springEquinox'));
 
-      // Animation controls
-      document.getElementById('playBtn').addEventListener('click', toggleAnimation);
-      document.getElementById('resetBtn').addEventListener('click', resetAnimation);
+        const summerBtn = document.getElementById('summerSolsticeBtn');
+        if (summerBtn) summerBtn.addEventListener('click', () => navigateToEvent('summerSolstice'));
+
+        const autumnBtn = document.getElementById('autumnEquinoxBtn');
+        if (autumnBtn) autumnBtn.addEventListener('click', () => navigateToEvent('autumnEquinox'));
+
+        const winterBtn = document.getElementById('winterSolsticeBtn');
+        if (winterBtn) winterBtn.addEventListener('click', () => navigateToEvent('winterSolstice'));
+
+        // Animation controls
+        const playBtn = document.getElementById('playBtn');
+        if (playBtn) playBtn.addEventListener('click', toggleAnimation);
+
+        const resetBtn = document.getElementById('resetBtn');
+        if (resetBtn) resetBtn.addEventListener('click', resetAnimation);
+      } catch (err) {
+        console.warn('Error setting up navigation buttons:', err);
+      }
 
       // Speed slider
       const speedSlider = document.getElementById('speedSlider');
-      speedSlider.addEventListener('input', (e) => {
-        animationSpeed = 2100 - parseInt(e.target.value);
-        const speedMultiple = (1000 / animationSpeed).toFixed(1);
-        document.getElementById('speedValue').textContent = `${speedMultiple}x`;
+      if (speedSlider) {
+        speedSlider.addEventListener('input', (e) => {
+          animationSpeed = 2100 - parseInt(e.target.value);
+          const speedMultiple = (1000 / animationSpeed).toFixed(1);
+          const speedValueEl = document.getElementById('speedValue');
+          if (speedValueEl) speedValueEl.textContent = `${speedMultiple}x`;
 
-        if (isPlaying) {
-          stopAnimation();
-          startAnimation();
-        }
-      });
-
-      // Shadow toggle (enable/disable shadow casting)
-      document.getElementById('toggleShadows').addEventListener('click', () => {
-        shadowsVisible = !shadowsVisible;
-        const btn = document.getElementById('toggleShadows');
-        btn.textContent = shadowsVisible ? 'Disable Shadows' : 'Enable Shadows';
-
-        // Re-apply shadows by calling updateShadows which will rebuild the lights
-        if (map) {
-          updateShadows();
-          console.log('Shadow casting', shadowsVisible ? 'enabled' : 'disabled');
-        }
-      });
-
+          if (isPlaying) {
+            stopAnimation();
+            startAnimation();
+          }
+        });
+      }
 
       // Initialize time display
       populateTimeDropdown();
@@ -3492,20 +4225,20 @@
       // Fetch 7-day weather forecast on page load
       fetchWeatherForecast().then(() => {
         console.log('Weather forecast initialized');
-      });
+      }).catch(err => console.warn('Weather forecast error:', err));
 
-      // Auto-start with default token or saved token
-      const saved = loadToken();
-      if (saved) {
+      // Auto-start with default token - always start immediately
+      try {
+        const token = loadToken() || DEFAULT_MAPBOX_TOKEN;
         document.getElementById('token-overlay').classList.add('hidden');
         document.getElementById('hud').style.display = 'block';
-        initMap(saved);
-      } else {
-        // Auto-start with default token
-        document.getElementById('token-overlay').classList.add('hidden');
-        document.getElementById('hud').style.display = 'block';
-        saveToken(DEFAULT_MAPBOX_TOKEN);
-        initMap(DEFAULT_MAPBOX_TOKEN);
+        saveToken(token);
+        initMap(token);
+        console.log('Map initialized with token');
+      } catch (err) {
+        console.error('Auto-start failed:', err);
+        // Show token overlay as fallback
+        document.getElementById('token-overlay').classList.remove('hidden');
       }
     });
   </script>
