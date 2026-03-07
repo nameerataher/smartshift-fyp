@@ -369,3 +369,9 @@ class SpaceTimeDataset:
                 f"time_range={self.start_time.strftime('%H:%M') if self.start_time else 'N/A'}–"
                 f"{self.end_time.strftime('%H:%M') if self.end_time else 'N/A'})")
 
+
+
+
+
+
+
