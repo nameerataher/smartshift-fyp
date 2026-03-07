@@ -1,0 +1,51 @@
+﻿Oct 10, 2025 | Meeting #1 with Supervisor 
+Meeting Notes:
+* Discussed the initial project idea. Conveyed industry collaboration.
+Action items:
+* Project Approved. Look further into developing methods and datasets available. Complex project if unable to do. Start early.
+* Formally complete project registration on Canvas. Due 16th Oct.
+Nov 06, 2025 | Progress Meeting #2 with Supervisor 
+Meeting Notes:
+* Discussed company goals and surface level research of roughly the datasets and frameworks needed for the project.
+* Mentioned working on a presentation deck with Mo to have a clearer idea of target users, objectives, and workstreams.
+Action items:
+* Collect datasets, research and solidify approaches until Dec. Begin with basic code and develop core in winter break (5 weeks) and aim to finish by February.
+Nov 27, 2025 | Progress Meeting #3 with Supervisor 
+Meeting Notes:
+* Discussed difficulties with obtaining datasets and various alternative approaches in the direction of the project.  
+Action items:
+* Require an official University letter verifying student status and acknowledging the data obtained through GeoDubai (Dubai Municipality) will be used solely for academic purposes.
+
+
+Dec 04, 2025 | Progress Meeting #4 with Supervisor 
+Meeting Notes:
+* Narrowed the scope of the data to three communities instead of the entire Dubai city.
+* Letter drafted for Dubai Municipality for the same. 
+Action items:
+* Schedule for the next meeting post winter break (~Jan 20).
+Jan 23, 2026 | Progress Meeting #5 with Supervisor 
+Meeting Notes:
+* Discussed concerns raised with the Company regarding the project and reevaluated the project from a final-year project standpoint. 
+* Building a fantasy city from scratch at this stage is infeasible and time-consuming. 
+* Focus on the backend and logic of the model over the aesthetics for now.
+Action items:
+* Prepare a visual working model for the next meeting.
+* Add a comparison view of OSM + extrusion model and a CAD model both for better insights.
+Jan 29, 2026 | Progress Meeting #6 with Supervisor 
+Meeting Notes:
+* Demonstrated the visual city model + shadow projections.
+* Reviewed the core functionalities and verified the sun-shadow simulation addressing questions regarding the shadow accuracy.
+* Examined sections of the Python implementation, including solar position parameters (altitude, azimuth, date/time) and formulas (NOAA standard) used to compute the projections and intensity.
+* Narrowed down potential target users and explored the idea of ML-based scheduling engine and routing-based navigation functionality.
+Action items:
+* Work on the scheduling engine architecture using a Supervised Learning approach.
+* Integrate navigation functionality before the next meeting.
+Feb 12, 2026 | Progress Meeting #7 with Supervisor 
+Meeting Notes:
+* Closer look into the scheduling engine and navigation system.
+* Briefly discussed potential deployment method.
+Action items:
+* Commercial use task scheduling: develop further to allow scheduling several tasks within the same area or simultaneous tasks across different locations within the city. Think from a commercial point of view.
+* Navigation functionality: develop further so that routes update in real-time based on user movement (10 min window instead of 30). E.g., if a route takes 10 minutes to walk, the shadow conditions update dynamically at each interval and calculate the shadow conditions at the user’s estimated position at time n along the route.
+* Integrate the visualization, scheduling engine, and navigation features into a full dashboard-style application.
+* Deploying through pipelines or external services is unnecessary. Localhost is an accepted standard.
