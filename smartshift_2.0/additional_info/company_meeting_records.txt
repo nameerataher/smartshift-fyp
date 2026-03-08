@@ -1,34 +1,49 @@
-﻿Oct 23, 2025 | Progress Meeting #1 for PerformByAI 
+﻿-----------------------------------------------------------------
+Personal Meeting Records to Track Work Progress - PerformByAI
+-----------------------------------------------------------------
+
+Oct 23, 2025 | Progress Meeting #1 for PerformByAI
+
 Meeting Agenda:
 * Prepare a project proposal presentation to gain clarity over the project.
 * Go over the Problem Statement and Target Users.
-* Make a rough draft - improvise later. 
-Oct 30, 2025 | Progress Meeting #2 for PerformByAI 
+* Make a rough draft - improvise later.
+
+-----------------------------------------------------------------
+
+Oct 30, 2025 | Progress Meeting #2 for PerformByAI
+
 Meeting Agenda:
 * Go over the Objectives, Outcomes, and Workstreams
-* Make a rough draft - improvise later. 
-
+* Make a rough draft - improvise later.
 
 Action items:
 * Solidify problem statement and target users and the slides covered in the meeting.
 * Add project timeline and technical resources to the slides
-* Make a final presentation and email it to Mo before the next meeting. 
-Nov 21, 2025 | Progress Meeting #3 for PerformByAI 
+* Make a final presentation and email it to Mo before the next meeting.
+
+-----------------------------------------------------------------
+
+Nov 21, 2025 | Progress Meeting #3 for PerformByAI
+
 Meeting Notes:
 * Supervision check-in on 3D mapping & shadow analysis model.
-* Data discovered: Airbus 3D mapping dataset (appears to be older), Google Maps Platform, NASA, QGIS footprints, and city planning datasets. Some datasets are outdated. 
+* Data discovered: Airbus 3D mapping dataset (appears to be older), Google Maps Platform, NASA, QGIS footprints, and city planning datasets. Some datasets are outdated.
 * Up-to-date Dubai 3D data is ideal, look for alternate workarounds.
 * Use an Issues Log (current problems) and a Risk Log (anticipated problems). Focus on medium/high risks and pragmatic mitigations (scope reduction, weekly progress, extra support).
 * Have a look into New York’s “Mapping the Shadows” project as a benchmark and proof-of-concept approach.
-* Internal deadline set to 15 December. Weekly/biweekly check-ins recommended. 
-
+* Internal deadline set to 15 December. Weekly/biweekly check-ins recommended.
 
 Action items:
 * Set up the local project environment and directories
 * Begin experimenting with limited Airbus 3D Dubai dataset - complete initial test within 1–2 weeks.
 * Maintain an Issues Log - add entries as issues are discovered - update weekly.
-* Maintain a Risk Log focused on low/medium/high risks (e.g., inaccessible elevation data, missing recent buildings) with likelihood, impact, and mitigations - revise weekly.        
-Nov 27, 2025 | Progress Meeting #4 for PerformByAI 
+* Maintain a Risk Log focused on low/medium/high risks (e.g., inaccessible elevation data, missing recent buildings) with likelihood, impact, and mitigations - revise weekly.
+
+-----------------------------------------------------------------
+
+Nov 27, 2025 | Progress Meeting #4 for PerformByAI
+
 Meeting Notes:
 * Continue researching available data sources and formats for the target areas (CityGML, GeoJSON, LiDAR, shapefiles, DWG/AutoCAD).
 * If official data is unavailable, Plan B: combine OpenStreetMap 2D data with an external 3D source or Plan C: pick a geolocation and bounding coordinates, create a mock community (~15 buildings), estimate building heights, and prepare data for simulation.
@@ -37,27 +52,37 @@ Action items:
    * Send formal data requests to Municipality with an official University of Birmingham letter and follow up.
    * Validate the sun movement library: run initial simulations, perform a field visit for at least one structure to measure real shadow data.
    * Research academic papers via Google Scholar and contact relevant researchers to gather methodological details and formulas for shadow simulation and routing algorithms.
-Dec 13, 2025 | Progress Meeting #5 for PerformByAI 
+
+-----------------------------------------------------------------
+
+Dec 13, 2025 | Progress Meeting #5 for PerformByAI
+
 Meeting Notes:
    * Obtain the high-accuracy building-height dataset for the three chosen communities and integrate municipality Dubai data (target: within a few days / by next week).
    * Upload all project files and research papers into the GPT project folder and organize prompts and artifacts.
    * If building/vegetation details are missing in datasets, prototype a manual or ML-based approach to detect and geolocate trees/walls from imagery.
+
 Action items:
    * Research the sun-shadow algorithm and produce a basic simulation/prototype for the three communities.
 
+-----------------------------------------------------------------
 
+Dec 19, 2025 | Progress Meeting #6 for PerformByAI
 
-
-Dec 19, 2025 | Progress Meeting #6 for PerformByAI 
 Meeting Notes:
    * Clean and preprocess current 3D/open-source data to extract only required fields (terrain, height/elevation) and reduce noise.
    * Create a mock city dataset (small proof-of-concept): 2–3 blocks with buildings of varying heights and geolocations.
    * Structure and begin writing the report - collect references along the way.
    * Have major deployment and testing complete by March, final presentation-focused work in the last two weeks before the deadline.
    * Aim for 70% project completion by end of January
+
 Action items:
    * Continue developing and debugging shadow-mapping code.
-Dec 26, 2025 | Progress Meeting #7 for PerformByAI 
+
+ -----------------------------------------------------------------
+
+Dec 26, 2025 | Progress Meeting #7 for PerformByAI
+
 Meeting Notes:
    * Developed and presented the Blender 3D City Model of Downtown buildings.
    * Begin thinking about implementing the scheduling engine.
@@ -65,39 +90,49 @@ Meeting Notes:
    * Manually fill missing building heights and import terrain data into the model.
    * Evaluate and, if needed, purchase the $20 high-detail data model.
    * Determine a feasible scope for the project deliverable - prioritize web app first, mobile and advanced AI features as stretch goals.
+
 Action items:
    * Make the shadow simulation dynamic over the 3D model - demonstrate moving shadows by time of day/year.
    * Look into implementing accessibility features (voice input/chatbot: optional add-on).
    * Prepare simulations and a prioritized list of 1–3 use cases (rank by impact and implementation complexity) for the next meeting
    * Bring demos of selected maps and the pro model output.
 
+-----------------------------------------------------------------
 
+Jan 7, 2026 | Progress Meeting #8 for PerformByAI
 
-
-
-
-Jan 7, 2026 | Progress Meeting #8 for PerformByAI 
 Meeting Notes:
    * Faced challenges with the original CAD model approach, fails to retain building height data when exported to Python.
    * Transitioned to a ML approach that trains on building images to generate building height data and 3D polygon structures on top of the 2D OSM map.
+
 Action items:
    * Enhance and deliver the working model (3D urban city + sun-shadow simulation) by next meeting.
-Jan 21, 2026 | Progress Meeting #9 for PerformByAI 
+
+-----------------------------------------------------------------
+
+Jan 21, 2026 | Progress Meeting #9 for PerformByAI
+
 Meeting Notes:
    * Presented prototype of 3D building extrusions generated from OSM tags with shadow simulation over it using Python logic.
    * Buildings have a lack of shape due to model using LOD1 data instead of LOD2. Lots of visualization issues - incorrect shadows and inaccurate appearance over roads and surfaces.
    * Consider backup plan C - a fantasy city: simplify scope to a small test block.
+
 Action items:
    * Build a small fantasy block with a mix of building heights to demonstrate shadow interactions realistically. Develop at least one clear simulation use case.
    * Consult with the university professor to review the technical direction and scope of the project.
    * Update Mo within 2-3 days with progress on the discussed work.
-Jan 29, 2026 | Progress Meeting #10 for PerformByAI 
+
+-----------------------------------------------------------------
+
+Jan 29, 2026 | Progress Meeting #10 for PerformByAI
+
 Meeting Notes:
    * Demonstrated a significantly improved shadow visualization model using an API, capable of displaying dynamic shadows across different locations with time controls.
    * Simplify the model by prioritizing sunlight exposure rather than full weather modeling.
    * Narrowed down use cases to commercial and navigation purposes only.
    * Discussed navigation algorithm logic.
    * Considering project competitions or innovation awards after completion to strengthen portfolio and career prospects.
+
 Action items:
    * Finalize and polish the shadow visualization - search functionality and controls.
    * Implement the scheduling engine and navigation system.
@@ -105,11 +140,16 @@ Action items:
    * Include travel options (walking and cycling) to estimate route timing and exposure.
    * Sunlight exposure heat map showing areas with high, moderate, and low sun exposure.
    * Complete the core project features (scheduling + routing) by Feb 19.
-Feb 19, 2026 | Progress Meeting #11 for PerformByAI 
+
+-----------------------------------------------------------------
+
+Feb 19, 2026 | Progress Meeting #11 for PerformByAI
+
 Meeting Notes:
    * Discussed the routing and heat-risk features of the project.
    * Investigate deployment/hosting options to enable real-time GPS tracking or provide a workaround to simulate live location; explore simple hosting platforms (cloud hosting).
    * Prepare final report: refine the report in the last month, final submission by 27 March.
+
 Action items:
    * Prioritize shadow-based routing over heat-index weighted model.
    * Implement alternative route generation and validation so routes present selectable options (shorter vs longer routes with different shade levels).
