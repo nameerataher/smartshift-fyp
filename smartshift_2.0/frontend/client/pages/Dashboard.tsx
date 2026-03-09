@@ -3,7 +3,7 @@ import { useMode } from "@/hooks/useMode";
 import {
   Sun, Clock, Compass, Navigation2, Thermometer, ShieldAlert,
   Briefcase, Navigation, AlertCircle, CheckCircle, Plus, TrendingUp,
-  BarChart3, ClipboardList, ShieldCheck, Pencil, Trash2, X, Save,
+  BarChart3, ClipboardList, ShieldCheck, Pencil, Trash2, X, Save, Info, Check,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
@@ -37,38 +37,41 @@ interface ScheduledTask {
   location: string;
   timeWindow: string;
   shadePercentage: number;
-  status: "scheduled" | "in-progress" | "completed";
+  status: "scheduled" | "in-process" | "completed" | "draft";
 }
 
-const DEFAULT_TASKS: ScheduledTask[] = [
-  { id: "1", name: "Facade Cleaning – North Wing", location: "Downtown Site", timeWindow: "05:00 – 09:00", shadePercentage: 75, status: "scheduled" },
-  { id: "2", name: "Foundation Inspection", location: "North Industrial Zone", timeWindow: "18:00 – 20:00", shadePercentage: 85, status: "scheduled" },
-];
+interface DashboardData {
+  today_tasks: Array<{
+    task_id: string;
+    task_name: string;
+    location_name: string;
+    hour_start: number;
+    hour_end: number;
+    status: string;
+    duration_minutes: number;
+  }>;
+  today_task_count: number;
+  total_duration_minutes: number;
+  completed_count: number;
+  avg_shade_coverage: number;
+  scheduled_count: number;
+  in_process_count: number;
+}
 
-type ChartRange = "day" | "week" | "month";
+interface AnalyticsData {
+  month: string;
+  total_tasks: number;
+  completed_tasks: number;
+  total_duration_minutes: number;
+  avg_shade_coverage: number;
+  target_tasks: number;
+}
 
-const WORK_PROGRESS: Record<ChartRange, { label: string; value: number; goal: number }[]> = {
-  day: [
-    { label: "05:00", value: 12, goal: 16 },
-    { label: "08:00", value: 18, goal: 20 },
-    { label: "11:00", value: 9, goal: 18 },
-    { label: "17:00", value: 16, goal: 18 },
-    { label: "20:00", value: 11, goal: 14 },
-  ],
-  week: [
-    { label: "Mon", value: 74, goal: 80 },
-    { label: "Tue", value: 82, goal: 90 },
-    { label: "Wed", value: 69, goal: 88 },
-    { label: "Thu", value: 91, goal: 95 },
-    { label: "Fri", value: 76, goal: 84 },
-  ],
-  month: [
-    { label: "W1", value: 320, goal: 360 },
-    { label: "W2", value: 348, goal: 360 },
-    { label: "W3", value: 332, goal: 360 },
-    { label: "W4", value: 356, goal: 360 },
-  ],
-};
+const DEFAULT_TASKS: ScheduledTask[] = [];
+
+type ChartRange = "month";
+
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function getTaskDurationMinutes(timeWindow: string): number {
   const parts = timeWindow.split("–").map((part) => part.trim());
@@ -106,26 +109,91 @@ export default function Dashboard() {
   const [heatRiskLoading, setHeatRiskLoading] = useState(false);
   const [heatRiskChecked, setHeatRiskChecked] = useState(false);
   const [tasks, setTasks] = useState<ScheduledTask[]>(DEFAULT_TASKS);
-  const [chartRange, setChartRange] = useState<ChartRange>("day");
+  const [chartRange] = useState<ChartRange>("month");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<ScheduledTask>>({});
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   const startEdit = (task: ScheduledTask) => {
     setEditingTaskId(task.id);
     setEditForm({ ...task });
   };
   const cancelEdit = () => { setEditingTaskId(null); setEditForm({}); };
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editingTaskId) return;
-    setTasks((prev) => prev.map((t) => t.id === editingTaskId ? { ...t, ...editForm } as ScheduledTask : t));
+    try {
+      await fetch(`${API_BASE}/api/tasks/${editingTaskId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_name: editForm.name,
+          location_name: editForm.location,
+          status: editForm.status
+        })
+      });
+      fetchDashboardData();
+    } catch {}
     cancelEdit();
   };
-  const deleteTask = (id: string) => setTasks((prev) => prev.filter((t) => t.id !== id));
+  const deleteTask = async (id: string) => {
+    try {
+      await fetch(`${API_BASE}/api/tasks/${id}`, { method: "DELETE" });
+      setTasks((prev) => prev.filter((t) => t.id !== id));
+      fetchDashboardData();
+    } catch {}
+  };
+  const markCompleted = async (id: string) => {
+    try {
+      await fetch(`${API_BASE}/api/tasks/${id}/complete`, { method: "POST" });
+      fetchDashboardData();
+      fetchAnalytics();
+    } catch {}
+  };
+
+  const fetchDashboardData = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dashboard`);
+      const data = await res.json();
+      if (data.success) {
+        setDashboardData(data);
+        const mappedTasks: ScheduledTask[] = (data.today_tasks || []).map((t: DashboardData["today_tasks"][0]) => ({
+          id: t.task_id,
+          name: t.task_name,
+          location: t.location_name || "—",
+          timeWindow: `${String(t.hour_start).padStart(2, "0")}:00 – ${String(t.hour_end).padStart(2, "0")}:00`,
+          shadePercentage: data.avg_shade_coverage || 70,
+          status: t.status as ScheduledTask["status"]
+        }));
+        setTasks(mappedTasks);
+      }
+    } catch {}
+  };
+
+  const fetchAnalytics = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analytics?months=4`);
+      const data = await res.json();
+      if (data.success) {
+        setAnalyticsData(data.analytics || []);
+      }
+    } catch {}
+  };
 
   // tick every minute
   useEffect(() => {
     const id = setInterval(() => setCurrentMinutes(getDubaiNow().minutes), 60_000);
     return () => clearInterval(id);
+  }, []);
+
+  // fetch dashboard and analytics on mount
+  useEffect(() => {
+    fetchDashboardData();
+    fetchAnalytics();
   }, []);
 
   // fetch weather once
@@ -151,19 +219,30 @@ export default function Dashboard() {
     setHeatRiskLoading(true);
     setHeatRiskChecked(false);
     try {
+      const timeStr = formatTime(currentMinutes).replace(" AM", "").replace(" PM", "");
+      const hours24 = currentMinutes >= 720 ? Math.floor(currentMinutes / 60) : Math.floor(currentMinutes / 60);
+      const mins = currentMinutes % 60;
+      const formattedTime = `${String(hours24).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+      
       const res = await fetch(`${API_BASE}/api/heat-risk`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat: 25.2048, lon: 55.2708, date: dateStr, time: formatTime(currentMinutes) }),
+        body: JSON.stringify({ lat: 25.2048, lon: 55.2708, date: dateStr, time: formattedTime }),
       });
+      
+      if (!res.ok) {
+        throw new Error(`API error: ${res.status}`);
+      }
+      
       const data = await res.json();
       if (data.success) {
         const pred = data.prediction || data;
         const wth = data.weather || data.weather_data || data;
+        const riskLabel = (pred.risk_label || pred.risk_level || "unknown").toLowerCase();
         setHeatRisk({
-          risk_level: pred.risk_label || pred.risk_level,
-          risk_color: pred.risk_label === "low" ? "#22c55e" : pred.risk_label === "medium" ? "#f59e0b" : "#ef4444",
-          safety_message: data.safety_message || (pred.risk_label === "low" ? "Safe for outdoor activity" : pred.risk_label === "medium" ? "Take breaks, stay hydrated" : "Avoid outdoor work if possible"),
+          risk_level: riskLabel,
+          risk_color: riskLabel === "low" ? "#22c55e" : riskLabel === "medium" ? "#f59e0b" : "#ef4444",
+          safety_message: data.safety_message || pred.safety_message || (riskLabel === "low" ? "Safe for outdoor activity" : riskLabel === "medium" ? "Take breaks, stay hydrated" : "Avoid outdoor work if possible"),
           temperature: wth.temperature,
           humidity: wth.humidity,
           wind_speed: wth.wind_speed,
@@ -172,25 +251,47 @@ export default function Dashboard() {
           wbgt_estimate: pred.wbgt_estimate,
         });
         setHeatRiskChecked(true);
+      } else {
+        throw new Error(data.error || "Heat risk check failed");
       }
-    } catch {
-      alert("Could not connect to API server.\nMake sure the server is running: python api_server.py");
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      setHeatRisk({
+        risk_level: "Error",
+        risk_color: "#ef4444",
+        safety_message: `Unable to check heat risk. Make sure the Python API server is running (python api_server.py). Error: ${errorMessage}`,
+      });
+      setHeatRiskChecked(true);
     }
     setHeatRiskLoading(false);
   };
 
   const riskColor = heatRisk?.risk_color || "#64748b";
   const riskLevel = heatRisk?.risk_level?.toLowerCase() || "";
-  const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
-  const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const avgShadeCoverage = Math.round(tasks.reduce((a, t) => a + t.shadePercentage, 0) / tasks.length);
-  const totalDuration = tasks.reduce((sum, task) => sum + getTaskDurationMinutes(task.timeWindow), 0);
-  const progressSeries = WORK_PROGRESS[chartRange];
+  const scheduledCount = dashboardData?.scheduled_count ?? tasks.filter((t) => t.status === "scheduled").length;
+  const completedCount = dashboardData?.completed_count ?? tasks.filter((t) => t.status === "completed").length;
+  const avgShadeCoverage = dashboardData?.avg_shade_coverage ?? (tasks.length > 0 ? Math.round(tasks.reduce((a, t) => a + t.shadePercentage, 0) / tasks.length) : 0);
+  const totalDuration = dashboardData?.total_duration_minutes ?? tasks.reduce((sum, task) => sum + getTaskDurationMinutes(task.timeWindow), 0);
+  
+  // Build analytics progress series from backend data or use placeholder
+  const progressSeries = analyticsData.length > 0 
+    ? analyticsData.slice(0, 4).reverse().map((a) => ({
+        label: MONTH_LABELS[parseInt(a.month.split("-")[1]) - 1] || a.month,
+        value: a.completed_tasks,
+        goal: a.target_tasks || 50,
+      }))
+    : [
+        { label: "Jan", value: 38, goal: 50 },
+        { label: "Feb", value: 42, goal: 50 },
+        { label: "Mar", value: 35, goal: 50 },
+        { label: "Apr", value: 45, goal: 50 },
+      ];
+  
   const progressTotal = progressSeries.reduce((sum, item) => sum + item.value, 0);
   const progressGoal = progressSeries.reduce((sum, item) => sum + item.goal, 0);
-  const progressMax = Math.max(...progressSeries.map((item) => item.goal), 1);
+  const progressMax = Math.max(...progressSeries.map((item) => Math.max(item.goal, item.value)), 1);
   const progressPercent = Math.round((progressTotal / Math.max(progressGoal, 1)) * 100);
-  const trendDelta = progressSeries[progressSeries.length - 1].value - progressSeries[0].value;
+  const trendDelta = progressSeries.length > 1 ? progressSeries[progressSeries.length - 1].value - progressSeries[0].value : 0;
   // Chart uses viewBox="0 0 540 200": plot area x∈[24,516] y∈[16,148], labels at y=168
   const CX0 = 24, CX1 = 516, CY0 = 16, CY1 = 148;
   const cxRange = CX1 - CX0, cyRange = CY1 - CY0;
@@ -218,13 +319,6 @@ export default function Dashboard() {
                 </p>
               </div>
             </div>
-            <Link
-              to="/tasks"
-              className="hidden sm:flex items-center gap-2 self-start rounded-xl bg-gradient-to-r from-primary to-amber-500 px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg"
-            >
-              <Plus className="w-4 h-4" />
-              Schedule New Task
-            </Link>
           </div>
 
           {/* Quick Stats */}
@@ -245,7 +339,7 @@ export default function Dashboard() {
                 <Sun className="w-5 h-5 text-primary" />
               </div>
               <div className="text-4xl font-bold text-primary mb-2">{avgShadeCoverage}%</div>
-              <p className="text-sm text-muted-foreground">Across all tasks</p>
+              <p className="text-sm text-muted-foreground">Across all scheduled tasks</p>
             </div>
             <div className="rounded-2xl border border-green-500/20 bg-gradient-to-br from-emerald-500/10 via-background to-green-500/5 p-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
@@ -278,32 +372,31 @@ export default function Dashboard() {
                       <h2 className="text-xl font-semibold text-foreground">Work Analytics</h2>
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Output trends — balance productivity with safer work windows.
+                      Task completion trends — past 4 months overview.
                     </p>
                   </div>
-                  {/* Toggle — fixed-width pill, no overflow */}
-                  <div className="flex shrink-0 overflow-hidden rounded-xl border border-primary/10 bg-background/80 p-1 shadow-sm">
-                    {(["day", "week", "month"] as ChartRange[]).map((range) => (
-                      <button
-                        key={range}
-                        type="button"
-                        onClick={() => setChartRange(range)}
-                        className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium capitalize transition-all ${
-                          chartRange === range
-                            ? "bg-gradient-to-r from-primary to-amber-500 text-primary-foreground shadow-sm"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        {range}
-                      </button>
-                    ))}
+                  {/* Month selector */}
+                  <div className="flex shrink-0 items-center gap-2">
+                    <select
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="rounded-xl border border-primary/20 bg-background/80 px-3 py-2 text-sm font-medium text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      {Array.from({ length: 4 }, (_, i) => {
+                        const d = new Date();
+                        d.setMonth(d.getMonth() - i);
+                        const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+                        const label = d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+                        return <option key={value} value={value}>{label}</option>;
+                      })}
+                    </select>
                   </div>
                 </div>
 
                 {/* KPI row */}
                 <div className="mt-5 flex flex-wrap items-center gap-6">
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">{chartRange} total</p>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Total Completed</p>
                     <div className="mt-1 flex items-end gap-2">
                       <span className="text-4xl font-bold text-foreground">{progressTotal}</span>
                       <span className={`mb-1 rounded-full px-2 py-0.5 text-xs font-semibold ${trendDelta >= 0 ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600"}`}>
@@ -312,14 +405,30 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="h-10 w-px bg-border/60" />
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Attainment</p>
+                  <div className="group relative">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70 flex items-center gap-1">
+                      Attainment
+                      <span className="cursor-help" title="Percentage of completed tasks vs target. Shows how well you're meeting your task completion goals.">
+                        <Info className="w-3 h-3 text-muted-foreground hover:text-primary" />
+                      </span>
+                    </p>
                     <p className="mt-1 text-4xl font-bold text-foreground">{progressPercent}%</p>
+                    <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-50 w-48 rounded-lg border border-border bg-card p-2 text-xs text-muted-foreground shadow-lg">
+                      Attainment = (Completed / Target) × 100. Measures task completion efficiency.
+                    </div>
                   </div>
                   <div className="h-10 w-px bg-border/60" />
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Target</p>
+                  <div className="group relative">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70 flex items-center gap-1">
+                      Target
+                      <span className="cursor-help" title="Total number of tasks planned to complete across the displayed months.">
+                        <Info className="w-3 h-3 text-muted-foreground hover:text-primary" />
+                      </span>
+                    </p>
                     <p className="mt-1 text-4xl font-bold text-foreground">{progressGoal}</p>
+                    <div className="absolute left-0 top-full mt-2 hidden group-hover:block z-50 w-48 rounded-lg border border-border bg-card p-2 text-xs text-muted-foreground shadow-lg">
+                      Target = Sum of monthly task goals. Set based on workforce capacity and project needs.
+                    </div>
                   </div>
                   <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
                     <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-6 rounded-full bg-gradient-to-r from-primary to-amber-500" />Actual</span>
@@ -543,10 +652,21 @@ export default function Dashboard() {
                                 <CheckCircle className="w-4 h-4 text-primary" />
                                 <div>
                                   <p className="text-xs text-muted-foreground">Status</p>
-                                  <p className="font-semibold capitalize text-foreground">{task.status}</p>
+                                  <p className={`font-semibold capitalize ${task.status === "completed" ? "text-green-600" : task.status === "scheduled" ? "text-primary" : "text-amber-500"}`}>
+                                    {task.status === "in-process" ? "In Process" : task.status}
+                                  </p>
                                 </div>
                               </div>
                             </div>
+                            {task.status !== "completed" && (
+                              <button
+                                type="button"
+                                onClick={() => markCompleted(task.id)}
+                                className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-green-500 hover:shadow-md"
+                              >
+                                <Check className="w-4 h-4" /> Mark Completed
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>

@@ -1,541 +1,384 @@
-import { useState, useRef } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/AppLayout";
-import { getDubaiNow, formatTime } from "@/lib/sunCalculations";
+import { toast } from "sonner";
+import {
+  Plus, Clock, MapPin, Calendar, Trash2, Pencil, CheckCircle,
+  ExternalLink, Filter, RefreshCw, AlertTriangle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
 const API_BASE = "http://localhost:8002";
 
-const HOURS = Array.from({ length: 24 }, (_, i) => {
-  const period = i < 12 ? "AM" : "PM";
-  const h = i === 0 ? 12 : i > 12 ? i - 12 : i;
-  return { value: i, label: `${h}:00 ${period}` };
-});
-
-interface ScheduleResult {
-  bestStart: string;
-  bestEnd: string;
-  shadowPct: number;
-  heatRiskLabel: string;
-  heatRiskColor: string;
-  comfortScore: number;
-  reason?: string;
-  area: string;
-  alternatives: Alternative[];
-  requestId: string | null;
+interface Task {
+  task_id: string;
+  task_name: string;
+  location_name: string;
+  location_lat: number;
+  location_lon: number;
+  duration_minutes: number;
+  hour_start: number;
+  hour_end: number;
+  date: string;
+  status: "draft" | "scheduled" | "in-process" | "completed";
+  created_at: string;
+  recommendation?: {
+    accepted_time_start: string;
+    accepted_time_end: string;
+    shade_percentage: number;
+    shade_slot: string;
+  };
 }
 
-interface Alternative {
-  startTime: string;
-  shadePct: number;
-  heatRiskLabel: string;
-  heatRiskColor: string;
-  rawStartTime: string;
-  rawEndTime?: string;
-}
+const STATUS_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  draft: { bg: "bg-slate-100", text: "text-slate-700", label: "Draft" },
+  scheduled: { bg: "bg-blue-100", text: "text-blue-700", label: "Scheduled" },
+  "in-process": { bg: "bg-amber-100", text: "text-amber-700", label: "In Process" },
+  completed: { bg: "bg-green-100", text: "text-green-700", label: "Completed" },
+};
 
 export default function Tasks() {
-  const { dateStr: todayDate } = getDubaiNow();
+  const navigate = useNavigate();
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<string>("all");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<Task>>({});
 
-  const [taskName, setTaskName] = useState("");
-  const [taskLocation, setTaskLocation] = useState("");
-  const [taskLocationCoords, setTaskLocationCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [duration, setDuration] = useState(60);
-  const [startHour, setStartHour] = useState(6);
-  const [endHour, setEndHour] = useState(18);
-  const [date, setDate] = useState(todayDate);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<ScheduleResult | null>(null);
-  const [accepted, setAccepted] = useState(false);
-  const [gpsLoading, setGpsLoading] = useState(false);
-  const [locationSearchVal, setLocationSearchVal] = useState("");
-  const [geoSuggestions, setGeoSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
-  const geoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Geocode search for task location
-  const handleGeoSearch = (val: string) => {
-    setLocationSearchVal(val);
-    if (geoTimeoutRef.current) clearTimeout(geoTimeoutRef.current);
-    if (val.length < 2) { setGeoSuggestions([]); return; }
-    geoTimeoutRef.current = setTimeout(async () => {
-      try {
-        const MAPBOX_TOKEN = "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
-        const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(val)}.json?access_token=${MAPBOX_TOKEN}&proximity=55.2708,25.2048&types=poi,address,place&limit=5`
-        );
-        const data = await res.json();
-        setGeoSuggestions(data.features || []);
-      } catch {}
-    }, 300);
-  };
-
-  const selectGeoSuggestion = (s: { place_name: string; center: [number, number] }) => {
-    setTaskLocation(s.place_name);
-    setTaskLocationCoords({ lat: s.center[1], lng: s.center[0] });
-    setLocationSearchVal("");
-    setGeoSuggestions([]);
-  };
-
-  // GPS location
-  const useGPS = () => {
-    if (!navigator.geolocation) { alert("GPS not available in your browser."); return; }
-    setGpsLoading(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords;
-        setTaskLocationCoords({ lat: latitude, lng: longitude });
-        setTaskLocation(`${latitude.toFixed(4)}°N, ${longitude.toFixed(4)}°E`);
-        setGpsLoading(false);
-      },
-      () => {
-        alert("Could not get GPS location.");
-        setGpsLoading(false);
-      }
-    );
-  };
-
-  // Find optimal schedule
-  const findOptimalSchedule = async () => {
+  const fetchTasks = async () => {
     setLoading(true);
-    setResult(null);
-    setAccepted(false);
     try {
-      const location = taskLocationCoords || { lat: 25.2048, lng: 55.2708 };
-      const payload = {
-        task_name: taskName || "outdoor task",
-        task_duration_minutes: duration,
-        date,
-        start_hour: startHour,
-        end_hour: endHour,
-        recommendation_count: 5,
-        rank_by: "shade",
-        work_zone: {
-          zone_id: `ui_zone_${Date.now()}`,
-          name: taskLocation || "selected work zone",
-          lat: location.lat,
-          lon: location.lng,
-          radius: 50,
-          is_facade: false,
-          zone_type: "general",
-        },
-      };
-      const res = await fetch(`${API_BASE}/api/v2/schedule`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(`API error ${res.status}`);
+      const res = await fetch(`${API_BASE}/api/tasks`);
       const data = await res.json();
-      if (!data.success) throw new Error(data.error || "Scheduling failed");
-
-      const rec = data.recommendation || {};
-      const isV2 = !!rec.best_schedule;
-      const best = isV2 ? rec.best_schedule : rec;
-
-      const bestStart = isV2
-        ? new Date(best.start_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-        : best.best_start_time;
-      const bestEnd = isV2
-        ? new Date(best.end_time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-        : best.end_time;
-
-      const comfortScore = isV2 ? Math.round((best.comfort_score || 0) * 100) : Math.round((rec.quality_score || 0));
-      const heatRiskPct = (isV2 ? (best.heat_risk_score || 0) : (rec.heat_risk_score || 0)) * 100;
-      const heatRiskLabel = heatRiskPct <= 30 ? "LOW" : heatRiskPct <= 60 ? "MEDIUM" : "HIGH";
-      const heatRiskColor = heatRiskLabel === "LOW" ? "#22c55e" : heatRiskLabel === "MEDIUM" ? "#f59e0b" : "#ef4444";
-      const shadowPct = isV2 ? Math.round(best.shadow_percentage || 0) : Math.round(rec.shade_percentage || 0);
-      const area = (rec.work_zone?.name) || taskLocation || "map center";
-      const reason = isV2 ? rec.recommendation_reason : undefined;
-
-      const rawAlts = (isV2 ? rec.alternatives : data.alternatives) || [];
-      const alternatives: Alternative[] = rawAlts.slice(0, 4).map((alt: Record<string, unknown>) => {
-        const altHeatPct = ((alt.heat_risk_score as number) || 0) * 100;
-        const altLabel = altHeatPct <= 30 ? "LOW" : altHeatPct <= 60 ? "MED" : "HIGH";
-        const altColor = altLabel === "LOW" ? "#22c55e" : altLabel === "MED" ? "#f59e0b" : "#ef4444";
-        const altStart = isV2
-          ? new Date(alt.start_time as string).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          : (alt.start_time as string);
-        const altShade = isV2 ? Math.round((alt.shadow_percentage as number) || 0) : Math.round((alt.shade_percentage as number) || 0);
-        return { startTime: altStart, shadePct: altShade, heatRiskLabel: altLabel, heatRiskColor: altColor, rawStartTime: alt.start_time as string, rawEndTime: alt.end_time as string };
-      });
-
-      setResult({
-        bestStart,
-        bestEnd,
-        shadowPct,
-        heatRiskLabel,
-        heatRiskColor,
-        comfortScore,
-        reason,
-        area,
-        alternatives,
-        requestId: data.request_id || null,
-      });
+      if (data.success) {
+        setTasks(data.tasks || []);
+      }
     } catch (err) {
-      alert(`Scheduling failed: ${(err as Error).message}\n\nMake sure the server is running: python api_server.py`);
+      console.error("Failed to fetch tasks:", err);
+      toast.error("Failed to load tasks. Make sure the API server is running.");
     }
     setLoading(false);
   };
 
-  // Send feedback
-  const sendFeedback = async (action: "accept" | "reject", startTime?: string, endTime?: string) => {
-    if (!result?.requestId) return;
+  useEffect(() => {
+    fetchTasks();
+  }, []);
+
+  const filteredTasks = tasks.filter((t) => {
+    if (filter === "all") return true;
+    return t.status === filter;
+  });
+
+  const deleteTask = async (taskId: string) => {
+    if (!confirm("Are you sure you want to delete this task?")) return;
     try {
-      await fetch(`${API_BASE}/api/schedule/feedback`, {
-        method: "POST",
+      const res = await fetch(`${API_BASE}/api/tasks/${taskId}`, { method: "DELETE" });
+      if (res.ok) {
+        toast.success("Task deleted");
+        fetchTasks();
+      } else {
+        toast.error("Failed to delete task");
+      }
+    } catch {
+      toast.error("Failed to delete task");
+    }
+  };
+
+  const markCompleted = async (taskId: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/tasks/${taskId}/complete`, { method: "POST" });
+      if (res.ok) {
+        toast.success("Task marked as completed!");
+        fetchTasks();
+      }
+    } catch {
+      toast.error("Failed to update task");
+    }
+  };
+
+  const startEdit = (task: Task) => {
+    setEditingId(task.task_id);
+    setEditForm({
+      task_name: task.task_name,
+      location_name: task.location_name,
+      duration_minutes: task.duration_minutes,
+      hour_start: task.hour_start,
+      hour_end: task.hour_end,
+      date: task.date,
+    });
+  };
+
+  const saveEdit = async () => {
+    if (!editingId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/tasks/${editingId}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          request_id: result.requestId,
-          action,
-          chosen_start: startTime || null,
-          chosen_end: endTime || null,
-          note: "",
-        }),
+        body: JSON.stringify(editForm),
       });
-    } catch {}
+      if (res.ok) {
+        toast.success("Task updated");
+        setEditingId(null);
+        fetchTasks();
+      } else {
+        toast.error("Failed to update task");
+      }
+    } catch {
+      toast.error("Failed to update task");
+    }
   };
 
-  const acceptSchedule = async (startTime?: string, endTime?: string) => {
-    await sendFeedback("accept", startTime, endTime);
-    setAccepted(true);
+  const redirectToMapForReschedule = (task: Task) => {
+    navigate(`/map?reschedule=${task.task_id}&lat=${task.location_lat}&lon=${task.location_lon}&name=${encodeURIComponent(task.task_name)}`);
   };
 
-  const rejectSchedule = async () => {
-    await sendFeedback("reject");
-    setResult(null);
+  const formatTimeWindow = (task: Task): string => {
+    if (task.recommendation) {
+      return `${task.recommendation.accepted_time_start} – ${task.recommendation.accepted_time_end}`;
+    }
+    return `${String(task.hour_start).padStart(2, "0")}:00 – ${String(task.hour_end).padStart(2, "0")}:00`;
   };
-
-  const comfortColor = result
-    ? result.comfortScore >= 70 ? "#22c55e" : result.comfortScore >= 50 ? "#f59e0b" : "#ef4444"
-    : "#22c55e";
 
   return (
     <AppLayout>
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-foreground">Tasks</h1>
-          <p className="text-muted-foreground mt-2">
-            Schedule outdoor tasks at the optimal time using shadow coverage and heat risk analysis
-          </p>
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-foreground">Tasks</h1>
+            <p className="text-muted-foreground mt-1">
+              Manage all scheduled outdoor tasks with optimal shade coverage
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={fetchTasks}
+              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted"
+            >
+              <RefreshCw className="w-4 h-4" /> Refresh
+            </button>
+            <button
+              onClick={() => navigate("/map")}
+              className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="w-4 h-4" /> New Task
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Schedule Form */}
-          <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-border bg-muted/30">
-              <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-                🕐 Schedule Outdoor Task
-              </h2>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                Find the best time window considering shade and heat risk
-              </p>
-            </div>
+        {/* Filter tabs */}
+        <div className="flex items-center gap-2 border-b border-border pb-2">
+          <Filter className="w-4 h-4 text-muted-foreground" />
+          {["all", "scheduled", "in-process", "completed", "draft"].map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={cn(
+                "rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                filter === f
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              )}
+            >
+              {f === "all" ? "All" : f === "in-process" ? "In Process" : f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
 
-            <div className="p-6 space-y-5">
-              {/* Task name */}
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Task Name</label>
-                <input
-                  type="text"
-                  value={taskName}
-                  onChange={(e) => setTaskName(e.target.value)}
-                  placeholder="e.g., facade cleaning, rooftop inspection"
-                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-foreground text-sm placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                />
-              </div>
-
-              {/* Location */}
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">📍 Task Location</label>
-                <div className="flex gap-2 mb-2">
-                  <input
-                    type="text"
-                    value={taskLocation}
-                    readOnly
-                    placeholder="Location (search below or use GPS)"
-                    className="flex-1 px-3 py-2.5 rounded-lg border border-border bg-muted text-foreground text-sm placeholder-muted-foreground"
-                  />
-                  <button
-                    onClick={useGPS}
-                    disabled={gpsLoading}
-                    className="px-3 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0"
-                    title="Use GPS location"
-                  >
-                    {gpsLoading ? "…" : "📡 GPS"}
-                  </button>
-                </div>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={locationSearchVal}
-                    onChange={(e) => handleGeoSearch(e.target.value)}
-                    placeholder="Search building or area name"
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm placeholder-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                  />
-                  {geoSuggestions.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
-                      {geoSuggestions.map((s, i) => (
-                        <button
-                          key={i}
-                          onClick={() => selectGeoSuggestion(s)}
-                          className="w-full text-left px-3 py-2.5 text-sm text-foreground hover:bg-muted transition-colors border-b border-border last:border-0"
-                        >
-                          {s.place_name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                {taskLocationCoords && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    📍 {taskLocationCoords.lat.toFixed(4)}°N, {taskLocationCoords.lng.toFixed(4)}°E
-                  </p>
-                )}
-              </div>
-
-              {/* Duration */}
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">
-                  Duration: <span className="text-primary font-bold">{duration} minutes</span>
-                </label>
-                <input
-                  type="range"
-                  min={15}
-                  max={480}
-                  step={15}
-                  value={duration}
-                  onChange={(e) => setDuration(parseInt(e.target.value))}
-                  className="w-full accent-primary h-2 cursor-pointer"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                  <span>15 min</span>
-                  <span>2 hr</span>
-                  <span>4 hr</span>
-                  <span>8 hr</span>
-                </div>
-              </div>
-
-              {/* Date */}
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Date</label>
-                <input
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                />
-              </div>
-
-              {/* Working hours */}
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Working Hours Window</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">From</label>
-                    <select
-                      value={startHour}
-                      onChange={(e) => setStartHour(parseInt(e.target.value))}
-                      className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                    >
-                      {HOURS.map(({ value, label }) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">To</label>
-                    <select
-                      value={endHour}
-                      onChange={(e) => setEndHour(parseInt(e.target.value))}
-                      className="w-full px-3 py-2.5 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-                    >
-                      {HOURS.map(({ value, label }) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onClick={findOptimalSchedule}
-                disabled={loading}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-green-600 to-emerald-500 hover:from-green-500 hover:to-emerald-400 text-white font-semibold text-sm transition-all disabled:opacity-50 shadow-md"
-              >
-                {loading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <span className="animate-spin">⏳</span> Analyzing shadow & heat risk…
-                  </span>
-                ) : (
-                  "🕐 Find Optimal Time (Shadow + Heat)"
-                )}
-              </button>
-            </div>
+        {/* Loading state */}
+        {loading && (
+          <div className="text-center py-12">
+            <RefreshCw className="w-8 h-8 text-primary animate-spin mx-auto mb-3" />
+            <p className="text-muted-foreground">Loading tasks...</p>
           </div>
+        )}
 
-          {/* Result Panel */}
-          <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
-            <div className="px-6 py-4 border-b border-border bg-muted/30">
-              <h2 className="text-lg font-semibold text-foreground">📊 Recommendation</h2>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                AI-optimized scheduling based on real-time conditions
-              </p>
-            </div>
+        {/* Empty state */}
+        {!loading && filteredTasks.length === 0 && (
+          <div className="text-center py-12 rounded-2xl border border-dashed border-border">
+            <AlertTriangle className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+            <p className="text-lg font-medium text-foreground mb-1">No tasks found</p>
+            <p className="text-sm text-muted-foreground mb-4">
+              {filter !== "all" ? "Try changing the filter or " : ""}
+              Create a new task from the Task Map.
+            </p>
+            <button
+              onClick={() => navigate("/map")}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground"
+            >
+              <Plus className="w-4 h-4" /> Create Task
+            </button>
+          </div>
+        )}
 
-            {!result && !loading && (
-              <div className="p-12 flex flex-col items-center justify-center text-center min-h-64">
-                <div className="text-5xl mb-4">🕐</div>
-                <p className="text-muted-foreground text-sm max-w-xs">
-                  Fill in the task details and click "Find Optimal Time" to get an AI-powered schedule recommendation
-                </p>
-              </div>
-            )}
+        {/* Tasks grid */}
+        {!loading && filteredTasks.length > 0 && (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {filteredTasks.map((task) => {
+              const statusStyle = STATUS_COLORS[task.status] || STATUS_COLORS.draft;
+              const isEditing = editingId === task.task_id;
 
-            {loading && (
-              <div className="p-12 flex flex-col items-center justify-center text-center min-h-64">
-                <div className="text-4xl mb-4 animate-spin">⏳</div>
-                <p className="text-muted-foreground text-sm">
-                  Analyzing shadow coverage and heat risk…
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  📍 {taskLocationCoords ? `${taskLocationCoords.lat.toFixed(4)}, ${taskLocationCoords.lng.toFixed(4)}` : "Map center"} ·
-                  ⏱ {startHour}:00–{endHour}:00 window
-                </p>
-              </div>
-            )}
-
-            {result && !accepted && (
-              <div className="p-6 space-y-5">
-                {/* Best time */}
-                <div className="rounded-xl bg-green-50 border border-green-200 p-4">
-                  <div className="text-xs font-semibold text-green-700 mb-2">✓ Recommended Schedule</div>
-                  <div className="text-2xl font-bold text-green-800">
-                    ⏰ {result.bestStart} – {result.bestEnd}
-                  </div>
-                  {result.area && (
-                    <div className="text-xs text-green-600 mt-1">📍 {result.area}</div>
-                  )}
-                </div>
-
-                {/* Metrics */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center p-3 rounded-xl bg-muted/60 border border-border">
-                    <div className="text-xs text-muted-foreground mb-1">SHADOW</div>
-                    <div className="text-xl font-bold text-foreground">{result.shadowPct}%</div>
-                  </div>
-                  <div className="text-center p-3 rounded-xl bg-muted/60 border border-border">
-                    <div className="text-xs text-muted-foreground mb-1">HEAT RISK</div>
-                    <div className="text-lg font-bold" style={{ color: result.heatRiskColor }}>
-                      {result.heatRiskLabel}
-                    </div>
-                  </div>
-                  <div className="text-center p-3 rounded-xl bg-muted/60 border border-border">
-                    <div className="text-xs text-muted-foreground mb-1">COMFORT</div>
-                    <div className="text-xl font-bold" style={{ color: comfortColor }}>
-                      {result.comfortScore}/100
-                    </div>
-                  </div>
-                </div>
-
-                {result.reason && (
-                  <p className="text-sm text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-                    💡 {result.reason}
-                  </p>
-                )}
-
-                {/* Accept / Reject */}
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => acceptSchedule()}
-                    className="py-2.5 rounded-xl bg-green-600 hover:bg-green-500 text-white font-semibold text-sm transition-colors"
-                  >
-                    ✓ Accept
-                  </button>
-                  <button
-                    onClick={rejectSchedule}
-                    className="py-2.5 rounded-xl bg-red-500 hover:bg-red-400 text-white font-semibold text-sm transition-colors"
-                  >
-                    ✕ Reject
-                  </button>
-                </div>
-
-                {/* Alternatives */}
-                {result.alternatives.length > 0 && (
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-                      📅 Alternative Times
-                    </div>
-                    <div className="space-y-2">
-                      {result.alternatives.map((alt, idx) => (
-                        <div
-                          key={idx}
-                          className="flex items-center justify-between p-3 rounded-xl bg-muted/40 border border-border hover:bg-muted/70 transition-colors"
+              return (
+                <div
+                  key={task.task_id}
+                  className="rounded-2xl border border-border bg-card shadow-sm hover:shadow-md transition-shadow overflow-hidden"
+                >
+                  {isEditing ? (
+                    <div className="p-4 space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-muted-foreground mb-1">Task Name</label>
+                        <input
+                          type="text"
+                          value={editForm.task_name || ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, task_name: e.target.value }))}
+                          className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-muted-foreground mb-1">Location</label>
+                        <input
+                          type="text"
+                          value={editForm.location_name || ""}
+                          onChange={(e) => setEditForm((f) => ({ ...f, location_name: e.target.value }))}
+                          className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-xs font-medium text-muted-foreground mb-1">Start Hour</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={23}
+                            value={editForm.hour_start || 0}
+                            onChange={(e) => setEditForm((f) => ({ ...f, hour_start: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-muted-foreground mb-1">End Hour</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={24}
+                            value={editForm.hour_end || 0}
+                            onChange={(e) => setEditForm((f) => ({ ...f, hour_end: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                          />
+                        </div>
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <button
+                          onClick={saveEdit}
+                          className="flex-1 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold"
                         >
-                          <div>
-                            <div className="text-sm font-semibold text-foreground">{alt.startTime}</div>
-                            <div className="text-xs text-muted-foreground">
-                              🌥️ {alt.shadePct}% shade ·{" "}
-                              <span style={{ color: alt.heatRiskColor }}>🌡️ {alt.heatRiskLabel}</span>
-                            </div>
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="flex-1 py-2 rounded-lg border border-border text-sm font-medium"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => { setEditingId(null); redirectToMapForReschedule(task); }}
+                        className="w-full py-2 rounded-lg border border-amber-400 bg-amber-50 text-amber-700 text-sm font-medium flex items-center justify-center gap-2"
+                      >
+                        <ExternalLink className="w-4 h-4" /> Re-schedule on Map
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="p-4">
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <h3 className="font-semibold text-foreground line-clamp-2">{task.task_name}</h3>
+                          <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-xs font-medium", statusStyle.bg, statusStyle.text)}>
+                            {statusStyle.label}
+                          </span>
+                        </div>
+
+                        <div className="space-y-2 text-sm text-muted-foreground">
+                          <div className="flex items-center gap-2">
+                            <MapPin className="w-4 h-4 text-primary" />
+                            <span className="truncate">{task.location_name || "—"}</span>
                           </div>
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 text-primary" />
+                            <span>{formatTimeWindow(task)}</span>
+                            <span className="text-xs text-muted-foreground">({task.duration_minutes} min)</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-primary" />
+                            <span>{new Date(task.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</span>
+                          </div>
+                          {task.recommendation && (
+                            <div className="flex items-center gap-2 text-green-600">
+                              <CheckCircle className="w-4 h-4" />
+                              <span className="font-medium">{task.recommendation.shade_percentage}% shade</span>
+                              <span className="text-xs">· {task.recommendation.shade_slot}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="border-t border-border px-4 py-3 flex items-center justify-between bg-muted/30">
+                        <div className="flex items-center gap-1">
                           <button
-                            onClick={() => acceptSchedule(alt.rawStartTime, alt.rawEndTime)}
-                            className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white text-xs font-medium transition-colors"
+                            onClick={() => startEdit(task)}
+                            className="p-2 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground"
+                            title="Edit"
                           >
-                            ✓ Accept
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => deleteTask(task.task_id)}
+                            className="p-2 rounded-lg hover:bg-red-100 text-muted-foreground hover:text-red-600"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {result && accepted && (
-              <div className="p-12 flex flex-col items-center justify-center text-center min-h-64">
-                <div className="text-5xl mb-4">✅</div>
-                <div className="text-xl font-bold text-foreground mb-2">Schedule Accepted!</div>
-                <div className="text-lg text-primary font-semibold mb-1">
-                  {result.bestStart} – {result.bestEnd}
+                        {task.status !== "completed" && (
+                          <button
+                            onClick={() => markCompleted(task.task_id)}
+                            className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-500"
+                          >
+                            <CheckCircle className="w-3.5 h-3.5" /> Complete
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
-                <p className="text-sm text-muted-foreground mt-2">Saved to your task history</p>
-                <button
-                  onClick={() => { setResult(null); setAccepted(false); }}
-                  className="mt-4 px-4 py-2 rounded-lg bg-muted hover:bg-muted/80 text-foreground text-sm transition-colors"
-                >
-                  Schedule Another Task
-                </button>
-              </div>
-            )}
+              );
+            })}
           </div>
-        </div>
+        )}
 
-        {/* Info section */}
-        <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
-          <h3 className="text-base font-semibold text-foreground mb-3">How It Works</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm text-muted-foreground">
-            <div className="flex gap-3">
-              <span className="text-2xl shrink-0">🌥️</span>
+        {/* Summary footer */}
+        {!loading && tasks.length > 0 && (
+          <div className="rounded-2xl border border-border bg-muted/30 p-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
               <div>
-                <div className="font-medium text-foreground mb-0.5">Shadow Analysis</div>
-                Calculates real shadow coverage using NOAA solar position algorithms for your exact location and date
+                <div className="text-2xl font-bold text-foreground">{tasks.length}</div>
+                <div className="text-xs text-muted-foreground">Total Tasks</div>
               </div>
-            </div>
-            <div className="flex gap-3">
-              <span className="text-2xl shrink-0">🌡️</span>
               <div>
-                <div className="font-medium text-foreground mb-0.5">Heat Risk Model</div>
-                Fetches live weather from Open-Meteo and runs an ML model to predict heat risk and WBGT
+                <div className="text-2xl font-bold text-blue-600">{tasks.filter((t) => t.status === "scheduled").length}</div>
+                <div className="text-xs text-muted-foreground">Scheduled</div>
               </div>
-            </div>
-            <div className="flex gap-3">
-              <span className="text-2xl shrink-0">⏰</span>
               <div>
-                <div className="font-medium text-foreground mb-0.5">Optimal Timing</div>
-                Ranks every time slot in your window by combined comfort score and shows the best options
+                <div className="text-2xl font-bold text-amber-600">{tasks.filter((t) => t.status === "in-process").length}</div>
+                <div className="text-xs text-muted-foreground">In Process</div>
+              </div>
+              <div>
+                <div className="text-2xl font-bold text-green-600">{tasks.filter((t) => t.status === "completed").length}</div>
+                <div className="text-xs text-muted-foreground">Completed</div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </AppLayout>
   );

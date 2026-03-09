@@ -75,7 +75,6 @@ export default function MapboxMap({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const mapReadyRef = useRef(false);
-  const isUpdatingRef = useRef(false);
 
   // Stable refs for callbacks (avoid stale closures in map event handlers)
   const selectingPointRef = useRef(selectingPoint);
@@ -95,8 +94,7 @@ export default function MapboxMap({
   // ── Lighting helper ──────────────────────────────────────────────────────
   const applyLighting = useCallback((sp: SunPosition) => {
     const map = mapRef.current;
-    if (!map || isUpdatingRef.current) return;
-    isUpdatingRef.current = true;
+    if (!map) return;
     try {
       try { map.setConfigProperty("basemap", "lightPreset", getLightPreset(sp.altitude, sp.azimuth)); } catch {}
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -122,7 +120,6 @@ export default function MapboxMap({
         },
       ]);
     } catch (e) { console.warn("Lighting error:", e); }
-    isUpdatingRef.current = false;
   }, []);
 
   // ── Init map ─────────────────────────────────────────────────────────────
@@ -144,7 +141,7 @@ export default function MapboxMap({
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "bottom-right");
 
     map.on("load", () => {
-      const date = new Date();
+      const date = dateStr ? new Date(dateStr) : new Date();
       const h = Math.floor(currentMinutes / 60);
       const m = currentMinutes % 60;
       const sp = calculateSunPosition(date, h, m);

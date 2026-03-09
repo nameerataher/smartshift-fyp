@@ -69,83 +69,22 @@ except ImportError:
     openmeteo = None
     print("Warning: openmeteo-requests not available. Install with: pip install openmeteo-requests requests-cache retry-requests")
 
-# sqlite database for storing schedule feedback and user preferences
+# database module for PostgreSQL/SQLite
+from database import (
+    init_database, seed_dummy_data,
+    create_task, get_task, get_all_tasks, get_today_tasks, update_task, delete_task,
+    create_accepted_recommendation, get_recommendation_by_task, mark_task_completed,
+    get_analytics, get_analytics_range, update_analytics_for_month, get_dashboard_summary,
+    UserTask, AcceptedRecommendation
+)
+
+# legacy sqlite path for backward compatibility
 DB_PATH = os.path.join(os.path.dirname(__file__), "smartshift.db")
 
 def init_db():
-    """initialize sqlite database tables for scheduling and routing."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    # schedule requests table - stores all scheduling requests
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS schedule_requests (
-            id TEXT PRIMARY KEY,
-            task_name TEXT,
-            lat REAL,
-            lon REAL,
-            date TEXT,
-            start_hour INTEGER,
-            end_hour INTEGER,
-            duration_minutes INTEGER,
-            recommended_start TEXT,
-            recommended_end TEXT,
-            heat_risk_score REAL,
-            shade_percentage REAL,
-            quality_score REAL,
-            created_at TEXT
-        )
-    """)
-
-    # schedule feedback table - stores user accept/reject decisions
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS schedule_feedback (
-            id TEXT PRIMARY KEY,
-            request_id TEXT,
-            action TEXT,
-            chosen_start TEXT,
-            chosen_end TEXT,
-            note TEXT,
-            created_at TEXT,
-            FOREIGN KEY(request_id) REFERENCES schedule_requests(id)
-        )
-    """)
-
-    # route history table - stores all route requests and selections
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS route_history (
-            id TEXT PRIMARY KEY,
-            start_lat REAL,
-            start_lon REAL,
-            end_lat REAL,
-            end_lon REAL,
-            start_name TEXT,
-            end_name TEXT,
-            travel_mode TEXT,
-            distance_km REAL,
-            duration_min REAL,
-            shade_coverage REAL,
-            heat_risk_score REAL,
-            route_geometry TEXT,
-            created_at TEXT
-        )
-    """)
-
-    # user preferences table - learns from user behavior over time
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS user_preferences (
-            id TEXT PRIMARY KEY,
-            preference_type TEXT,
-            preference_key TEXT,
-            preference_value TEXT,
-            weight REAL DEFAULT 1.0,
-            created_at TEXT,
-            updated_at TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
+    """initialize database tables - now using new database module."""
+    init_database()
+    seed_dummy_data()
 
 
 # flask app initialization
@@ -1532,6 +1471,190 @@ def get_ml_status():
             "/api/shaded-route"
         ]
     })
+
+
+# =============================================================================
+# TASK MANAGEMENT API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/tasks', methods=['GET'])
+def api_get_tasks():
+    """Get all tasks, optionally filtered by date or status."""
+    try:
+        date_filter = request.args.get('date')
+        status_filter = request.args.get('status')
+        tasks = get_all_tasks(date_filter=date_filter, status_filter=status_filter)
+        return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/tasks/today', methods=['GET'])
+def api_get_today_tasks():
+    """Get tasks for today."""
+    try:
+        tasks = get_today_tasks()
+        return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/tasks', methods=['POST'])
+def api_create_task():
+    """Create a new task."""
+    try:
+        data = request.get_json() or {}
+        
+        task = UserTask(
+            task_id=data.get('task_id', str(uuid.uuid4())),
+            task_name=data.get('task_name', 'Untitled Task'),
+            location_name=data.get('location_name', ''),
+            location_lat=float(data.get('location_lat', DUBAI.LATITUDE)),
+            location_lon=float(data.get('location_lon', DUBAI.LONGITUDE)),
+            duration_minutes=int(data.get('duration_minutes', 60)),
+            hour_start=int(data.get('hour_start', 6)),
+            hour_end=int(data.get('hour_end', 18)),
+            date=data.get('date', datetime.now().strftime('%Y-%m-%d')),
+            status=data.get('status', 'draft')
+        )
+        
+        task_id = create_task(task)
+        return jsonify({"success": True, "task_id": task_id, "message": "Task created"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/tasks/<task_id>', methods=['GET'])
+def api_get_task(task_id):
+    """Get a specific task."""
+    try:
+        task = get_task(task_id)
+        if task:
+            rec = get_recommendation_by_task(task_id)
+            task['recommendation'] = rec
+            return jsonify({"success": True, "task": task})
+        return jsonify({"success": False, "error": "Task not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>', methods=['PUT', 'PATCH'])
+def api_update_task(task_id):
+    """Update a task."""
+    try:
+        data = request.get_json() or {}
+        
+        allowed_fields = ['task_name', 'location_name', 'location_lat', 'location_lon',
+                         'duration_minutes', 'hour_start', 'hour_end', 'date', 'status']
+        updates = {k: v for k, v in data.items() if k in allowed_fields}
+        
+        if not updates:
+            return jsonify({"success": False, "error": "No valid fields to update"}), 400
+        
+        success = update_task(task_id, updates)
+        if success:
+            return jsonify({"success": True, "message": "Task updated"})
+        return jsonify({"success": False, "error": "Task not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/tasks/<task_id>', methods=['DELETE'])
+def api_delete_task(task_id):
+    """Delete a task."""
+    try:
+        success = delete_task(task_id)
+        if success:
+            return jsonify({"success": True, "message": "Task deleted"})
+        return jsonify({"success": False, "error": "Task not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>/complete', methods=['POST'])
+def api_complete_task(task_id):
+    """Mark a task as completed."""
+    try:
+        success = mark_task_completed(task_id)
+        if success:
+            return jsonify({"success": True, "message": "Task marked as completed"})
+        return jsonify({"success": False, "error": "Task not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/tasks/<task_id>/accept', methods=['POST'])
+def api_accept_recommendation(task_id):
+    """Accept a recommendation for a task."""
+    try:
+        data = request.get_json() or {}
+        
+        rec = AcceptedRecommendation(
+            id=str(uuid.uuid4()),
+            task_id=task_id,
+            accepted_time_start=data.get('accepted_time_start', ''),
+            accepted_time_end=data.get('accepted_time_end', ''),
+            shade_percentage=float(data.get('shade_percentage', 0)),
+            shade_slot=data.get('shade_slot', '')
+        )
+        
+        rec_id = create_accepted_recommendation(rec)
+        
+        update_task(task_id, {'status': 'scheduled'})
+        
+        return jsonify({"success": True, "recommendation_id": rec_id, "message": "Recommendation accepted"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+# =============================================================================
+# ANALYTICS API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/dashboard', methods=['GET'])
+def api_get_dashboard():
+    """Get dashboard summary data."""
+    try:
+        summary = get_dashboard_summary()
+        return jsonify({"success": True, **summary})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/analytics', methods=['GET'])
+def api_get_analytics():
+    """Get work analytics for past months."""
+    try:
+        months = int(request.args.get('months', 4))
+        analytics = get_analytics_range(months)
+        return jsonify({"success": True, "analytics": analytics})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/analytics/<month>', methods=['GET'])
+def api_get_month_analytics(month):
+    """Get analytics for a specific month (YYYY-MM format)."""
+    try:
+        analytics = get_analytics(month)
+        if analytics:
+            return jsonify({"success": True, "analytics": analytics})
+        
+        updated = update_analytics_for_month(month)
+        return jsonify({"success": True, "analytics": updated})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/analytics/refresh', methods=['POST'])
+def api_refresh_analytics():
+    """Refresh analytics for current month."""
+    try:
+        month = datetime.now().strftime("%Y-%m")
+        updated = update_analytics_for_month(month)
+        return jsonify({"success": True, "analytics": updated})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # =============================================================================

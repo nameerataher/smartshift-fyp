@@ -385,9 +385,9 @@ def get_safety_message(risk_level: int, recommended_exposure: int) -> str:
     messages are designed for workers and community members.
     """
     messages = {
-        0: f"conditions are safe for outdoor activity. stay hydrated and take normal precautions. recommended max continuous exposure: {recommended_exposure} minutes.",
-        1: f"moderate heat risk. limit continuous sun exposure to {recommended_exposure} minutes, take regular shade breaks, and drink water every 15-20 minutes.",
-        2: f"high heat risk! minimize outdoor exposure. work in shade when possible. max {recommended_exposure} min in sun, then mandatory rest in shade/ac. watch for heat illness symptoms."
+        0: f"Conditions are safe for outdoor activity. Stay hydrated and take normal precautions. Recommended max continuous exposure: {recommended_exposure} minutes.",
+        1: f"Moderate heat risk. Limit continuous sun exposure to {recommended_exposure} minutes, take regular shade breaks, and drink water every 15-20 minutes.",
+        2: f"High heat risk! Minimize outdoor exposure. Work in shade when possible. Max {recommended_exposure} mins in sun, then mandatory rest in shade/AC. Watch for heat illness symptoms."
     }
 
     if recommended_exposure == 0:

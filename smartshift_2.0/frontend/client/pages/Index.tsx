@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Sun, Cloud, Navigation, Clock, Zap, Map, Moon } from "lucide-react";
+import { Sun, Cloud, Navigation, Clock, Map, Moon, Target, CloudSun, Cpu, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDarkMode } from "../hooks/use-dark-mode";
 
@@ -20,16 +20,22 @@ export default function Index() {
             </div>
             <div className="hidden md:flex items-center gap-4">
               <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Home
+                Overview
               </a>
               <a href="#about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
                 About
               </a>
-              <a href="#features" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
+              <a href="#product" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
                 Product
               </a>
-              <a href="#use-cases" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
+              <a href="#solutions" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
                 Solutions
+              </a>
+              <a href="#pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
+                Pricing
+              </a>
+              <a href="#contact" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
+                Contact
               </a>
               <button
                 onClick={toggleDarkMode}
@@ -89,7 +95,6 @@ export default function Index() {
                 <Link to="/dashboard">
                   <Button size="lg" className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground">
                     Launch App
-                    <Zap className="ml-2 w-4 h-4" />
                   </Button>
                 </Link>
                 <a href="#about">
@@ -150,53 +155,64 @@ export default function Index() {
       </section>
 
       {/* About Section */}
-      <section id="about" className="py-16 sm:py-24 border-t border-border">
+      <section id="about" className="py-12 sm:py-24 border-t border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">About Us</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              SmartShift is a platform that uses advanced technology to keep you safe and productive.
+            SmartShift is a real-time shade tracking and scheduling platform designed to help people
+            navigate cities while minimizing exposure to direct sunlight.
+            By combining 3D city models, solar movement calculations, and dynamic routing,
+            the system identifies shaded paths and optimal schedules throughout the day.
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Map className="w-6 h-6 text-primary" />
+                <Target className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">3D Urban Mapping</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Our Mission</h3>
               <p className="text-sm text-muted-foreground">
-                Real-time 3D urban models with Mapbox integration for accurate shadow prediction
+              Our mission is to make urban environments more comfortable and accessible by helping
+              companies and individuals avoid excessive sunlight.
+              We aim to provide a smarter way to plan routes and schedules based on shade availability.
               </p>
             </div>
             <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Map className="w-6 h-6 text-primary" />
+                <CloudSun className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">3D Urban Mapping</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-2">The Problem We Address</h3>
               <p className="text-sm text-muted-foreground">
-                Real-time 3D urban models with Mapbox integration for accurate shadow prediction
+              Pedestrians and outdoor workers are exposed to intense sunlight throughout the day.
+              Traditional systems ignore environmental factors such as sun exposure duration while scheduling
+              tasks and suggesting routes.
+              We address this gap by incorporating solar positioning and building geometry to generate
+              routes and schedules that reduce sun exposure.
               </p>
             </div>
             <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Map className="w-6 h-6 text-primary" />
+                <Cpu className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">3D Urban Mapping</h3>
+              <h3 className="text-lg font-semibold text-foreground mb-2">Technology</h3>
               <p className="text-sm text-muted-foreground">
-                Real-time 3D urban models with Mapbox integration for accurate shadow prediction
+              Integrates solar position algorithms, 3D city modeling, and real-time scheduling systems to
+              compute shaded routes and time-optimized navigation. The platform uses ML to generate
+              dynamic recommendations through an interactive dashboard and learns over time.
               </p>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Features Section */}
-      <section id="features" className="py-16 sm:py-24 border-t border-border">
+      {/* Product Section */}
+      <section id="product" className="py-12 sm:py-24 border-t border-border">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Powerful Features</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Advanced technology to keep you safe and productive
+              Advanced technology to keep you safe and productive.
             </p>
           </div>
 
@@ -270,13 +286,13 @@ export default function Index() {
         </div>
       </section>
 
-      {/* Use Cases Section */}
-      <section id="use-cases" className="py-16 sm:py-24 border-t border-border bg-card/30">
+      {/* Solutions Section */}
+      <section id="solutions" className="py-12 sm:py-24 border-t border-border bg-card/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Built for Every Need</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Whether you're managing a commercial team or planning personal outdoor activities
+              Whether you're managing a commercial team or planning personal outdoor activities.
             </p>
           </div>
 
@@ -286,7 +302,7 @@ export default function Index() {
               <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-6">
                 <Zap className="w-7 h-7 text-primary" />
               </div>
-              <h3 className="text-2xl font-bold text-foreground mb-4">Commercial Operations</h3>
+              <h3 className="text-2xl font-bold text-foreground mb-4">Scheduling for Commercial Operations</h3>
               <ul className="space-y-3 mb-6">
                 <li className="flex items-start gap-3">
                   <span className="text-primary font-bold mt-0.5">→</span>
@@ -315,7 +331,7 @@ export default function Index() {
               <div className="w-14 h-14 rounded-xl bg-secondary/10 flex items-center justify-center mb-6">
                 <Navigation className="w-7 h-7 text-secondary" />
               </div>
-              <h3 className="text-2xl font-bold text-foreground mb-4">Personal Activities</h3>
+              <h3 className="text-2xl font-bold text-foreground mb-4">Navigation for Personal Activities</h3>
               <ul className="space-y-3 mb-6">
                 <li className="flex items-start gap-3">
                   <span className="text-secondary font-bold mt-0.5">→</span>
@@ -335,7 +351,7 @@ export default function Index() {
                 </li>
               </ul>
               <p className="text-sm text-muted-foreground">
-                Ideal for fitness enthusiasts, outdoor photographers, gardeners, and anyone who wants to enjoy the outdoors safely.
+                Ideal for fitness enthusiasts, outdoor photographers, navigators, and anyone who wants to enjoy the outdoors safely.
               </p>
             </div>
           </div>
@@ -343,7 +359,7 @@ export default function Index() {
       </section>
 
       {/* CTA Section */}
-      <section className="py-16 sm:py-24 border-t border-border">
+      <section className="py-12 sm:py-24 border-t border-border">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center space-y-8">
           <div className="space-y-4">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Ready to Optimize Your Day?</h2>
@@ -351,10 +367,10 @@ export default function Index() {
               Join thousands of users who are making smarter decisions about outdoor work and activities.
             </p>
           </div>
+          <div className="space-y-2"/>
           <Link to="/dashboard">
             <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-              Get Started Now
-              <Zap className="ml-2 w-5 h-5" />
+              Get Started Now!
             </Button>
           </Link>
         </div>
@@ -365,13 +381,11 @@ export default function Index() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
-              <Sun className="w-4 h-4" />
               <span>© 2024 SmartShift. All rights reserved.</span>
             </div>
             <div className="flex gap-6">
-              <a href="#" className="hover:text-foreground transition">Privacy</a>
-              <a href="#" className="hover:text-foreground transition">Terms</a>
-              <a href="#" className="hover:text-foreground transition">Contact</a>
+              <a className="hover:text-foreground transition">Privacy</a>
+              <a className="hover:text-foreground transition">Terms</a>
             </div>
           </div>
         </div>
