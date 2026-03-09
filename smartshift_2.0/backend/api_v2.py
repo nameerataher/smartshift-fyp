@@ -22,11 +22,19 @@ try:
         SchedulingMode, BuildingFace, AreaPolygon
     )
     from comfort_navigator import ComfortNavigator, RouteRecommendation
-    from heat_risk_model import HeatRiskModel, WeatherData, LocationContext, SunExposure
+    from shadow_scheduler import ShadowScheduler, find_optimal_schedule as shadow_find_optimal
     NEW_ARCH_AVAILABLE = True
 except ImportError as e:
     NEW_ARCH_AVAILABLE = False
     print(f"warning: new architecture not available: {e}")
+
+# Try to import heat risk model separately (optional)
+try:
+    from heat_risk_model import HeatRiskModel, WeatherData, LocationContext, SunExposure
+    HEAT_RISK_AVAILABLE = True
+except ImportError:
+    HEAT_RISK_AVAILABLE = False
+    print("note: heat risk model not loaded (shadow-only mode)")
 
 # create blueprint for v2 api
 api_v2 = Blueprint('api_v2', __name__, url_prefix='/api/v2')
@@ -646,6 +654,126 @@ def manage_work_zones():
             "success": True,
             "zones": sample_zones
         })
+
+
+@api_v2.route('/shadow-schedule', methods=['POST'])
+def shadow_schedule():
+    """
+    Find optimal schedule based PURELY on shadow exposure.
+    
+    This endpoint uses the clean shadow-only scheduler with no heat risk considerations.
+    
+    POST /api/v2/shadow-schedule
+    {
+        "task_name": "Facade Cleaning",
+        "lat": 25.197197,
+        "lon": 55.274376,
+        "location_name": "Downtown Dubai",
+        "duration_minutes": 120,
+        "date": "2026-03-10",
+        "start_hour": 5,
+        "end_hour": 20,
+        "building_face": "S",  // optional: N, E, S, W
+        "recommendation_count": 5
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "recommendation": {
+            "task_name": "...",
+            "best_schedule": {
+                "start_time": "...",
+                "end_time": "...",
+                "shadow_percentage": 85,
+                "time_label": "7:00 AM - 9:00 AM"
+            },
+            "alternatives": [...],
+            "recommendation_reason": "..."
+        }
+    }
+    """
+    if not NEW_ARCH_AVAILABLE:
+        return jsonify({"error": "shadow scheduler not available"}), 500
+    
+    try:
+        data = request.get_json()
+        
+        task_name = data.get('task_name', 'outdoor task')
+        lat = float(data.get('lat', 25.2048))
+        lon = float(data.get('lon', 55.2708))
+        location_name = data.get('location_name', 'Dubai')
+        duration_minutes = int(data.get('duration_minutes', 60))
+        date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+        date = datetime.strptime(date_str, '%Y-%m-%d')
+        start_hour = int(data.get('start_hour', 5))
+        end_hour = int(data.get('end_hour', 20))
+        building_face = data.get('building_face')
+        recommendation_count = int(data.get('recommendation_count', 5))
+        
+        # Use the clean shadow scheduler
+        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        recommendation = scheduler.find_optimal_schedule(
+            task_name=task_name,
+            lat=lat,
+            lon=lon,
+            location_name=location_name,
+            task_duration_minutes=duration_minutes,
+            date=date,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            building_face=building_face,
+            recommendation_count=recommendation_count
+        )
+        
+        return jsonify({
+            "success": True,
+            "mode": "shadow_only",
+            "recommendation": recommendation.to_dict()
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 400
+
+
+@api_v2.route('/sun-position', methods=['GET'])
+def get_sun_position():
+    """
+    Get current sun position and shadow percentage at a location.
+    
+    GET /api/v2/sun-position?lat=25.2&lon=55.27&time=2026-03-10T14:00:00&face=S
+    """
+    try:
+        lat = float(request.args.get('lat', 25.2048))
+        lon = float(request.args.get('lon', 55.2708))
+        time_str = request.args.get('time')
+        building_face = request.args.get('face')
+        
+        if time_str:
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.now()
+        
+        from shadow_scheduler import calculate_shadow_at_time
+        result = calculate_shadow_at_time(lat, lon, dt, building_face)
+        
+        return jsonify({
+            "success": True,
+            "location": {"lat": lat, "lon": lon},
+            "time": dt.isoformat(),
+            "building_face": building_face,
+            **result
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
 
 @api_v2.route('/feedback', methods=['POST'])

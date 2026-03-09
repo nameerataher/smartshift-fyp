@@ -97,16 +97,20 @@ export default function MapboxMap({
     if (!map) return;
     try {
       try { map.setConfigProperty("basemap", "lightPreset", getLightPreset(sp.altitude, sp.azimuth)); } catch {}
+      
+      // Polar angle: 0° = directly above, 90° = horizon, 180° = below
+      const polarAngle = 90 - sp.altitude;
+      
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (map as any).setLights([
         {
           id: "sun-directional",
           type: "directional",
           properties: {
-            direction: [sp.azimuth, 90 - sp.altitude],
-            color: getTimeOfDayColor(sp.altitude),
+            direction: [sp.azimuth, polarAngle],
+            color: getTimeOfDayColor(sp.altitude, sp.azimuth),
             intensity: getSunIntensity(sp.altitude),
-            "cast-shadows": true,
+            "cast-shadows": sp.altitude > 0,
             "shadow-intensity": getShadowIntensity(sp.altitude),
           },
         },
@@ -119,6 +123,8 @@ export default function MapboxMap({
           },
         },
       ]);
+      
+      console.log(`Lighting: alt=${sp.altitude.toFixed(1)}°, az=${sp.azimuth.toFixed(1)}°, polar=${polarAngle.toFixed(1)}°`);
     } catch (e) { console.warn("Lighting error:", e); }
   }, []);
 

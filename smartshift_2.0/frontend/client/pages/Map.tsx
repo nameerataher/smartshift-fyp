@@ -16,6 +16,7 @@ import {
   getDubaiNow,
   calculateUV,
   getUVCategory,
+  calculateShadowCoverage,
   SunPosition,
 } from "@/lib/sunCalculations";
 
@@ -83,6 +84,7 @@ async function fetchScheduleFromBackend(
   taskName: string,
   lat: number,
   lon: number,
+  locationName: string,
   dateStr: string,
   durationMinutes: number,
   startHour: number,
@@ -90,28 +92,21 @@ async function fetchScheduleFromBackend(
   buildingFace?: string
 ): Promise<WindowRec[]> {
   try {
+    // Use the cleaner shadow-schedule endpoint
     const payload: Record<string, unknown> = {
       task_name: taskName,
-      mode: "shadow_only",
-      work_zone: {
-        zone_id: `site_${Date.now()}`,
-        name: taskName,
-        lat,
-        lon,
-        radius: 50,
-        is_facade: !!buildingFace,
-        orientation: buildingFace ? { N: 0, E: 90, S: 180, W: 270 }[buildingFace] : undefined,
-      },
-      task_duration_minutes: durationMinutes,
+      lat,
+      lon,
+      location_name: locationName,
+      duration_minutes: durationMinutes,
       date: dateStr,
       start_hour: startHour,
       end_hour: endHour,
       recommendation_count: 5,
-      rank_by: "shade",
-      building_face: buildingFace,
+      building_face: buildingFace || undefined,
     };
 
-    const res = await fetch(`${API_BASE}/api/v2/schedule`, {
+    const res = await fetch(`${API_BASE}/api/v2/shadow-schedule`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -141,7 +136,7 @@ async function fetchScheduleFromBackend(
         title: qualityTitle(quality),
         start: startMin,
         end: endMin,
-        timeLabel: `${formatTime(startMin)} – ${formatTime(endMin)}`,
+        timeLabel: best.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
         uv,
         uvCat: getUVCategory(uv),
         shadePct,
@@ -164,7 +159,7 @@ async function fetchScheduleFromBackend(
         title: qualityTitle(quality),
         start: startMin,
         end: endMin,
-        timeLabel: `${formatTime(startMin)} – ${formatTime(endMin)}`,
+        timeLabel: alt.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
         uv,
         uvCat: getUVCategory(uv),
         shadePct,
@@ -191,8 +186,10 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
     const sp = calculateSunPosition(date, Math.floor(mid / 60), mid % 60);
     const uv = calculateUV(date, mid);
     const uvCat = getUVCategory(uv);
-    const shadePct = sp.altitude <= 0 ? 96 : Math.max(8, Math.round(100 - (sp.altitude / 90) * 84));
-    const score = shadePct - uv * 8;
+    // Use proper shadow coverage calculation based on sun altitude
+    const shadePct = calculateShadowCoverage(sp.altitude);
+    // Score based purely on shadow (no heat risk)
+    const score = shadePct;
     const quality = recQuality(shadePct);
     results.push({
       id: `${s}-${e}`,
@@ -208,6 +205,7 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
     });
   }
 
+  // Sort by shadow percentage (descending) - highest shadow first
   return results.sort((a, b) => b.score - a.score).slice(0, 5);
 }
 
@@ -469,6 +467,7 @@ export default function MapPage() {
         siteDraft.taskName,
         commercialSite.lat,
         commercialSite.lng,
+        siteDraft.locationLabel || "Dubai",
         dateStr,
         siteDraft.durationMinutes,
         siteDraft.startHour,

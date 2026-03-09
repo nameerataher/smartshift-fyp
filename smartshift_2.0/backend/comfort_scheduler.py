@@ -728,20 +728,13 @@ class ComfortScheduler:
         end_hour: int
     ) -> SpaceTimeDataset:
         """
-        generate space-time cells for a work zone
+        Generate space-time cells for a work zone.
         
-        this is a placeholder - in the full system, this would:
-        1. query shadow calculator for shadow_ratio
-        2. query heat risk model for heat_risk_class and heat_risk_score
-        3. compute comfort_score
-        
-        for now, returns synthetic data
+        In shadow-only mode, only calculates shadow coverage based on sun position.
+        Heat risk is not considered.
         """
-        from heat_risk_model import HeatRiskModel
         from solar_position import SolarPositionCalculator
         
-        # initialize models (lazy loading)
-        heat_model = HeatRiskModel()
         solar_calc = SolarPositionCalculator(
             latitude=work_zone.lat,
             longitude=work_zone.lon,
@@ -752,56 +745,41 @@ class ComfortScheduler:
             temporal_resolution_minutes=self.temporal_resolution
         )
         
-        # generate cells for each time interval
         time_intervals = self._discretize_time_range(
             date, start_hour, end_hour, self.temporal_resolution
         )
         
         for timestamp in time_intervals:
-            # placeholder: in real system, query shadow calculator and weather
-            # for now, use simplified simulation
-            
             sun_pos = solar_calc.get_sun_position(timestamp)
             
-            # simplified shadow estimation based on sun altitude
+            # Calculate shadow based on sun altitude
             if sun_pos.altitude <= 0:
-                shadow_ratio = 1.0  # night = full shade
+                shadow_ratio = 1.0  # Night = full shade
             else:
-                # higher sun = less shadow from buildings
-                # this is simplified - real version uses 3d shadow calculation
-                shadow_ratio = 0.3 + 0.4 * (1 - sun_pos.altitude / 90)
+                # Higher sun = less shadow from buildings
+                # Lower altitude = more shadow
+                shadow_ratio = max(0.1, 1.0 - (sun_pos.altitude / 90) * 0.9)
                 
-                # adjust for orientation if facade
+                # Adjust for facade orientation if specified
                 if work_zone.is_facade and work_zone.orientation is not None:
                     sun_azimuth = sun_pos.azimuth
                     facade_azimuth = work_zone.orientation
                     angle_diff = abs(((sun_azimuth - facade_azimuth + 180) % 360) - 180)
                     
-                    # if sun is behind facade, more shade
                     if angle_diff > 90:
-                        shadow_ratio = min(1.0, shadow_ratio + 0.3)
+                        # Sun is behind the facade - more shade
+                        shadow_ratio = min(1.0, shadow_ratio + 0.35)
+                    elif angle_diff > 60:
+                        # Sun at oblique angle
+                        shadow_ratio = min(1.0, shadow_ratio + 0.15)
             
-            # placeholder heat risk (would come from heat_risk_model in real system)
-            # for now, use time-based heuristic
-            hour = timestamp.hour + timestamp.minute / 60
-            if 11 <= hour <= 15:
-                heat_risk_score = 0.7
-                heat_risk_class = HeatRiskClass.MEDIUM
-            elif 10 <= hour <= 16:
-                heat_risk_score = 0.5
-                heat_risk_class = HeatRiskClass.MEDIUM
-            else:
-                heat_risk_score = 0.2
-                heat_risk_class = HeatRiskClass.LOW
+            # In shadow-only mode, heat risk is not considered
+            heat_risk_score = 0.0
+            heat_risk_class = HeatRiskClass.LOW
             
-            # compute comfort score
-            comfort = compute_comfort_score(
-                shadow_ratio,
-                heat_risk_score,
-                self.comfort_weights
-            )
+            # Comfort equals shadow in shadow-only mode
+            comfort = shadow_ratio
             
-            # create cell
             cell = SpaceTimeCell(
                 lat=work_zone.lat,
                 lon=work_zone.lon,
