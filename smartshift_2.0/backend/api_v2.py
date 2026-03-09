@@ -10,23 +10,35 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 import traceback
 
-# import new architecture modules
+# import modules
 try:
     from core_model import (
-        SpaceTimeCell, SpaceTimeDataset, WorkZone, TimeWindow,
+        SpaceTimeCell, SpaceTimeDataset, WorkZone,
         ComfortWeights, HeatRiskClass, SpatialResolution,
         compute_comfort_score
     )
-    from comfort_scheduler import (
-        ComfortScheduler, ScheduleRecommendation,
-        SchedulingMode, BuildingFace, AreaPolygon
-    )
-    from comfort_navigator import ComfortNavigator, RouteRecommendation
-    from shadow_scheduler import ShadowScheduler, find_optimal_schedule as shadow_find_optimal
-    NEW_ARCH_AVAILABLE = True
+    CORE_MODEL_AVAILABLE = True
 except ImportError as e:
-    NEW_ARCH_AVAILABLE = False
-    print(f"warning: new architecture not available: {e}")
+    CORE_MODEL_AVAILABLE = False
+    print(f"warning: core_model not available: {e}")
+
+try:
+    from comfort_navigator import ComfortNavigator, RouteRecommendation
+    NAVIGATOR_AVAILABLE = True
+except ImportError:
+    ComfortNavigator = None
+    NAVIGATOR_AVAILABLE = False
+    print("warning: comfort_navigator not available")
+
+try:
+    from shadow_scheduler import ShadowScheduler, calculate_shadow_at_time
+    SHADOW_SCHEDULER_AVAILABLE = True
+except ImportError as e:
+    ShadowScheduler = None
+    SHADOW_SCHEDULER_AVAILABLE = False
+    print(f"warning: shadow_scheduler not available: {e}")
+
+NEW_ARCH_AVAILABLE = CORE_MODEL_AVAILABLE or SHADOW_SCHEDULER_AVAILABLE or NAVIGATOR_AVAILABLE
 
 # Try to import heat risk model separately (optional)
 try:
@@ -40,28 +52,13 @@ except ImportError:
 api_v2 = Blueprint('api_v2', __name__, url_prefix='/api/v2')
 
 # lazy-load singletons
-_comfort_scheduler = None
 _comfort_navigator = None
 _heat_risk_model = None
 
-def get_comfort_scheduler(mode: str = "shadow_only") -> ComfortScheduler:
-    """get comfort scheduler with specified mode"""
-    # Map string mode to enum
-    mode_map = {
-        "shadow_only": SchedulingMode.SHADOW_ONLY,
-        "comfort": SchedulingMode.COMFORT,
-        "area": SchedulingMode.AREA,
-        "building_face": SchedulingMode.BUILDING_FACE
-    }
-    scheduling_mode = mode_map.get(mode.lower(), SchedulingMode.SHADOW_ONLY)
-    
-    return ComfortScheduler(
-        temporal_resolution_minutes=10,
-        mode=scheduling_mode
-    )
-
-def get_comfort_navigator(mapbox_token: str) -> ComfortNavigator:
+def get_comfort_navigator(mapbox_token: str):
     """get comfort navigator with mapbox token"""
+    if not NAVIGATOR_AVAILABLE or not ComfortNavigator:
+        return None
     return ComfortNavigator(
         mapbox_token=mapbox_token,
         sample_interval_meters=15.0
@@ -112,8 +109,8 @@ def compute_comfort():
         "interpretation": "optimal comfort"
     }
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
+    if not CORE_MODEL_AVAILABLE:
+        return jsonify({"error": "core_model not available"}), 500
 
     try:
         data = request.get_json()
@@ -165,104 +162,70 @@ def compute_comfort():
 @api_v2.route('/schedule', methods=['POST'])
 def find_optimal_schedule():
     """
-    find optimal schedule for a task using deterministic sliding window
-    
-    Supports three modes:
-    - shadow_only: Only consider shadow exposure (default)
-    - area: Polygon area mode for batch tasks
-    - building_face: Building face orientation mode (N/E/S/W)
+    find optimal schedule for a task using shadow-only scheduler.
 
     POST /api/v2/schedule
     {
         "task_name": "facade cleaning - south wall",
-        "mode": "shadow_only",  // shadow_only, area, building_face
         "work_zone": {
             "zone_id": "bldg_123_south",
             "name": "burj khalifa south facade",
             "lat": 25.197197,
             "lon": 55.274376,
-            "radius": 25,
-            "is_facade": true,
-            "orientation": 180
+            ...
         },
         "task_duration_minutes": 120,
         "date": "2026-02-10",
         "start_hour": 9,
         "end_hour": 17,
-        "building_face": "S",  // optional: N, E, S, W for building_face mode
-        "area_polygon": [      // optional: for area mode
-            [25.195, 55.270],
-            [25.195, 55.280],
-            [25.200, 55.280],
-            [25.200, 55.270]
-        ]
+        "building_face": "S",  // optional: N, E, S, W
+        "area_polygon": [...]   // optional: use centroid for area mode
     }
-
-    returns schedule recommendation with best time and alternatives
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
+        return jsonify({"error": "shadow scheduler not available"}), 500
 
     try:
         data = request.get_json()
 
-        # parse scheduling mode (default: shadow_only as per requirement)
-        mode = data.get('mode', 'shadow_only')
-        
-        # parse task info
         task_name = data.get('task_name', 'outdoor task')
         task_duration = int(data.get('task_duration_minutes', 60))
 
-        # parse work zone
         zone_data = data.get('work_zone', {})
-        work_zone = WorkZone(
-            zone_id=zone_data.get('zone_id', 'default'),
-            name=zone_data.get('name', 'work area'),
-            lat=float(zone_data.get('lat')),
-            lon=float(zone_data.get('lon')),
-            radius=float(zone_data.get('radius', 50.0)),
-            is_facade=zone_data.get('is_facade', False),
-            orientation=zone_data.get('orientation'),
-            zone_type=zone_data.get('zone_type', 'general')
-        )
+        lat = float(zone_data.get('lat', 25.2048))
+        lon = float(zone_data.get('lon', 55.2708))
+        location_name = zone_data.get('name', 'work area')
 
-        # parse date and time window
         date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
         date = datetime.strptime(date_str, '%Y-%m-%d')
         start_hour = int(data.get('start_hour', 9))
         end_hour = int(data.get('end_hour', 17))
         recommendation_count = int(data.get('recommendation_count', 5))
-        rank_by = data.get('rank_by', 'shade')
-        
-        # parse building face for building_face mode
         building_face = data.get('building_face')
-        
-        # parse area polygon for area mode
-        area_polygon = None
+
+        # area_polygon: use centroid if provided
         if data.get('area_polygon'):
-            polygon_points = [(p[0], p[1]) for p in data['area_polygon']]
-            area_polygon = AreaPolygon(points=polygon_points, name=task_name)
+            points = data['area_polygon']
+            lat = sum(p[0] for p in points) / len(points)
+            lon = sum(p[1] for p in points) / len(points)
 
-        # get scheduler with appropriate mode
-        scheduler = get_comfort_scheduler(mode)
-
-        # find optimal schedule
+        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
-            work_zone=work_zone,
+            lat=lat,
+            lon=lon,
+            location_name=location_name,
             task_duration_minutes=task_duration,
             date=date,
             start_hour=start_hour,
             end_hour=end_hour,
-            recommendation_count=recommendation_count,
-            rank_by=rank_by,
             building_face=building_face,
-            area_polygon=area_polygon
+            recommendation_count=recommendation_count
         )
 
         return jsonify({
             "success": True,
-            "mode": mode,
+            "mode": "shadow_only",
             "recommendation": recommendation.to_dict()
         })
 
@@ -277,57 +240,59 @@ def find_optimal_schedule():
 @api_v2.route('/schedule/area', methods=['POST'])
 def schedule_for_area():
     """
-    Schedule task for a polygon area (batch tasks like municipality cleaning).
-    Only considers shadow exposure.
-    
+    Schedule task for a polygon area. Uses centroid for shadow analysis.
+
     POST /api/v2/schedule/area
     {
         "task_name": "Road Cleaning",
-        "polygon_points": [
-            [25.195, 55.270],
-            [25.195, 55.280],
-            [25.200, 55.280],
-            [25.200, 55.270]
-        ],
+        "polygon_points": [[25.195, 55.270], [25.195, 55.280], ...],
         "task_duration_minutes": 180,
         "date": "2026-03-10",
         "start_hour": 5,
         "end_hour": 20
     }
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
-    
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
+        return jsonify({"error": "shadow scheduler not available"}), 500
+
     try:
         data = request.get_json()
-        
+
         task_name = data.get('task_name', 'area task')
-        polygon_points = [(p[0], p[1]) for p in data.get('polygon_points', [])]
+        polygon_points = data.get('polygon_points', [])
+        if not polygon_points:
+            return jsonify({"success": False, "error": "polygon_points required"}), 400
+
+        lat = sum(p[0] for p in polygon_points) / len(polygon_points)
+        lon = sum(p[1] for p in polygon_points) / len(polygon_points)
+
         task_duration = int(data.get('task_duration_minutes', 60))
         date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
         date = datetime.strptime(date_str, '%Y-%m-%d')
         start_hour = int(data.get('start_hour', 5))
         end_hour = int(data.get('end_hour', 20))
         recommendation_count = int(data.get('recommendation_count', 5))
-        
-        scheduler = get_comfort_scheduler('shadow_only')
-        
-        recommendation = scheduler.find_optimal_for_area(
+
+        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
-            polygon_points=polygon_points,
+            lat=lat,
+            lon=lon,
+            location_name=task_name,
             task_duration_minutes=task_duration,
             date=date,
             start_hour=start_hour,
             end_hour=end_hour,
+            building_face=None,
             recommendation_count=recommendation_count
         )
-        
+
         return jsonify({
             "success": True,
             "mode": "area",
             "recommendation": recommendation.to_dict()
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
@@ -340,8 +305,7 @@ def schedule_for_area():
 def schedule_for_building_face():
     """
     Schedule task for a building face (N/E/S/W).
-    Only considers shadow exposure on that specific face.
-    
+
     POST /api/v2/schedule/building-face
     {
         "task_name": "Facade Cleaning",
@@ -354,12 +318,12 @@ def schedule_for_building_face():
         "end_hour": 20
     }
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
-    
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
+        return jsonify({"error": "shadow scheduler not available"}), 500
+
     try:
         data = request.get_json()
-        
+
         task_name = data.get('task_name', 'facade task')
         building_lat = float(data.get('building_lat'))
         building_lon = float(data.get('building_lon'))
@@ -370,28 +334,28 @@ def schedule_for_building_face():
         start_hour = int(data.get('start_hour', 5))
         end_hour = int(data.get('end_hour', 20))
         recommendation_count = int(data.get('recommendation_count', 5))
-        
-        scheduler = get_comfort_scheduler('shadow_only')
-        
-        recommendation = scheduler.find_optimal_for_building_face(
+
+        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
-            building_lat=building_lat,
-            building_lon=building_lon,
-            face=face,
+            lat=building_lat,
+            lon=building_lon,
+            location_name=f"{task_name} - {face} face",
             task_duration_minutes=task_duration,
             date=date,
             start_hour=start_hour,
             end_hour=end_hour,
+            building_face=face,
             recommendation_count=recommendation_count
         )
-        
+
         return jsonify({
             "success": True,
             "mode": "building_face",
             "face": face,
             "recommendation": recommendation.to_dict()
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
@@ -417,8 +381,8 @@ def find_comfortable_route():
 
     returns route recommendation with environmental comfort scores
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
+    if not NAVIGATOR_AVAILABLE or not ComfortNavigator:
+        return jsonify({"error": "comfort navigator not available"}), 500
 
     try:
         data = request.get_json()
@@ -453,6 +417,8 @@ def find_comfortable_route():
 
         # get navigator
         navigator = get_comfort_navigator(mapbox_token)
+        if not navigator:
+            return jsonify({"error": "navigator not available"}), 500
 
         # find comfortable route
         recommendation = navigator.find_comfortable_route(
@@ -497,8 +463,8 @@ def generate_heatmap():
 
     returns geojson with comfort scores for visualization
     """
-    if not NEW_ARCH_AVAILABLE:
-        return jsonify({"error": "new architecture not available"}), 500
+    if not CORE_MODEL_AVAILABLE:
+        return jsonify({"error": "core_model not available"}), 500
 
     try:
         data = request.get_json()
@@ -593,6 +559,8 @@ def manage_work_zones():
     }
     """
     if request.method == 'POST':
+        if not CORE_MODEL_AVAILABLE:
+            return jsonify({"success": False, "error": "core_model not available"}), 500
         try:
             data = request.get_json()
 
@@ -660,9 +628,9 @@ def manage_work_zones():
 def shadow_schedule():
     """
     Find optimal schedule based PURELY on shadow exposure.
-    
+
     This endpoint uses the clean shadow-only scheduler with no heat risk considerations.
-    
+
     POST /api/v2/shadow-schedule
     {
         "task_name": "Facade Cleaning",
@@ -676,7 +644,7 @@ def shadow_schedule():
         "building_face": "S",  // optional: N, E, S, W
         "recommendation_count": 5
     }
-    
+
     Returns:
     {
         "success": true,
@@ -693,12 +661,12 @@ def shadow_schedule():
         }
     }
     """
-    if not NEW_ARCH_AVAILABLE:
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
         return jsonify({"error": "shadow scheduler not available"}), 500
-    
+
     try:
         data = request.get_json()
-        
+
         task_name = data.get('task_name', 'outdoor task')
         lat = float(data.get('lat', 25.2048))
         lon = float(data.get('lon', 55.2708))
@@ -710,7 +678,7 @@ def shadow_schedule():
         end_hour = int(data.get('end_hour', 20))
         building_face = data.get('building_face')
         recommendation_count = int(data.get('recommendation_count', 5))
-        
+
         # Use the clean shadow scheduler
         scheduler = ShadowScheduler(temporal_resolution_minutes=10)
         recommendation = scheduler.find_optimal_schedule(
@@ -725,13 +693,13 @@ def shadow_schedule():
             building_face=building_face,
             recommendation_count=recommendation_count
         )
-        
+
         return jsonify({
             "success": True,
             "mode": "shadow_only",
             "recommendation": recommendation.to_dict()
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
@@ -744,7 +712,7 @@ def shadow_schedule():
 def get_sun_position():
     """
     Get current sun position and shadow percentage at a location.
-    
+
     GET /api/v2/sun-position?lat=25.2&lon=55.27&time=2026-03-10T14:00:00&face=S
     """
     try:
@@ -752,15 +720,17 @@ def get_sun_position():
         lon = float(request.args.get('lon', 55.2708))
         time_str = request.args.get('time')
         building_face = request.args.get('face')
-        
+
         if time_str:
             dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
         else:
             dt = datetime.now()
-        
-        from shadow_scheduler import calculate_shadow_at_time
+
+        if not SHADOW_SCHEDULER_AVAILABLE:
+            return jsonify({"success": False, "error": "shadow_scheduler not available"}), 500
+
         result = calculate_shadow_at_time(lat, lon, dt, building_face)
-        
+
         return jsonify({
             "success": True,
             "location": {"lat": lat, "lon": lon},
@@ -768,7 +738,7 @@ def get_sun_position():
             "building_face": building_face,
             **result
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
@@ -779,7 +749,7 @@ def get_sun_position():
 @api_v2.route('/feedback', methods=['POST'])
 def submit_feedback():
     """
-    submit user feedback to adapt comfort weights
+    submit user feedback (acknowledged; shadow-only scheduler has no adaptive weights).
 
     POST /api/v2/feedback
     {
@@ -792,30 +762,11 @@ def submit_feedback():
     """
     try:
         data = request.get_json()
-
-        user_id = data.get('user_id', 'anonymous')
-        accepted = data.get('accepted', False)
-        shadow_pref = float(data.get('shadow_preference', 0.6))
-        heat_pref = float(data.get('heat_preference', 0.4))
-
-        # update scheduler weights (in production, per-user)
-        scheduler = get_comfort_scheduler()
-        scheduler.update_weights_from_feedback(
-            user_id=user_id,
-            accepted=accepted,
-            shadow_preference=shadow_pref,
-            heat_preference=heat_pref
-        )
-
         return jsonify({
             "success": True,
-            "message": "feedback received, weights updated",
-            "updated_weights": {
-                "shadow_weight": scheduler.comfort_weights.shadow_weight,
-                "heat_weight": scheduler.comfort_weights.heat_weight
-            }
+            "message": "feedback received",
+            "updated_weights": {"shadow_weight": 1.0, "heat_weight": 0.0}
         })
-
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
 

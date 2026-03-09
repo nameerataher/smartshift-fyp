@@ -3,16 +3,6 @@ Flask API Server for Dubai Sun-Shadow Simulation
 ==================================================
 
 This module provides a REST API for the sun-shadow simulation system.
-It serves solar position data, shadow calculations, and animation frames
-to the frontend Mapbox visualization.
-
-Endpoints:
-- GET /api/sun-position     - Current sun position
-- GET /api/shadows          - Current shadow data
-- GET /api/animation        - Shadow animation frames for a day
-- GET /api/buildings        - Available buildings
-- GET /api/locations        - Available landmark locations
-- GET /api/health           - Server health check
 
 """
 
@@ -32,20 +22,32 @@ from config import (
     get_location_config, get_all_location_keys
 )
 
-# import ml models for heat risk and schedule optimization
+# import ml models for heat risk; navigator for shaded routes
 try:
     from heat_risk_model import (
         HeatRiskModel, WeatherData, LocationContext, SunExposure,
         HeatRiskPrediction
     )
-    from schedule_optimizer import (
-        ScheduleOptimizer, Task, ShadeNavigator,
-        get_optimal_schedule, get_shaded_route
-    )
     ML_MODELS_AVAILABLE = True
 except ImportError as e:
     ML_MODELS_AVAILABLE = False
     print(f"Warning: ML models not available. Install dependencies: {e}")
+
+try:
+    from schedule_optimizer import ShadeNavigator
+    NAVIGATOR_AVAILABLE = True
+except ImportError:
+    ShadeNavigator = None
+    NAVIGATOR_AVAILABLE = False
+    print("Warning: ShadeNavigator not available (schedule_optimizer)")
+
+try:
+    from shadow_scheduler import ShadowScheduler
+    SHADOW_SCHEDULER_AVAILABLE = True
+except ImportError:
+    ShadowScheduler = None
+    SHADOW_SCHEDULER_AVAILABLE = False
+    print("Warning: ShadowScheduler not available")
 
 # weather api configuration
 import requests
@@ -118,7 +120,6 @@ init_db()
 
 # initialize ml models (lazy loading - trained on first use)
 heat_risk_model = None
-schedule_optimizer = None
 shade_navigator = None
 
 def get_heat_risk_model():
@@ -131,18 +132,10 @@ def get_heat_risk_model():
             heat_risk_model.train(n_samples=5000, verbose=False)
     return heat_risk_model
 
-def get_schedule_optimizer():
-    """lazy load schedule optimizer on first use."""
-    global schedule_optimizer
-    if schedule_optimizer is None and ML_MODELS_AVAILABLE:
-        print("initializing schedule optimizer...")
-        schedule_optimizer = ScheduleOptimizer(heat_risk_model=get_heat_risk_model())
-    return schedule_optimizer
-
 def get_shade_navigator():
     """lazy load shade navigator on first use."""
     global shade_navigator
-    if shade_navigator is None and ML_MODELS_AVAILABLE:
+    if shade_navigator is None and NAVIGATOR_AVAILABLE and ShadeNavigator:
         print("initializing shade navigator...")
         shade_navigator = ShadeNavigator()
     return shade_navigator
@@ -989,10 +982,10 @@ def get_optimal_task_schedule():
         json with optimal schedule recommendation, ranked alternatives,
         and heat risk breakdown for each time slot
     """
-    if not ML_MODELS_AVAILABLE:
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
         return jsonify({
             "success": False,
-            "error": "ml models not available. install scikit-learn and numpy."
+            "error": "shadow scheduler not available."
         }), 503
 
     try:
@@ -1016,108 +1009,59 @@ def get_optimal_task_schedule():
         else:
             date = datetime.now()
 
-        # time bounds - user can specify working hours window
-        # e.g., start_hour=9, end_hour=17 for 9am-5pm window
+        # time bounds
         earliest_start = int(data.get('start_hour', data.get('earliest_start', 6)))
         latest_end = int(data.get('end_hour', data.get('latest_end', 18)))
-
-        # fetch real weather forecast from open-meteo for this date
-        forecast = fetch_7day_forecast(lat, lon)
-        target_date_str = date.strftime("%Y-%m-%d")
-
-        # get average weather for the day from hourly forecast
-        day_hours = [h for h in forecast["hourly"]
-                     if h["date"] == target_date_str and earliest_start <= h["hour"] <= latest_end]
-
-        if day_hours:
-            # use real weather data from forecast
-            temperature = sum(h["temperature"] for h in day_hours) / len(day_hours)
-            humidity = sum(h["humidity"] for h in day_hours) / len(day_hours)
-            wind_speed = sum(h["wind_speed"] for h in day_hours) / len(day_hours)
-            weather_source = "open-meteo"
-        else:
-            # fallback defaults
-            temperature = 35.0
-            humidity = 50.0
-            wind_speed = 10.0
-            weather_source = "fallback"
-
-        # constraints
         requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
-        surface_type = data.get('surface_type', 'mixed')
+        building_face = data.get('building_face')
 
-        # optional bounding box for area-based scheduling
-        # if provided, sample center + corners for shadow coverage
-        area_points = None
-        if all(k in data for k in ['bbox_min_lat', 'bbox_min_lon', 'bbox_max_lat', 'bbox_max_lon']):
-            try:
-                min_lat = float(data.get('bbox_min_lat'))
-                min_lon = float(data.get('bbox_min_lon'))
-                max_lat = float(data.get('bbox_max_lat'))
-                max_lon = float(data.get('bbox_max_lon'))
-                center_lat = (min_lat + max_lat) / 2
-                center_lon = (min_lon + max_lon) / 2
-                area_points = [
-                    (min_lon, min_lat),
-                    (min_lon, max_lat),
-                    (max_lon, min_lat),
-                    (max_lon, max_lat),
-                    (center_lon, center_lat)
-                ]
-            except Exception:
-                area_points = None
-
-        # create task
-        task = Task(
-            name=task_name,
-            duration_minutes=duration,
-            location_lat=lat,
-            location_lon=lon,
-            earliest_start=earliest_start,
-            latest_end=latest_end,
-            requires_shade=requires_shade,
-            surface_type=surface_type,
-            area_points=area_points
+        # use shadow scheduler (shadow-only, no heat risk)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        recommendation = scheduler.find_optimal_schedule(
+            task_name=task_name,
+            lat=lat,
+            lon=lon,
+            location_name=task_name,
+            task_duration_minutes=duration,
+            date=date,
+            start_hour=earliest_start,
+            end_hour=latest_end,
+            building_face=building_face,
+            recommendation_count=5
         )
 
-        # create weather
-        weather = WeatherData(
-            temperature=temperature,
-            humidity=humidity,
-            wind_speed=wind_speed
-        )
-
-        # get recommendation
-        optimizer = get_schedule_optimizer()
-        recommendation = optimizer.find_best_schedule(task, date, weather)
+        best = recommendation.best_slot
 
         # store schedule request in sqlite for learning from user feedback
         request_id = str(uuid.uuid4())
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO schedule_requests (
-                id, task_name, lat, lon, date, start_hour, end_hour,
-                duration_minutes, recommended_start, recommended_end,
-                heat_risk_score, shade_percentage, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            request_id,
-            task_name,
-            lat,
-            lon,
-            date.strftime('%Y-%m-%d'),
-            earliest_start,
-            latest_end,
-            duration,
-            recommendation.best_slot.start_time.strftime('%H:%M'),
-            recommendation.best_slot.end_time.strftime('%H:%M'),
-            float(recommendation.best_slot.heat_risk_score),
-            float(recommendation.best_slot.shade_percentage),
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO schedule_requests (
+                    id, task_name, lat, lon, date, start_hour, end_hour,
+                    duration_minutes, recommended_start, recommended_end,
+                    heat_risk_score, shade_percentage, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                request_id,
+                task_name,
+                lat,
+                lon,
+                date.strftime('%Y-%m-%d'),
+                earliest_start,
+                latest_end,
+                duration,
+                best.start.strftime('%H:%M'),
+                best.end.strftime('%H:%M'),
+                0.0,  # heat_risk_score not used (shadow-only)
+                float(best.shadow_percentage),
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            print(f"warning: could not store schedule request: {db_err}")
 
         return jsonify({
             "success": True,
@@ -1130,33 +1074,27 @@ def get_optimal_task_schedule():
                 "latest_end": latest_end,
                 "requires_shade": requires_shade
             },
-            "conditions": {
-                "temperature": temperature,
-                "humidity": humidity,
-                "wind_speed": wind_speed
-            },
             "recommendation": {
-                "best_start_time": recommendation.best_slot.start_time.strftime('%H:%M'),
-                "end_time": recommendation.best_slot.end_time.strftime('%H:%M'),
-                "quality_score": round(recommendation.best_slot.quality_score, 1),
-                "heat_risk_score": round(recommendation.best_slot.heat_risk_score, 2),
-                "shade_percentage": round(recommendation.best_slot.shade_percentage, 1),
-                "is_feasible": recommendation.best_slot.is_feasible,
-                "location": f"{lat:.4f}, {lon:.4f}",
-                "risk_breakdown": recommendation.best_slot.risk_breakdown
+                "best_start_time": best.start.strftime('%H:%M'),
+                "end_time": best.end.strftime('%H:%M'),
+                "quality_score": round(best.shadow_percentage, 1),
+                "heat_risk_score": 0.0,
+                "shade_percentage": round(best.shadow_percentage, 1),
+                "is_feasible": True,
+                "location": f"{lat:.4f}, {lon:.4f}"
             },
             "alternatives": [
                 {
-                    "start_time": slot.start_time.strftime('%H:%M'),
-                    "end_time": slot.end_time.strftime('%H:%M'),
-                    "quality_score": round(slot.quality_score, 1),
-                    "heat_risk_score": round(slot.heat_risk_score, 2),
-                    "shade_percentage": round(slot.shade_percentage, 1)
+                    "start_time": slot.start.strftime('%H:%M'),
+                    "end_time": slot.end.strftime('%H:%M'),
+                    "quality_score": round(slot.shadow_percentage, 1),
+                    "heat_risk_score": 0.0,
+                    "shade_percentage": round(slot.shadow_percentage, 1)
                 }
-                for slot in recommendation.alternative_slots
+                for slot in recommendation.alternatives
             ],
-            "summary": recommendation.summary,
-            "analysis": recommendation.detailed_breakdown
+            "summary": recommendation.recommendation_reason,
+            "analysis": recommendation.recommendation_reason
         })
 
     except Exception as e:
@@ -1289,10 +1227,10 @@ def get_shaded_navigation_route():
     returns:
         json with shade-optimized route, segments, and geometry
     """
-    if not ML_MODELS_AVAILABLE:
+    if not NAVIGATOR_AVAILABLE:
         return jsonify({
             "success": False,
-            "error": "ml models not available. install scikit-learn and numpy."
+            "error": "shade navigator not available (schedule_optimizer module)."
         }), 503
 
     try:
@@ -1448,7 +1386,7 @@ def get_ml_status():
 
     returns information about which ml models are loaded and trained.
     """
-    global heat_risk_model, schedule_optimizer, shade_navigator
+    global heat_risk_model, shade_navigator
 
     return jsonify({
         "success": True,
@@ -1458,8 +1396,8 @@ def get_ml_status():
                 "loaded": heat_risk_model is not None,
                 "trained": heat_risk_model.is_trained if heat_risk_model else False
             },
-            "schedule_optimizer": {
-                "loaded": schedule_optimizer is not None
+            "shadow_scheduler": {
+                "loaded": SHADOW_SCHEDULER_AVAILABLE
             },
             "shade_navigator": {
                 "loaded": shade_navigator is not None
@@ -1504,7 +1442,7 @@ def api_create_task():
     """Create a new task."""
     try:
         data = request.get_json() or {}
-        
+
         task = UserTask(
             task_id=data.get('task_id', str(uuid.uuid4())),
             task_name=data.get('task_name', 'Untitled Task'),
@@ -1517,7 +1455,7 @@ def api_create_task():
             date=data.get('date', datetime.now().strftime('%Y-%m-%d')),
             status=data.get('status', 'draft')
         )
-        
+
         task_id = create_task(task)
         return jsonify({"success": True, "task_id": task_id, "message": "Task created"})
     except Exception as e:
@@ -1543,14 +1481,14 @@ def api_update_task(task_id):
     """Update a task."""
     try:
         data = request.get_json() or {}
-        
+
         allowed_fields = ['task_name', 'location_name', 'location_lat', 'location_lon',
                          'duration_minutes', 'hour_start', 'hour_end', 'date', 'status']
         updates = {k: v for k, v in data.items() if k in allowed_fields}
-        
+
         if not updates:
             return jsonify({"success": False, "error": "No valid fields to update"}), 400
-        
+
         success = update_task(task_id, updates)
         if success:
             return jsonify({"success": True, "message": "Task updated"})
@@ -1588,7 +1526,7 @@ def api_accept_recommendation(task_id):
     """Accept a recommendation for a task."""
     try:
         data = request.get_json() or {}
-        
+
         rec = AcceptedRecommendation(
             id=str(uuid.uuid4()),
             task_id=task_id,
@@ -1597,11 +1535,11 @@ def api_accept_recommendation(task_id):
             shade_percentage=float(data.get('shade_percentage', 0)),
             shade_slot=data.get('shade_slot', '')
         )
-        
+
         rec_id = create_accepted_recommendation(rec)
-        
+
         update_task(task_id, {'status': 'scheduled'})
-        
+
         return jsonify({"success": True, "recommendation_id": rec_id, "message": "Recommendation accepted"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
@@ -1639,7 +1577,7 @@ def api_get_month_analytics(month):
         analytics = get_analytics(month)
         if analytics:
             return jsonify({"success": True, "analytics": analytics})
-        
+
         updated = update_analytics_for_month(month)
         return jsonify({"success": True, "analytics": updated})
     except Exception as e:
