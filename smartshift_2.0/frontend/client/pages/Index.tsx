@@ -1,10 +1,18 @@
 import { Link } from "react-router-dom";
-import { Sun, Cloud, Navigation, Clock, Map, Moon, Target, CloudSun, Cpu, Zap } from "lucide-react";
+import { Sun, Cloud, Navigation, Clock, Map, Moon, Target, CloudSun, Cpu, Zap, Mail, Phone, MapPin, Check, CalendarClock, Route } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDarkMode } from "../hooks/use-dark-mode";
+import { useAuth } from "@/hooks/useAuth";
+import { useMode } from "@/hooks/useMode";
 
 export default function Index() {
   const { isDark, toggle: toggleDarkMode } = useDarkMode();
+  const { user } = useAuth();
+  const { mode, setMode } = useMode();
+
+  const handlePersonalClick = () => {
+    setMode("personal");
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-slate-50 dark:from-background dark:via-background dark:to-slate-900">
@@ -19,55 +27,46 @@ export default function Index() {
               <span className="text-xl font-bold text-foreground">SmartShift</span>
             </div>
             <div className="hidden md:flex items-center gap-4">
-              <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Overview
-              </a>
-              <a href="#about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                About
-              </a>
-              <a href="#product" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Product
-              </a>
-              <a href="#solutions" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Solutions
-              </a>
-              <a href="#pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Pricing
-              </a>
-              <a href="#contact" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">
-                Contact
-              </a>
-              <button
-                onClick={toggleDarkMode}
-                className="p-2 hover:bg-secondary/20 rounded-lg transition"
-                title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              >
+              <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Overview</a>
+              <a href="#about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">About</a>
+              <a href="#product" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Product</a>
+              <a href="#solutions" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Solutions</a>
+              <a href="#pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Pricing</a>
+              <a href="#contact" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Contact</a>
+              <button onClick={toggleDarkMode} className="p-2 hover:bg-secondary/20 rounded-lg transition"
+                title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
                 {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
-              <Link to="/login">
-                <Button size="sm" variant="outline">
-                  Sign In
-                </Button>
-              </Link>
-              <Link to="/register">
-                <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-                  Get Started
-                </Button>
-              </Link>
+              {user ? (
+                <Link to="/dashboard">
+                  <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
+                    Dashboard
+                  </Button>
+                </Link>
+              ) : (
+                <>
+                  <Link to="/login">
+                    <Button size="sm" variant="outline">Sign In</Button>
+                  </Link>
+                  <Link to="/register">
+                    <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Get Started</Button>
+                  </Link>
+                </>
+              )}
             </div>
             <div className="md:hidden flex items-center gap-2">
-              <button
-                onClick={toggleDarkMode}
-                className="p-2 hover:bg-secondary/20 rounded-lg transition"
-                title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              >
+              <button onClick={toggleDarkMode} className="p-2 hover:bg-secondary/20 rounded-lg transition">
                 {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
               </button>
-              <Link to="/register">
-                <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-                  Start
-                </Button>
-              </Link>
+              {user ? (
+                <Link to="/dashboard">
+                  <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Dashboard</Button>
+                </Link>
+              ) : (
+                <Link to="/login">
+                  <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Start</Button>
+                </Link>
+              )}
             </div>
           </div>
         </div>
@@ -77,7 +76,6 @@ export default function Index() {
       <section className="relative overflow-hidden pt-12 pb-20 sm:pt-16 sm:pb-24">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            {/* Left Content */}
             <div className="space-y-8">
               <div className="space-y-4">
                 <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary border border-primary/20">
@@ -87,31 +85,32 @@ export default function Index() {
                   Optimize Your Outdoor Work
                 </h1>
                 <p className="text-lg sm:text-xl text-muted-foreground max-w-xl">
-                  SmartShift predicts shadow patterns, schedules tasks efficiently, and routes you through the safest, coolest paths. Protect yourself from excessive sun exposure while maximizing productivity.
+                  SmartShift predicts shadow patterns, schedules tasks efficiently, and routes you through the safest, coolest paths.
                 </p>
               </div>
 
               <div className="flex flex-col sm:flex-row gap-4">
-                <Link to="/dashboard">
-                  <Button size="lg" className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground">
-                    Launch App
+                <Link to="/map" onClick={() => setMode("commercial")}>
+                  <Button size="lg" className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
+                    <CalendarClock className="w-5 h-5" />
+                    Task Scheduling
                   </Button>
                 </Link>
-                <a href="#about">
-                  <Button size="lg" variant="outline" className="w-full sm:w-auto">
-                    Learn More
+                <Link to="/map" onClick={handlePersonalClick}>
+                  <Button size="lg" variant="outline" className="w-full sm:w-auto gap-2">
+                    <Route className="w-5 h-5" />
+                    Route Navigation
                   </Button>
-                </a>
+                </Link>
               </div>
 
-              {/* Stats */}
               <div className="grid grid-cols-3 gap-4 pt-8">
                 <div>
                   <div className="text-2xl font-bold text-primary">3D</div>
                   <p className="text-sm text-muted-foreground">Urban Mapping</p>
                 </div>
                 <div>
-                  <div className="text-2xl font-bold text-secondary">360°</div>
+                  <div className="text-2xl font-bold text-secondary">360</div>
                   <p className="text-sm text-muted-foreground">Sun Tracking</p>
                 </div>
                 <div>
@@ -121,7 +120,6 @@ export default function Index() {
               </div>
             </div>
 
-            {/* Right Visual */}
             <div className="relative h-96 sm:h-full flex items-center justify-center">
               <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-secondary/20 rounded-3xl blur-3xl"></div>
               <div className="relative bg-gradient-to-br from-primary/5 to-secondary/5 backdrop-blur rounded-3xl p-12 border border-border shadow-2xl">
@@ -130,7 +128,7 @@ export default function Index() {
                     <Sun className="w-8 h-8 text-primary" />
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-foreground">Sun Position</p>
-                      <p className="text-xs text-muted-foreground">45° NE, UV Index: 8</p>
+                      <p className="text-xs text-muted-foreground">45 NE, UV Index: 8</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-4 p-4 rounded-xl bg-background/50 border border-border">
@@ -144,7 +142,7 @@ export default function Index() {
                     <Navigation className="w-8 h-8 text-accent" />
                     <div className="flex-1">
                       <p className="text-sm font-semibold text-foreground">Optimal Route</p>
-                      <p className="text-xs text-muted-foreground">2.3 km • 15 min • 80% shaded</p>
+                      <p className="text-xs text-muted-foreground">2.3 km - 15 min - 80% shaded</p>
                     </div>
                   </div>
                 </div>
@@ -160,10 +158,8 @@ export default function Index() {
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">About Us</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            SmartShift is a real-time shade tracking and scheduling platform designed to help people
-            navigate cities while minimizing exposure to direct sunlight.
-            By combining 3D city models, solar movement calculations, and dynamic routing,
-            the system identifies shaded paths and optimal schedules throughout the day.
+              SmartShift is a real-time shade tracking and scheduling platform designed to help people
+              navigate cities while minimizing exposure to direct sunlight.
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -173,9 +169,7 @@ export default function Index() {
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">Our Mission</h3>
               <p className="text-sm text-muted-foreground">
-              Our mission is to make urban environments more comfortable and accessible by helping
-              companies and individuals avoid excessive sunlight.
-              We aim to provide a smarter way to plan routes and schedules based on shade availability.
+                Make urban environments more comfortable and accessible by helping companies and individuals avoid excessive sunlight.
               </p>
             </div>
             <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
@@ -184,11 +178,7 @@ export default function Index() {
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">The Problem We Address</h3>
               <p className="text-sm text-muted-foreground">
-              Pedestrians and outdoor workers are exposed to intense sunlight throughout the day.
-              Traditional systems ignore environmental factors such as sun exposure duration while scheduling
-              tasks and suggesting routes.
-              We address this gap by incorporating solar positioning and building geometry to generate
-              routes and schedules that reduce sun exposure.
+                Traditional systems ignore environmental factors such as sun exposure while scheduling tasks and suggesting routes.
               </p>
             </div>
             <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
@@ -197,9 +187,7 @@ export default function Index() {
               </div>
               <h3 className="text-lg font-semibold text-foreground mb-2">Technology</h3>
               <p className="text-sm text-muted-foreground">
-              Integrates solar position algorithms, 3D city modeling, and real-time scheduling systems to
-              compute shaded routes and time-optimized navigation. The platform uses ML to generate
-              dynamic recommendations through an interactive dashboard and learns over time.
+                Integrates solar position algorithms, 3D city modeling, and real-time scheduling with ML-powered recommendations.
               </p>
             </div>
           </div>
@@ -211,77 +199,25 @@ export default function Index() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Powerful Features</h2>
-            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Advanced technology to keep you safe and productive.
-            </p>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Advanced technology to keep you safe and productive.</p>
           </div>
-
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {/* Feature 1 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Map className="w-6 h-6 text-primary" />
+            {[
+              { icon: Map, title: "3D Urban Mapping", desc: "Real-time 3D urban models with Mapbox integration for accurate shadow prediction", color: "primary" },
+              { icon: Sun, title: "Sun Movement Tracking", desc: "Advanced calculations predict shadow patterns and sun exposure throughout the day", color: "secondary" },
+              { icon: Clock, title: "Smart Scheduling", desc: "Optimize task timing based on minimum sun exposure and maximum shade coverage", color: "accent" },
+              { icon: Navigation, title: "Heat-Optimized Routing", desc: "Routes that minimize sun exposure with alternate path suggestions", color: "primary" },
+              { icon: Zap, title: "Real-Time Alerts", desc: "Instant notifications when heat levels reach dangerous thresholds", color: "secondary" },
+              { icon: Cloud, title: "Weather Integration", desc: "Real-time and forecasted heat data for accurate risk assessment", color: "accent" },
+            ].map(({ icon: Icon, title, desc, color }) => (
+              <div key={title} className={`p-6 rounded-2xl bg-card border border-border hover:border-${color}/30 transition`}>
+                <div className={`w-12 h-12 rounded-lg bg-${color}/10 flex items-center justify-center mb-4`}>
+                  <Icon className={`w-6 h-6 text-${color}`} />
+                </div>
+                <h3 className="text-lg font-semibold text-foreground mb-2">{title}</h3>
+                <p className="text-sm text-muted-foreground">{desc}</p>
               </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">3D Urban Mapping</h3>
-              <p className="text-sm text-muted-foreground">
-                Real-time 3D urban models with Mapbox integration for accurate shadow prediction
-              </p>
-            </div>
-
-            {/* Feature 2 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-secondary/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-secondary/10 flex items-center justify-center mb-4">
-                <Sun className="w-6 h-6 text-secondary" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Sun Movement Tracking</h3>
-              <p className="text-sm text-muted-foreground">
-                Advanced calculations predict shadow patterns and sun exposure throughout the day
-              </p>
-            </div>
-
-            {/* Feature 3 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-accent/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center mb-4">
-                <Clock className="w-6 h-6 text-accent" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Smart Scheduling</h3>
-              <p className="text-sm text-muted-foreground">
-                Optimize task timing based on minimum sun exposure and maximum shade coverage
-              </p>
-            </div>
-
-            {/* Feature 4 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Navigation className="w-6 h-6 text-primary" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Heat-Optimized Routing</h3>
-              <p className="text-sm text-muted-foreground">
-                Routes that minimize sun exposure with alternate path suggestions
-              </p>
-            </div>
-
-            {/* Feature 5 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-secondary/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-secondary/10 flex items-center justify-center mb-4">
-                <Zap className="w-6 h-6 text-secondary" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Real-Time Alerts</h3>
-              <p className="text-sm text-muted-foreground">
-                Instant notifications when heat levels reach dangerous thresholds
-              </p>
-            </div>
-
-            {/* Feature 6 */}
-            <div className="p-6 rounded-2xl bg-card border border-border hover:border-accent/30 transition">
-              <div className="w-12 h-12 rounded-lg bg-accent/10 flex items-center justify-center mb-4">
-                <Cloud className="w-6 h-6 text-accent" />
-              </div>
-              <h3 className="text-lg font-semibold text-foreground mb-2">Weather Integration</h3>
-              <p className="text-sm text-muted-foreground">
-                Real-time and forecasted heat data for accurate risk assessment
-              </p>
-            </div>
+            ))}
           </div>
         </div>
       </section>
@@ -295,65 +231,168 @@ export default function Index() {
               Whether you're managing a commercial team or planning personal outdoor activities.
             </p>
           </div>
-
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            {/* Commercial Use Case */}
             <div className="p-8 rounded-2xl bg-card border border-border hover:shadow-lg transition">
               <div className="w-14 h-14 rounded-xl bg-primary/10 flex items-center justify-center mb-6">
                 <Zap className="w-7 h-7 text-primary" />
               </div>
               <h3 className="text-2xl font-bold text-foreground mb-4">Scheduling for Commercial Operations</h3>
               <ul className="space-y-3 mb-6">
-                <li className="flex items-start gap-3">
-                  <span className="text-primary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Multi-task scheduling with optimal time windows</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-primary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Manage simultaneous projects across multiple locations</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-primary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Worker safety compliance and heat index monitoring</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-primary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Detailed analytics and reporting dashboards</span>
-                </li>
+                {["Multi-task scheduling with optimal time windows", "Manage simultaneous projects across multiple locations",
+                  "Worker safety compliance and heat index monitoring", "Detailed analytics and reporting dashboards"].map((item) => (
+                  <li key={item} className="flex items-start gap-3">
+                    <span className="text-primary font-bold mt-0.5">-</span>
+                    <span className="text-muted-foreground">{item}</span>
+                  </li>
+                ))}
               </ul>
               <p className="text-sm text-muted-foreground">
-                Perfect for construction crews, maintenance teams, outdoor event planners, and any commercial operation that works under the sun.
+                Perfect for construction crews, maintenance teams, outdoor event planners.
               </p>
             </div>
-
-            {/* Personal Use Case */}
             <div className="p-8 rounded-2xl bg-card border border-border hover:shadow-lg transition">
               <div className="w-14 h-14 rounded-xl bg-secondary/10 flex items-center justify-center mb-6">
                 <Navigation className="w-7 h-7 text-secondary" />
               </div>
               <h3 className="text-2xl font-bold text-foreground mb-4">Navigation for Personal Activities</h3>
               <ul className="space-y-3 mb-6">
-                <li className="flex items-start gap-3">
-                  <span className="text-secondary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Plan outdoor activities with UV exposure awareness</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-secondary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Find shaded routes for walking, jogging, or cycling</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-secondary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Real-time heat and sun exposure alerts</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <span className="text-secondary font-bold mt-0.5">→</span>
-                  <span className="text-muted-foreground">Personalized recommendations for outdoor timing</span>
-                </li>
+                {["Plan outdoor activities with UV exposure awareness", "Find shaded routes for walking, jogging, or cycling",
+                  "Real-time heat and sun exposure alerts", "Personalized recommendations for outdoor timing"].map((item) => (
+                  <li key={item} className="flex items-start gap-3">
+                    <span className="text-secondary font-bold mt-0.5">-</span>
+                    <span className="text-muted-foreground">{item}</span>
+                  </li>
+                ))}
               </ul>
               <p className="text-sm text-muted-foreground">
-                Ideal for fitness enthusiasts, outdoor photographers, navigators, and anyone who wants to enjoy the outdoors safely.
+                Ideal for fitness enthusiasts, outdoor photographers, and everyday navigators.
               </p>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing Section */}
+      <section id="pricing" className="py-12 sm:py-24 border-t border-border">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center space-y-4 mb-12">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Simple Pricing</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              Personal use is free. Commercial plans for teams that need advanced scheduling.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
+            <div className="rounded-2xl border border-border bg-card p-8 shadow-sm flex flex-col">
+              <h3 className="text-xl font-bold text-foreground mb-1">Personal</h3>
+              <p className="text-sm text-muted-foreground mb-4">For individuals</p>
+              <div className="text-4xl font-bold text-primary mb-6">Free</div>
+              <ul className="space-y-3 mb-8 flex-1">
+                {["Shade-optimized route navigation", "Real-time sun tracking", "UV and heat risk alerts", "Save favorite places"].map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Check className="w-4 h-4 text-green-500 shrink-0" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <Link to="/map" onClick={handlePersonalClick}>
+                <Button variant="outline" className="w-full">Get Started</Button>
+              </Link>
+            </div>
+            <div className="rounded-2xl border-2 border-primary bg-card p-8 shadow-lg flex flex-col relative">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 bg-primary text-primary-foreground text-xs font-bold rounded-full">
+                Most Popular
+              </div>
+              <h3 className="text-xl font-bold text-foreground mb-1">Commercial</h3>
+              <p className="text-sm text-muted-foreground mb-4">For teams & businesses</p>
+              <div className="text-4xl font-bold text-primary mb-1">$49</div>
+              <p className="text-sm text-muted-foreground mb-6">per month</p>
+              <ul className="space-y-3 mb-8 flex-1">
+                {["Everything in Personal", "Task scheduling & analytics", "Team management dashboard", "Polygon area analysis",
+                  "Shadow schedule optimization", "Priority support"].map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Check className="w-4 h-4 text-green-500 shrink-0" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <Link to="/register">
+                <Button className="w-full bg-primary hover:bg-primary/90 text-primary-foreground">Start Free Trial</Button>
+              </Link>
+            </div>
+            <div className="rounded-2xl border border-border bg-card p-8 shadow-sm flex flex-col">
+              <h3 className="text-xl font-bold text-foreground mb-1">Enterprise</h3>
+              <p className="text-sm text-muted-foreground mb-4">Custom solutions</p>
+              <div className="text-4xl font-bold text-primary mb-6">Custom</div>
+              <ul className="space-y-3 mb-8 flex-1">
+                {["Everything in Commercial", "Custom API integrations", "Dedicated account manager", "SLA guarantees", "On-premise deployment"].map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Check className="w-4 h-4 text-green-500 shrink-0" />
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              <a href="#contact">
+                <Button variant="outline" className="w-full">Contact Sales</Button>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Contact Section */}
+      <section id="contact" className="py-12 sm:py-24 border-t border-border bg-card/30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center space-y-4 mb-12">
+            <h2 className="text-3xl sm:text-4xl font-bold text-foreground">Get in Touch</h2>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              Have questions or need a custom solution? We'd love to hear from you.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 max-w-5xl mx-auto">
+            <div className="space-y-6">
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <Mail className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Email</h3>
+                  <p className="text-sm text-muted-foreground">contact@smartshift.io</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <Phone className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Phone</h3>
+                  <p className="text-sm text-muted-foreground">+971 4 123 4567</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-4">
+                <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                  <MapPin className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-foreground">Office</h3>
+                  <p className="text-sm text-muted-foreground">Dubai Internet City, Dubai, UAE</p>
+                </div>
+              </div>
+            </div>
+            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); alert("Message sent! We'll get back to you soon."); }}>
+              <div className="grid grid-cols-2 gap-4">
+                <input type="text" placeholder="First Name" required
+                  className="px-4 py-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
+                <input type="text" placeholder="Last Name" required
+                  className="px-4 py-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
+              </div>
+              <input type="email" placeholder="Email" required
+                className="w-full px-4 py-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary" />
+              <textarea placeholder="Message" rows={4} required
+                className="w-full px-4 py-3 rounded-xl border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary resize-none" />
+              <Button type="submit" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground">
+                Send Message
+              </Button>
+            </form>
           </div>
         </div>
       </section>
@@ -367,12 +406,20 @@ export default function Index() {
               Join thousands of users who are making smarter decisions about outdoor work and activities.
             </p>
           </div>
-          <div className="space-y-2"/>
-          <Link to="/dashboard">
-            <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground">
-              Get Started Now!
-            </Button>
-          </Link>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <Link to="/map" onClick={() => setMode("commercial")}>
+              <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
+                <CalendarClock className="w-5 h-5" />
+                Schedule Tasks
+              </Button>
+            </Link>
+            <Link to="/map" onClick={handlePersonalClick}>
+              <Button size="lg" variant="outline" className="gap-2">
+                <Route className="w-5 h-5" />
+                Navigate Routes
+              </Button>
+            </Link>
+          </div>
         </div>
       </section>
 
@@ -380,12 +427,10 @@ export default function Index() {
       <footer className="border-t border-border py-8 bg-card/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <span>© 2024 SmartShift. All rights reserved.</span>
-            </div>
+            <span>2025 SmartShift. All rights reserved.</span>
             <div className="flex gap-6">
-              <a className="hover:text-foreground transition">Privacy</a>
-              <a className="hover:text-foreground transition">Terms</a>
+              <a className="hover:text-foreground transition cursor-pointer">Privacy</a>
+              <a className="hover:text-foreground transition cursor-pointer">Terms</a>
             </div>
           </div>
         </div>
