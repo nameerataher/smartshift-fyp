@@ -3,6 +3,7 @@ import { useMode } from "@/hooks/useMode";
 import {
   Sun, Clock, Compass, Navigation2, Thermometer, ShieldAlert,
   Briefcase, Navigation, AlertCircle, CheckCircle, Plus, TrendingUp,
+  BarChart3, ClipboardList, ShieldCheck, Pencil, Trash2, X, Save,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
@@ -44,6 +45,57 @@ const DEFAULT_TASKS: ScheduledTask[] = [
   { id: "2", name: "Foundation Inspection", location: "North Industrial Zone", timeWindow: "18:00 – 20:00", shadePercentage: 85, status: "scheduled" },
 ];
 
+type ChartRange = "day" | "week" | "month";
+
+const WORK_PROGRESS: Record<ChartRange, { label: string; value: number; goal: number }[]> = {
+  day: [
+    { label: "05:00", value: 12, goal: 16 },
+    { label: "08:00", value: 18, goal: 20 },
+    { label: "11:00", value: 9, goal: 18 },
+    { label: "17:00", value: 16, goal: 18 },
+    { label: "20:00", value: 11, goal: 14 },
+  ],
+  week: [
+    { label: "Mon", value: 74, goal: 80 },
+    { label: "Tue", value: 82, goal: 90 },
+    { label: "Wed", value: 69, goal: 88 },
+    { label: "Thu", value: 91, goal: 95 },
+    { label: "Fri", value: 76, goal: 84 },
+  ],
+  month: [
+    { label: "W1", value: 320, goal: 360 },
+    { label: "W2", value: 348, goal: 360 },
+    { label: "W3", value: 332, goal: 360 },
+    { label: "W4", value: 356, goal: 360 },
+  ],
+};
+
+function getTaskDurationMinutes(timeWindow: string): number {
+  const parts = timeWindow.split("–").map((part) => part.trim());
+  if (parts.length !== 2) return 0;
+
+  const parse = (value: string) => {
+    const [hours, minutes] = value.split(":").map(Number);
+    return hours * 60 + minutes;
+  };
+
+  const start = parse(parts[0]);
+  const end = parse(parts[1]);
+
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+  return Math.max(end - start, 0);
+}
+
+function formatTaskDuration(totalMinutes: number): string {
+  if (totalMinutes <= 0) return "0m";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours && minutes) return `${hours}h ${minutes}m`;
+  if (hours) return `${hours}h`;
+  return `${minutes}m`;
+}
+
 export default function Dashboard() {
   const { mode } = useMode();
   const { minutes: initMinutes, dateStr: initDate } = getDubaiNow();
@@ -54,6 +106,21 @@ export default function Dashboard() {
   const [heatRiskLoading, setHeatRiskLoading] = useState(false);
   const [heatRiskChecked, setHeatRiskChecked] = useState(false);
   const [tasks, setTasks] = useState<ScheduledTask[]>(DEFAULT_TASKS);
+  const [chartRange, setChartRange] = useState<ChartRange>("day");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Partial<ScheduledTask>>({});
+
+  const startEdit = (task: ScheduledTask) => {
+    setEditingTaskId(task.id);
+    setEditForm({ ...task });
+  };
+  const cancelEdit = () => { setEditingTaskId(null); setEditForm({}); };
+  const saveEdit = () => {
+    if (!editingTaskId) return;
+    setTasks((prev) => prev.map((t) => t.id === editingTaskId ? { ...t, ...editForm } as ScheduledTask : t));
+    cancelEdit();
+  };
+  const deleteTask = (id: string) => setTasks((prev) => prev.filter((t) => t.id !== id));
 
   // tick every minute
   useEffect(() => {
@@ -114,6 +181,24 @@ export default function Dashboard() {
 
   const riskColor = heatRisk?.risk_color || "#64748b";
   const riskLevel = heatRisk?.risk_level?.toLowerCase() || "";
+  const scheduledCount = tasks.filter((t) => t.status === "scheduled").length;
+  const completedCount = tasks.filter((t) => t.status === "completed").length;
+  const avgShadeCoverage = Math.round(tasks.reduce((a, t) => a + t.shadePercentage, 0) / tasks.length);
+  const totalDuration = tasks.reduce((sum, task) => sum + getTaskDurationMinutes(task.timeWindow), 0);
+  const progressSeries = WORK_PROGRESS[chartRange];
+  const progressTotal = progressSeries.reduce((sum, item) => sum + item.value, 0);
+  const progressGoal = progressSeries.reduce((sum, item) => sum + item.goal, 0);
+  const progressMax = Math.max(...progressSeries.map((item) => item.goal), 1);
+  const progressPercent = Math.round((progressTotal / Math.max(progressGoal, 1)) * 100);
+  const trendDelta = progressSeries[progressSeries.length - 1].value - progressSeries[0].value;
+  // Chart uses viewBox="0 0 540 200": plot area x∈[24,516] y∈[16,148], labels at y=168
+  const CX0 = 24, CX1 = 516, CY0 = 16, CY1 = 148;
+  const cxRange = CX1 - CX0, cyRange = CY1 - CY0;
+  const cx = (i: number) => CX0 + (i / Math.max(progressSeries.length - 1, 1)) * cxRange;
+  const cy = (v: number) => CY0 + (1 - v / progressMax) * cyRange;
+  const analyticsPoints = progressSeries.map((p, i) => `${cx(i)},${cy(p.value)}`).join(" ");
+  const analyticsGoalPoints = progressSeries.map((p, i) => `${cx(i)},${cy(p.goal)}`).join(" ");
+  const analyticsAreaPoints = `${CX0},${CY1} ${analyticsPoints} ${CX1},${CY1}`;
 
   // ─── COMMERCIAL MODE ───────────────────────────────────────────────────────
   if (mode === "commercial") {
@@ -121,178 +206,429 @@ export default function Dashboard() {
       <AppLayout>
         <div className="space-y-8">
           {/* Header */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Briefcase className="w-7 h-7 text-primary" />
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 via-primary/10 to-amber-500/20 shadow-sm ring-1 ring-primary/20">
+                <Briefcase className="w-6 h-6 text-primary" />
+              </div>
               <div>
-                <h1 className="text-3xl sm:text-4xl font-bold text-foreground">Task Scheduler</h1>
+                <h1 className="text-3xl sm:text-4xl font-bold text-foreground">Task Dashboard</h1>
                 <p className="text-muted-foreground mt-1">
-                  Manage outdoor tasks with optimal shade and heat protection · {period}
+                  Manage outdoor tasks with optimal shade and heat protection
                 </p>
               </div>
             </div>
             <Link
               to="/tasks"
-              className="hidden sm:flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors shadow"
+              className="hidden sm:flex items-center gap-2 self-start rounded-xl bg-gradient-to-r from-primary to-amber-500 px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg"
             >
               <Plus className="w-4 h-4" />
-              Schedule Task
+              Schedule New Task
             </Link>
           </div>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-foreground">Tasks Today</h3>
-                <Briefcase className="w-5 h-5 text-primary" />
+                <ClipboardList className="w-5 h-5 text-primary" />
               </div>
               <div className="text-4xl font-bold text-primary mb-2">{tasks.length}</div>
               <p className="text-sm text-muted-foreground">
-                {tasks.filter((t) => t.status === "scheduled").length} scheduled
+                {scheduledCount} scheduled
               </p>
             </div>
-            <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-amber-500/10 p-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-foreground">Avg. Shade Coverage</h3>
                 <Sun className="w-5 h-5 text-primary" />
               </div>
-              <div className="text-4xl font-bold text-primary mb-2">
-                {Math.round(tasks.reduce((a, t) => a + t.shadePercentage, 0) / tasks.length)}%
-              </div>
+              <div className="text-4xl font-bold text-primary mb-2">{avgShadeCoverage}%</div>
               <p className="text-sm text-muted-foreground">Across all tasks</p>
             </div>
-            <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
+            <div className="rounded-2xl border border-green-500/20 bg-gradient-to-br from-emerald-500/10 via-background to-green-500/5 p-6 shadow-sm">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-semibold text-foreground">Worker Safety</h3>
-                <CheckCircle className="w-5 h-5 text-green-600" />
+                <ShieldCheck className="w-5 h-5 text-green-600" />
               </div>
-              <div className="text-4xl font-bold text-green-600 mb-2">Good</div>
-              <p className="text-sm text-muted-foreground">All tasks within safe parameters</p>
+              <div className="text-4xl font-bold text-green-600 mb-2">{heatRiskChecked ? "Live" : "Ready"}</div>
+              <p className="text-sm text-muted-foreground">
+                {heatRiskChecked ? "Heat guidance synced for current Dubai conditions" : "Run a live heat check before dispatch"}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-violet-500/10 p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-foreground">Total Duration</h3>
+                <TrendingUp className="w-5 h-5 text-primary" />
+              </div>
+              <div className="text-4xl font-bold text-primary mb-2">{totalDuration} mins</div>
+              <p className="text-sm text-muted-foreground">Total duration of all tasks</p>
             </div>
           </div>
 
-          {/* Create Task CTA */}
-          <Link
-            to="/tasks"
-            className="flex w-full bg-gradient-to-r from-primary to-accent text-primary-foreground py-4 rounded-2xl font-semibold hover:shadow-lg transition-all items-center justify-center gap-2 group"
-          >
-            <Plus className="w-5 h-5 group-hover:scale-110 transition-transform" />
-            Find Optimal Time for New Task
-          </Link>
-
-          {/* Today's Tasks */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Clock className="w-5 h-5 text-primary" />
-              <h2 className="text-xl font-semibold text-foreground">Today's Tasks</h2>
-            </div>
-            <div className="grid gap-4">
-              {tasks.map((task) => (
-                <div key={task.id} className="bg-card border border-border rounded-2xl p-6 hover:shadow-md transition-shadow">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <h3 className="font-semibold text-foreground text-lg">{task.name}</h3>
-                      <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1">
-                        <Navigation2 className="w-3 h-3" /> {task.location}
-                      </p>
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.9fr)_minmax(300px,0.85fr)] gap-6 items-start">
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-6 shadow-sm">
+                {/* Card header row */}
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="w-5 h-5 text-primary" />
+                      <h2 className="text-xl font-semibold text-foreground">Work Analytics</h2>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${task.shadePercentage >= 75 ? "bg-green-100 text-green-700" : task.shadePercentage >= 50 ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"}`}>
-                      {task.shadePercentage}% shade
-                    </span>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Output trends — balance productivity with safer work windows.
+                    </p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4 py-4 border-t border-border">
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-primary" />
-                      <div>
-                        <p className="text-xs text-muted-foreground">Time</p>
-                        <p className="font-semibold text-foreground">{task.timeWindow}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="w-4 h-4 text-primary" />
-                      <div>
-                        <p className="text-xs text-muted-foreground">Status</p>
-                        <p className="font-semibold text-foreground capitalize">{task.status}</p>
-                      </div>
-                    </div>
+                  {/* Toggle — fixed-width pill, no overflow */}
+                  <div className="flex shrink-0 overflow-hidden rounded-xl border border-primary/10 bg-background/80 p-1 shadow-sm">
+                    {(["day", "week", "month"] as ChartRange[]).map((range) => (
+                      <button
+                        key={range}
+                        type="button"
+                        onClick={() => setChartRange(range)}
+                        className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-medium capitalize transition-all ${
+                          chartRange === range
+                            ? "bg-gradient-to-r from-primary to-amber-500 text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {range}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
-          </div>
 
-          {/* Heat Risk Check */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-border bg-muted/30 flex items-center gap-2">
-                <ShieldAlert className="w-5 h-5 text-primary" />
-                <div>
-                  <h2 className="text-base font-semibold text-foreground">Outdoor Heat Risk</h2>
-                  <p className="text-xs text-muted-foreground">Dubai Downtown · {formatTime(currentMinutes)}</p>
+                {/* KPI row */}
+                <div className="mt-5 flex flex-wrap items-center gap-6">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">{chartRange} total</p>
+                    <div className="mt-1 flex items-end gap-2">
+                      <span className="text-4xl font-bold text-foreground">{progressTotal}</span>
+                      <span className={`mb-1 rounded-full px-2 py-0.5 text-xs font-semibold ${trendDelta >= 0 ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600"}`}>
+                        {trendDelta >= 0 ? "+" : ""}{trendDelta}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="h-10 w-px bg-border/60" />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Attainment</p>
+                    <p className="mt-1 text-4xl font-bold text-foreground">{progressPercent}%</p>
+                  </div>
+                  <div className="h-10 w-px bg-border/60" />
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Target</p>
+                    <p className="mt-1 text-4xl font-bold text-foreground">{progressGoal}</p>
+                  </div>
+                  <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-6 rounded-full bg-gradient-to-r from-primary to-amber-500" />Actual</span>
+                    <span className="flex items-center gap-1.5"><span className="inline-block h-0 w-6 border-t-2 border-dashed border-amber-400/80" />Target</span>
+                  </div>
+                </div>
+
+                {/* Chart */}
+                <div className="mt-5 overflow-hidden rounded-2xl border border-primary/10 bg-background/60 px-2 pb-2 pt-4">
+                  <svg viewBox="0 0 540 200" className="h-52 w-full" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                    <defs>
+                      <linearGradient id="areaFill" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.22" />
+                        <stop offset="88%" stopColor="hsl(var(--primary))" stopOpacity="0" />
+                      </linearGradient>
+                      <linearGradient id="lineGrad" x1="0" x2="1" y1="0" y2="0">
+                        <stop offset="0%" stopColor="hsl(var(--primary))" />
+                        <stop offset="100%" stopColor="#f59e0b" />
+                      </linearGradient>
+                      <filter id="lineGlow" x="-10%" y="-40%" width="120%" height="180%">
+                        <feGaussianBlur stdDeviation="2.5" result="blur" />
+                        <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                      </filter>
+                    </defs>
+
+                    {/* Subtle horizontal grid */}
+                    {[0.25, 0.5, 0.75, 1].map((t) => {
+                      const y = CY0 + (1 - t) * cyRange;
+                      return <line key={t} x1={CX0} y1={y} x2={CX1} y2={y} stroke="currentColor" strokeOpacity="0.07" />;
+                    })}
+
+                    {/* Gradient fill under actual line */}
+                    <polygon points={analyticsAreaPoints} fill="url(#areaFill)" />
+
+                    {/* Target dashed line */}
+                    <polyline
+                      points={analyticsGoalPoints}
+                      fill="none"
+                      stroke="#f59e0b"
+                      strokeOpacity="0.75"
+                      strokeWidth="1.5"
+                      strokeDasharray="6 5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+
+                    {/* Actual line */}
+                    <polyline
+                      points={analyticsPoints}
+                      fill="none"
+                      stroke="url(#lineGrad)"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      filter="url(#lineGlow)"
+                    />
+
+                    {/* Data points + labels */}
+                    {progressSeries.map((point, index) => {
+                      const x = cx(index);
+                      const y = cy(point.value);
+                      const pct = Math.round((point.value / point.goal) * 100);
+                      return (
+                        <g key={point.label}>
+                          {/* X-axis label */}
+                          <text x={x} y={CY1 + 22} textAnchor="middle" fontSize="11" fill="currentColor" opacity="0.5" fontFamily="inherit">{point.label}</text>
+                          {/* Value tooltip above dot */}
+                          <text x={x} y={y - 10} textAnchor="middle" fontSize="10.5" fill="currentColor" opacity="0.65" fontFamily="inherit" fontWeight="600">{point.value}</text>
+                          {/* Dot: outer glow ring */}
+                          <circle cx={x} cy={y} r="5" fill="hsl(var(--primary))" opacity="0.18" />
+                          {/* Dot: solid */}
+                          <circle cx={x} cy={y} r="3.4" fill="hsl(var(--primary))" stroke="white" strokeWidth="2" />
+                          {/* Attainment % below x-label */}
+                          <text x={x} y={CY1 + 36} textAnchor="middle" fontSize="9.5" fill="currentColor" opacity="0.38" fontFamily="inherit">{pct}%</text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+
+                {/* "Current Window" summary at bottom */}
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Completed tasks</p>
+                    <p className="mt-1 text-2xl font-bold text-foreground">{completedCount}</p>
+                  </div>
+                  <div className="rounded-xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Best shade slot</p>
+                    <p className="mt-1 text-2xl font-bold text-foreground">{avgShadeCoverage >= 80 ? "Evening" : "Morning"}</p>
+                  </div>
                 </div>
               </div>
-              <div className="p-6">
-                <button
-                  onClick={checkHeatRisk}
-                  disabled={heatRiskLoading}
-                  className="w-full py-3 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-400 hover:to-red-400 text-white font-semibold text-sm transition-all disabled:opacity-50 shadow-md mb-4"
-                >
-                  {heatRiskLoading ? "⏳ Checking…" : "🌡️ Check Heat Risk Now"}
-                </button>
-                {!heatRiskChecked && !heatRiskLoading && (
-                  <p className="text-center text-sm text-muted-foreground py-4">Click above to check real-time outdoor heat risk</p>
-                )}
-                {heatRiskChecked && heatRisk && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 rounded-xl border" style={{ background: `${riskColor}10`, borderColor: `${riskColor}40` }}>
-                      <div>
-                        <div className="text-xs text-muted-foreground uppercase tracking-wide mb-0.5">Risk Level</div>
-                        <div className="text-xl font-bold uppercase" style={{ color: riskColor }}>{heatRisk.risk_level || "—"}</div>
+
+              {/* Today's Tasks */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-primary" />
+                  <h2 className="text-xl font-semibold text-foreground">Today's Tasks</h2>
+                </div>
+                <div className="grid gap-4">
+                  {tasks.map((task) => {
+                    const isEditing = editingTaskId === task.id;
+                    return (
+                      <div key={task.id} className="rounded-2xl border border-primary/10 bg-gradient-to-br from-primary/10 via-background to-accent/5 shadow-sm transition-all hover:shadow-md">
+                        {isEditing ? (
+                          /* ── Inline edit form ── */
+                          <div className="p-5 space-y-4">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sm font-semibold text-primary">Editing task</span>
+                              <button type="button" onClick={cancelEdit} className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                              <div className="sm:col-span-2">
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Task name</label>
+                                <input
+                                  className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                                  value={editForm.name ?? ""}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Location</label>
+                                <input
+                                  className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                                  value={editForm.location ?? ""}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, location: e.target.value }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Time window</label>
+                                <input
+                                  className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                                  value={editForm.timeWindow ?? ""}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, timeWindow: e.target.value }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Shade % (0–100)</label>
+                                <input
+                                  type="number" min={0} max={100}
+                                  className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                                  value={editForm.shadePercentage ?? 0}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, shadePercentage: Number(e.target.value) }))}
+                                />
+                              </div>
+                              <div>
+                                <label className="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+                                <select
+                                  className="w-full rounded-xl border border-border bg-background/80 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
+                                  value={editForm.status ?? "scheduled"}
+                                  onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value as ScheduledTask["status"] }))}
+                                >
+                                  <option value="scheduled">Scheduled</option>
+                                  <option value="in-progress">In Progress</option>
+                                  <option value="completed">Completed</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={saveEdit}
+                                className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-primary to-amber-500 px-4 py-2 text-sm font-semibold text-primary-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+                              >
+                                <Save className="w-4 h-4" /> Save
+                              </button>
+                              <button type="button" onClick={cancelEdit} className="rounded-xl border border-border px-4 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* ── Normal display ── */
+                          <div className="p-6">
+                            <div className="mb-4 flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <h3 className="text-lg font-semibold text-foreground">{task.name}</h3>
+                                <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+                                  <span className="flex items-center gap-1">
+                                    <Navigation2 className="w-3 h-3" /> {task.location}
+                                  </span>
+                                  <span className="flex items-center gap-1 rounded-full border border-primary/10 bg-primary/5 px-2 py-0.5 text-xs font-medium text-foreground/80">
+                                    <Clock className="w-3 h-3 text-primary" />
+                                    {formatTaskDuration(getTaskDurationMinutes(task.timeWindow))}
+                                  </span>
+                                </p>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
+                                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${task.shadePercentage >= 75 ? "bg-green-100 text-green-700" : task.shadePercentage >= 50 ? "bg-orange-100 text-orange-700" : "bg-red-100 text-red-700"}`}>
+                                  {task.shadePercentage}% shade
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => startEdit(task)}
+                                  className="rounded-lg border border-border p-1.5 text-muted-foreground transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+                                  title="Edit task"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => deleteTask(task.id)}
+                                  className="rounded-lg border border-border p-1.5 text-muted-foreground transition-all hover:border-red-400/40 hover:bg-red-500/5 hover:text-red-500"
+                                  title="Delete task"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4 border-t border-border/60 pt-4">
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-primary" />
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Time</p>
+                                  <p className="font-semibold text-foreground">{task.timeWindow}</p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <CheckCircle className="w-4 h-4 text-primary" />
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Status</p>
+                                  <p className="font-semibold capitalize text-foreground">{task.status}</p>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div className="text-3xl">{riskLevel === "low" ? "✅" : riskLevel === "medium" ? "⚠️" : "🚨"}</div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-sm">
-                      {[
-                        { l: "Temp", v: heatRisk.temperature != null ? `${heatRisk.temperature}°C` : "--", c: "text-amber-500" },
-                        { l: "Humidity", v: heatRisk.humidity != null ? `${heatRisk.humidity}%` : "--", c: "text-sky-500" },
-                        { l: "Wind", v: heatRisk.wind_speed != null ? `${heatRisk.wind_speed}` : "--", c: "text-violet-500" },
-                      ].map(({ l, v, c }) => (
-                        <div key={l} className="text-center p-2 rounded-xl bg-muted/60 border border-border">
-                          <div className="text-xs text-muted-foreground mb-0.5">{l}</div>
-                          <div className={`font-bold ${c}`}>{v}</div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6 xl:sticky xl:top-24">
+              <div className="overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-orange-500/10 shadow-sm">
+                <div className="flex items-center gap-3 border-b border-primary/10 bg-background/60 px-6 py-4 backdrop-blur">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500/20 to-red-500/20">
+                    <ShieldAlert className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-semibold text-foreground">Outdoor Heat Risk</h2>
+                    <p className="text-xs text-muted-foreground">Dubai Downtown · {formatTime(currentMinutes)}</p>
+                  </div>
+                </div>
+                <div className="p-6">
+                  <button
+                    onClick={checkHeatRisk}
+                    disabled={heatRiskLoading}
+                    className="mb-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-orange-500 to-red-500 py-3 text-sm font-semibold text-white shadow-md transition-all hover:-translate-y-0.5 hover:shadow-lg disabled:opacity-50"
+                  >
+                    <ShieldAlert className="w-4 h-4" />
+                    {heatRiskLoading ? "Checking..." : "Check Heat Risk Now"}
+                  </button>
+                  {!heatRiskChecked && !heatRiskLoading && (
+                    <p className="py-4 text-center text-sm text-muted-foreground">Run a real-time heat check before assigning exposed outdoor work.</p>
+                  )}
+                  {heatRiskChecked && heatRisk && (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between rounded-xl border p-3" style={{ background: `${riskColor}10`, borderColor: `${riskColor}40` }}>
+                        <div>
+                          <div className="mb-0.5 text-xs uppercase tracking-wide text-muted-foreground">Risk Level</div>
+                          <div className="text-xl font-bold uppercase" style={{ color: riskColor }}>{heatRisk.risk_level || "—"}</div>
                         </div>
-                      ))}
-                    </div>
-                    {heatRisk.safety_message && (
-                      <div className="p-3 rounded-xl border text-sm" style={{ background: `${riskColor}08`, borderColor: `${riskColor}30`, color: riskColor }}>
-                        💬 {heatRisk.safety_message}
+                        <div className="text-3xl">{riskLevel === "low" ? "✅" : riskLevel === "medium" ? "⚠️" : "🚨"}</div>
                       </div>
-                    )}
-                  </div>
-                )}
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        {[
+                          { l: "Temp", v: heatRisk.temperature != null ? `${heatRisk.temperature}°C` : "--", c: "text-amber-500" },
+                          { l: "Humidity", v: heatRisk.humidity != null ? `${heatRisk.humidity}%` : "--", c: "text-sky-500" },
+                          { l: "Wind", v: heatRisk.wind_speed != null ? `${heatRisk.wind_speed}` : "--", c: "text-violet-500" },
+                        ].map(({ l, v, c }) => (
+                          <div key={l} className="rounded-xl border border-border bg-muted/60 p-2 text-center">
+                            <div className="mb-0.5 text-xs text-muted-foreground">{l}</div>
+                            <div className={`font-bold ${c}`}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {heatRisk.safety_message && (
+                        <div className="rounded-xl border p-3 text-sm" style={{ background: `${riskColor}08`, borderColor: `${riskColor}30`, color: riskColor }}>
+                          {heatRisk.safety_message}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
 
-            {/* Safety Guidelines */}
-            <div className="bg-gradient-to-br from-primary/10 to-accent/10 border border-primary/30 rounded-2xl p-6">
-              <div className="flex items-center gap-2 mb-4">
-                <AlertCircle className="w-5 h-5 text-primary" />
-                <h3 className="font-semibold text-foreground">Today's Safety Tips</h3>
+              <div className="rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-6 shadow-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-primary" />
+                  <h3 className="font-semibold text-foreground">Today's Safety Tips</h3>
+                </div>
+                <ul className="space-y-3 text-sm text-muted-foreground">
+                  {[
+                    "Peak heat 12–3 PM: Only assign shaded tasks",
+                    "Early morning (5–9 AM) offers best conditions across all sites",
+                    "Ensure all workers have hydration stations at each site",
+                    "Evening shift (5–8 PM) provides excellent shade coverage",
+                  ].map((tip) => (
+                    <li key={tip} className="flex items-start gap-2 rounded-xl border border-white/40 bg-background/60 px-3 py-2">
+                      <CheckCircle className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+                      <span>{tip}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className="space-y-3 text-sm text-muted-foreground">
-                {[
-                  "Peak heat 12–3 PM: Only assign shaded tasks",
-                  "Early morning (5–9 AM) offers best conditions across all sites",
-                  "Ensure all workers have hydration stations at each site",
-                  "Evening shift (5–8 PM) provides excellent shade coverage",
-                ].map((tip) => (
-                  <li key={tip} className="flex items-start gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
-                    <span>{tip}</span>
-                  </li>
-                ))}
-              </ul>
             </div>
           </div>
         </div>

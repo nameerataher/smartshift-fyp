@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Cloud, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin, RotateCcw, Play, Pause, Briefcase, AlertTriangle } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Sun, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin, RotateCcw, Play, Pause, Briefcase, AlertTriangle } from "lucide-react";
+import { cn } from "../lib/utils";
 import MapboxMap, { LOCATIONS, FlyToTarget, RouteToDraw } from "@/components/MapboxMap";
 import { useMode } from "@/hooks/useMode";
 import mapboxgl from "mapbox-gl";
@@ -250,8 +250,8 @@ export default function MapPage() {
         <div className="max-w-full px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center shadow-md">
-                <Cloud className="w-6 h-6 text-primary-foreground" />
+              <div className="w-10 h-10 bg-gradient-to-br from-primary to-amber-400 rounded-lg flex items-center justify-center shadow-md">
+                <Sun className="w-6 h-6 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold text-foreground hidden sm:block">SmartShift</span>
             </Link>
@@ -317,19 +317,6 @@ export default function MapPage() {
 
         {/* ── RIGHT: Sidebar ────────────────────────────────────────────── */}
         <div className="w-96 shrink-0 border-l border-border bg-background overflow-y-auto flex flex-col">
-
-          {/* Page heading */}
-          <div className="px-5 pt-5 pb-4 border-b border-border">
-            <div className="flex items-center gap-2 mb-1">
-              {mode === "commercial" ? <MapPin className="w-5 h-5 text-primary" /> : <Navigation2 className="w-5 h-5 text-primary" />}
-              <h1 className="text-lg font-bold text-foreground">
-                {mode === "commercial" ? "Task Map" : "Navigation Map"}
-              </h1>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              3D shadow analysis · {period} · Sun {sunPos?.altitude != null ? `${sunPos.altitude.toFixed(1)}° alt` : "--"}
-            </p>
-          </div>
 
           {/* ── Location Search ─────────────────────────────────────────── */}
           <div className="px-5 py-4 border-b border-border">

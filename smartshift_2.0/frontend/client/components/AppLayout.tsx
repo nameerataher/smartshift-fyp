@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
-import { Cloud, Map, CheckSquare, Settings, AlertTriangle, Briefcase, Navigation } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Sun, Map, CheckSquare, Settings, Briefcase, Navigation, LayoutDashboard } from "lucide-react";
+import { cn } from "../lib/utils";
 import { useLocation } from "react-router-dom";
 import { useMode } from "@/hooks/useMode";
 
@@ -15,7 +15,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   const isActive = (path: string) => location.pathname === path;
 
   const navItems = [
-    { path: "/dashboard", label: "Dashboard", icon: AlertTriangle },
+    { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     {
       path: "/map",
       label: mode === "commercial" ? "Task Map" : "Route Map",
@@ -36,8 +36,8 @@ export function AppLayout({ children }: AppLayoutProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-primary to-accent rounded-lg flex items-center justify-center shadow-md">
-                <Cloud className="w-6 h-6 text-primary-foreground" />
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-amber-400 flex items-center justify-center">
+                <Sun className="w-6 h-6 text-primary-foreground" />
               </div>
               <span className="text-xl font-bold text-foreground hidden sm:block">
                 SmartShift
