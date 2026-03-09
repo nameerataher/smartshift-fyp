@@ -5,12 +5,6 @@ randomforestclassifier to predict localized heat risk at a given place and time.
 
 the model answers the question: "is it safe to be outside right now?"
 
-target users:
-- municipality workers (road work, maintenance)
-- construction workers (outdoor labor)
-- building facade cleaners (need to work in shade/shadow)
-- joggers, cyclists, and pedestrians (want less sunny routes)
-
 -----------------------------
 📥 data sources & inputs
 -----------------------------

@@ -77,7 +77,10 @@ from database import (
     create_task, get_task, get_all_tasks, get_today_tasks, update_task, delete_task,
     create_accepted_recommendation, get_recommendation_by_task, mark_task_completed,
     get_analytics, get_analytics_range, update_analytics_for_month, get_dashboard_summary,
-    UserTask, AcceptedRecommendation
+    create_user, get_user_by_email, get_user_by_id, authenticate_user, update_user,
+    create_saved_place, get_saved_places, delete_saved_place,
+    hash_password,
+    UserTask, AcceptedRecommendation, User, SavedPlace
 )
 
 # legacy sqlite path for backward compatibility
@@ -98,7 +101,7 @@ CORS(app, origins=API.CORS_ORIGINS)
 try:
     from api_v2 import api_v2
     app.register_blueprint(api_v2)
-    print("✓ registered v2 api blueprint with unified architecture")
+    print("[OK] registered v2 api blueprint with unified architecture")
 except ImportError as e:
     print(f"warning: could not register v2 api: {e}")
 
@@ -1412,16 +1415,167 @@ def get_ml_status():
 
 
 # =============================================================================
+# AUTH API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_login():
+    """Authenticate user and return user data."""
+    try:
+        data = request.get_json() or {}
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        if not email or not password:
+            return jsonify({"success": False, "error": "Email and password required"}), 400
+        user = authenticate_user(email, password)
+        if not user:
+            return jsonify({"success": False, "error": "Invalid email or password"}), 401
+        return jsonify({
+            "success": True,
+            "user": {
+                "user_id": user["user_id"],
+                "email": user["email"],
+                "display_name": user["display_name"],
+                "user_type": user["user_type"],
+                "organization": user.get("organization", ""),
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/auth/register', methods=['POST'])
+def api_register():
+    """Register a new user."""
+    try:
+        data = request.get_json() or {}
+        email = data.get('email', '').strip().lower()
+        password = data.get('password', '')
+        display_name = data.get('display_name', '')
+        user_type = data.get('user_type', 'personal')
+        organization = data.get('organization', '')
+        if not email or not password or not display_name:
+            return jsonify({"success": False, "error": "Email, password, and name required"}), 400
+        existing = get_user_by_email(email)
+        if existing:
+            return jsonify({"success": False, "error": "Email already registered"}), 409
+        hashed, salt = hash_password(password)
+        user = User(
+            user_id=str(uuid.uuid4()),
+            email=email,
+            password_hash=hashed,
+            salt=salt,
+            display_name=display_name,
+            user_type=user_type,
+            organization=organization,
+        )
+        create_user(user)
+        return jsonify({
+            "success": True,
+            "user": {
+                "user_id": user.user_id,
+                "email": user.email,
+                "display_name": user.display_name,
+                "user_type": user.user_type,
+                "organization": user.organization,
+            }
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/auth/me', methods=['GET'])
+def api_get_me():
+    """Get current user data from user_id header."""
+    user_id = request.headers.get('X-User-Id', '')
+    if not user_id:
+        return jsonify({"success": False, "error": "Not authenticated"}), 401
+    user = get_user_by_id(user_id)
+    if not user:
+        return jsonify({"success": False, "error": "User not found"}), 404
+    return jsonify({
+        "success": True,
+        "user": {
+            "user_id": user["user_id"],
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "user_type": user["user_type"],
+            "organization": user.get("organization", ""),
+        }
+    })
+
+
+@app.route('/api/auth/update', methods=['PUT'])
+def api_update_user():
+    """Update user profile."""
+    try:
+        user_id = request.headers.get('X-User-Id', '')
+        if not user_id:
+            return jsonify({"success": False, "error": "Not authenticated"}), 401
+        data = request.get_json() or {}
+        allowed = ['display_name', 'user_type', 'organization']
+        updates = {k: v for k, v in data.items() if k in allowed}
+        if updates:
+            update_user(user_id, updates)
+        return jsonify({"success": True, "message": "User updated"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# =============================================================================
+# SAVED PLACES API ENDPOINTS
+# =============================================================================
+
+@app.route('/api/saved-places', methods=['GET'])
+def api_get_saved_places():
+    user_id = request.headers.get('X-User-Id', request.args.get('user_id', ''))
+    if not user_id:
+        return jsonify({"success": True, "places": []})
+    places = get_saved_places(user_id)
+    return jsonify({"success": True, "places": places})
+
+
+@app.route('/api/saved-places', methods=['POST'])
+def api_create_saved_place():
+    try:
+        data = request.get_json() or {}
+        user_id = request.headers.get('X-User-Id', data.get('user_id', ''))
+        place = SavedPlace(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            name=data.get('name', 'Saved Place'),
+            lat=float(data.get('lat', 0)),
+            lon=float(data.get('lon', 0)),
+        )
+        place_id = create_saved_place(place)
+        return jsonify({"success": True, "place_id": place_id, "place": {
+            "id": place.id, "name": place.name, "lat": place.lat, "lon": place.lon
+        }})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/saved-places/<place_id>', methods=['DELETE'])
+def api_delete_saved_place(place_id):
+    user_id = request.headers.get('X-User-Id', '')
+    success = delete_saved_place(place_id, user_id)
+    if success:
+        return jsonify({"success": True})
+    return jsonify({"success": False, "error": "Place not found"}), 404
+
+
+# =============================================================================
 # TASK MANAGEMENT API ENDPOINTS
 # =============================================================================
 
 @app.route('/api/tasks', methods=['GET'])
 def api_get_tasks():
-    """Get all tasks, optionally filtered by date or status."""
+    """Get all tasks, optionally filtered by date, status, or user."""
     try:
         date_filter = request.args.get('date')
         status_filter = request.args.get('status')
-        tasks = get_all_tasks(date_filter=date_filter, status_filter=status_filter)
+        user_id = request.headers.get('X-User-Id') or request.args.get('user_id')
+        tasks = get_all_tasks(date_filter=date_filter, status_filter=status_filter, user_id=user_id)
         return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1431,7 +1585,8 @@ def api_get_tasks():
 def api_get_today_tasks():
     """Get tasks for today."""
     try:
-        tasks = get_today_tasks()
+        user_id = request.headers.get('X-User-Id') or request.args.get('user_id')
+        tasks = get_today_tasks(user_id=user_id)
         return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1443,6 +1598,7 @@ def api_create_task():
     try:
         data = request.get_json() or {}
 
+        user_id = data.get('user_id') or request.headers.get('X-User-Id', '')
         task = UserTask(
             task_id=data.get('task_id', str(uuid.uuid4())),
             task_name=data.get('task_name', 'Untitled Task'),
@@ -1453,7 +1609,8 @@ def api_create_task():
             hour_start=int(data.get('hour_start', 6)),
             hour_end=int(data.get('hour_end', 18)),
             date=data.get('date', datetime.now().strftime('%Y-%m-%d')),
-            status=data.get('status', 'draft')
+            status=data.get('status', 'draft'),
+            user_id=user_id
         )
 
         task_id = create_task(task)
@@ -1553,7 +1710,8 @@ def api_accept_recommendation(task_id):
 def api_get_dashboard():
     """Get dashboard summary data."""
     try:
-        summary = get_dashboard_summary()
+        user_id = request.headers.get('X-User-Id') or request.args.get('user_id')
+        summary = get_dashboard_summary(user_id=user_id)
         return jsonify({"success": True, **summary})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1704,7 +1862,7 @@ if __name__ == "__main__":
     print(f"Timezone: UTC+{DUBAI.TIMEZONE_OFFSET}")
     print(f"Server:   http://{API.HOST}:{API.PORT}")
     print(f"ML Models: {'Available' if ML_MODELS_AVAILABLE else 'Not Available'}")
-    print(f"Weather API: Open-Meteo ✓ (Free, No API Key)")
+    print(f"Weather API: Open-Meteo [OK] (Free, No API Key)")
     print("-" * 60)
     print("Shadow & Sun Endpoints:")
     print("  GET /api/health       - Server status")
