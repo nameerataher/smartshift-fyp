@@ -31,7 +31,8 @@ except ImportError:
     print("warning: comfort_navigator not available")
 
 try:
-    from shadow_scheduler import ShadowScheduler, calculate_shadow_at_time
+    from shadow_scheduler import ShadowScheduler, calculate_shadow_at_time, find_optimal_schedule_for_area, parse_client_buildings
+    from solar_position import SunPosition
     SHADOW_SCHEDULER_AVAILABLE = True
 except ImportError as e:
     ShadowScheduler = None
@@ -40,20 +41,11 @@ except ImportError as e:
 
 NEW_ARCH_AVAILABLE = CORE_MODEL_AVAILABLE or SHADOW_SCHEDULER_AVAILABLE or NAVIGATOR_AVAILABLE
 
-# Try to import heat risk model separately (optional)
-try:
-    from heat_risk_model import HeatRiskModel, WeatherData, LocationContext, SunExposure
-    HEAT_RISK_AVAILABLE = True
-except ImportError:
-    HEAT_RISK_AVAILABLE = False
-    print("note: heat risk model not loaded (shadow-only mode)")
-
 # create blueprint for v2 api
 api_v2 = Blueprint('api_v2', __name__, url_prefix='/api/v2')
 
 # lazy-load singletons
 _comfort_navigator = None
-_heat_risk_model = None
 
 def get_comfort_navigator(mapbox_token: str):
     """get comfort navigator with mapbox token"""
@@ -63,13 +55,6 @@ def get_comfort_navigator(mapbox_token: str):
         mapbox_token=mapbox_token,
         sample_interval_meters=15.0
     )
-
-def get_heat_risk_model() -> HeatRiskModel:
-    """lazy-load heat risk model"""
-    global _heat_risk_model
-    if _heat_risk_model is None:
-        _heat_risk_model = HeatRiskModel()
-    return _heat_risk_model
 
 
 # =============================================================================
@@ -240,16 +225,18 @@ def find_optimal_schedule():
 @api_v2.route('/schedule/area', methods=['POST'])
 def schedule_for_area():
     """
-    Schedule task for a polygon area. Uses centroid for shadow analysis.
+    Schedule task for a polygon area using grid-sampling shadow analysis.
 
     POST /api/v2/schedule/area
     {
         "task_name": "Road Cleaning",
         "polygon_points": [[25.195, 55.270], [25.195, 55.280], ...],
+        "location_name": "Work Zone",
         "task_duration_minutes": 180,
         "date": "2026-03-10",
         "start_hour": 5,
-        "end_hour": 20
+        "end_hour": 20,
+        "recommendation_count": 5
     }
     """
     if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
@@ -260,12 +247,10 @@ def schedule_for_area():
 
         task_name = data.get('task_name', 'area task')
         polygon_points = data.get('polygon_points', [])
-        if not polygon_points:
-            return jsonify({"success": False, "error": "polygon_points required"}), 400
+        if not polygon_points or len(polygon_points) < 3:
+            return jsonify({"success": False, "error": "polygon_points requires at least 3 vertices"}), 400
 
-        lat = sum(p[0] for p in polygon_points) / len(polygon_points)
-        lon = sum(p[1] for p in polygon_points) / len(polygon_points)
-
+        location_name = data.get('location_name', task_name)
         task_duration = int(data.get('task_duration_minutes', 60))
         date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
         date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -273,23 +258,32 @@ def schedule_for_area():
         end_hour = int(data.get('end_hour', 20))
         recommendation_count = int(data.get('recommendation_count', 5))
 
+        polygon_tuples = [(float(p[0]), float(p[1])) for p in polygon_points]
+
+        raw_buildings = data.get('buildings')
+        client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
+
         scheduler = ShadowScheduler(temporal_resolution_minutes=10)
-        recommendation = scheduler.find_optimal_schedule(
+        recommendation = scheduler.find_optimal_schedule_for_area(
             task_name=task_name,
-            lat=lat,
-            lon=lon,
-            location_name=task_name,
+            polygon_points=polygon_tuples,
+            location_name=location_name,
             task_duration_minutes=task_duration,
             date=date,
             start_hour=start_hour,
             end_hour=end_hour,
-            building_face=None,
-            recommendation_count=recommendation_count
+            recommendation_count=recommendation_count,
+            client_buildings=client_buildings
         )
+
+        grid_pts = scheduler._sample_polygon_grid(polygon_tuples)
 
         return jsonify({
             "success": True,
-            "mode": "area",
+            "mode": "area_grid",
+            "building_source": "client_map_tiles" if client_buildings else "tilequery_api",
+            "buildings_used": recommendation.buildings_used,
+            "grid_samples": len(grid_pts),
             "recommendation": recommendation.to_dict()
         })
 
@@ -679,7 +673,9 @@ def shadow_schedule():
         building_face = data.get('building_face')
         recommendation_count = int(data.get('recommendation_count', 5))
 
-        # Use the clean shadow scheduler
+        raw_buildings = data.get('buildings')
+        client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
+
         scheduler = ShadowScheduler(temporal_resolution_minutes=10)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
@@ -691,12 +687,15 @@ def shadow_schedule():
             start_hour=start_hour,
             end_hour=end_hour,
             building_face=building_face,
-            recommendation_count=recommendation_count
+            recommendation_count=recommendation_count,
+            client_buildings=client_buildings
         )
 
         return jsonify({
             "success": True,
             "mode": "shadow_only",
+            "building_source": "client_map_tiles" if client_buildings else "tilequery_api",
+            "buildings_used": recommendation.buildings_used,
             "recommendation": recommendation.to_dict()
         })
 
@@ -706,6 +705,148 @@ def shadow_schedule():
             "error": str(e),
             "traceback": traceback.format_exc()
         }), 400
+
+
+@api_v2.route('/debug/shadow-polygons', methods=['POST'])
+def debug_shadow_polygons():
+    """
+    Debug endpoint: returns raw shadow polygons as GeoJSON for visual validation.
+
+    Accepts buildings extracted from the frontend's rendered map tiles so the
+    shadow polygons match what Mapbox visually renders.
+
+    POST /api/v2/debug/shadow-polygons
+    {
+        "lat": 25.2, "lon": 55.27,
+        "time": "2026-03-11T10:00:00",
+        "buildings": [{"id": "cl_0", "footprint": [[lon,lat],...], "height": 50, "name": "..."}]
+    }
+    """
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
+        return jsonify({"error": "shadow scheduler not available"}), 500
+
+    try:
+        data = request.get_json()
+        lat = float(data.get('lat', 25.2048))
+        lon = float(data.get('lon', 55.2708))
+        time_str = data.get('time')
+
+        if time_str:
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+        else:
+            dt = datetime.now()
+
+        raw_buildings = data.get('buildings')
+        scheduler = ShadowScheduler()
+
+        if raw_buildings:
+            buildings = parse_client_buildings(raw_buildings)
+            building_source = "client_map_tiles"
+        else:
+            buildings = scheduler._fetch_nearby_buildings(lat, lon)
+            building_source = "tilequery_api"
+
+        # Use frontend-provided sun position if available (ensures
+        # computed shadows match what Mapbox renders visually)
+        client_az = data.get('sun_azimuth')
+        client_alt = data.get('sun_altitude')
+        if client_az is not None and client_alt is not None:
+            sun = SunPosition(
+                azimuth=float(client_az),
+                altitude=float(client_alt),
+                zenith=90.0 - float(client_alt),
+                is_daylight=float(client_alt) > 0,
+            )
+        else:
+            sun = scheduler._get_sun_position(dt, lat, lon)
+
+        from shadow_calculator import ShadowCalculator
+        from config import DUBAI
+        calc = ShadowCalculator(
+            latitude=DUBAI.LATITUDE,
+            longitude=DUBAI.LONGITUDE,
+            timezone_offset=DUBAI.TIMEZONE_OFFSET
+        )
+
+        shadow_features = []
+        footprint_features = []
+        shadow_length_m = calc.calculate_shadow_length(30.0, sun.altitude) if sun.altitude > 0 else 0
+        shadow_dir = calc.calculate_shadow_direction(sun.azimuth) if sun.altitude > 0 else 0
+
+        for b in buildings:
+            # Building footprint (for visualization)
+            fp_ring = [[p[0], p[1]] for p in b.footprint]
+            if fp_ring and fp_ring[0] != fp_ring[-1]:
+                fp_ring.append(fp_ring[0])
+            footprint_features.append({
+                "type": "Feature",
+                "properties": {
+                    "building_id": b.id,
+                    "height": b.height,
+                    "name": b.name or "unknown",
+                    "layer": "footprint",
+                },
+                "geometry": {"type": "Polygon", "coordinates": [fp_ring]}
+            })
+
+            # Shadow polygon
+            polygon = calc.calculate_shadow_polygon(b, sun)
+            if polygon:
+                ring = [[p[0], p[1]] for p in polygon]
+                if ring[0] != ring[-1]:
+                    ring.append(ring[0])
+                shadow_features.append({
+                    "type": "Feature",
+                    "properties": {
+                        "building_id": b.id,
+                        "height": b.height,
+                        "name": b.name or "unknown",
+                        "layer": "shadow",
+                    },
+                    "geometry": {"type": "Polygon", "coordinates": [ring]}
+                })
+
+        from shadow_scheduler import _point_in_polygon
+        target_in_shadow = any(
+            calc.calculate_shadow_polygon(b, sun) and
+            _point_in_polygon(lon, lat, calc.calculate_shadow_polygon(b, sun))
+            for b in buildings
+        )
+
+        heights = [b.height for b in buildings]
+        height_stats = {
+            "min": round(min(heights), 1) if heights else 0,
+            "max": round(max(heights), 1) if heights else 0,
+            "avg": round(sum(heights) / len(heights), 1) if heights else 0,
+        }
+
+        return jsonify({
+            "success": True,
+            "time": dt.isoformat(),
+            "building_source": building_source,
+            "sun": {
+                "azimuth": round(sun.azimuth, 2),
+                "altitude": round(sun.altitude, 2),
+                "is_daylight": sun.is_daylight,
+                "shadow_length_30m": round(shadow_length_m, 1),
+                "shadow_direction": round(shadow_dir, 1),
+            },
+            "target": {"lat": lat, "lon": lon, "in_shadow": target_in_shadow},
+            "buildings_found": len(buildings),
+            "height_stats": height_stats,
+            "shadow_polygons_count": len(shadow_features),
+            "shadow_geojson": {
+                "type": "FeatureCollection",
+                "features": shadow_features
+            },
+            "footprint_geojson": {
+                "type": "FeatureCollection",
+                "features": footprint_features
+            }
+        })
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 400
 
 
 @api_v2.route('/sun-position', methods=['GET'])

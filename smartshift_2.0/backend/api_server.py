@@ -961,8 +961,8 @@ def get_optimal_task_schedule():
 
     answers: "given today's conditions, what's the best time to schedule this task?"
 
-    uses ai planning to determine the best start time for outdoor work,
-    maximizing shadow exposure and minimizing heat risk.
+    uses sun position analysis to determine the best start time for outdoor work,
+    maximizing shadow coverage at the given building/area.
 
     target users:
     - municipality planners (scheduling outdoor maintenance)
@@ -983,7 +983,7 @@ def get_optimal_task_schedule():
 
     returns:
         json with optimal schedule recommendation, ranked alternatives,
-        and heat risk breakdown for each time slot
+        and shadow coverage breakdown for each time slot
     """
     if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
         return jsonify({
@@ -1018,7 +1018,6 @@ def get_optimal_task_schedule():
         requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
         building_face = data.get('building_face')
 
-        # use shadow scheduler (shadow-only, no heat risk)
         scheduler = ShadowScheduler(temporal_resolution_minutes=10)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
@@ -1057,7 +1056,7 @@ def get_optimal_task_schedule():
                 duration,
                 best.start.strftime('%H:%M'),
                 best.end.strftime('%H:%M'),
-                0.0,  # heat_risk_score not used (shadow-only)
+                0.0,  # unused legacy column
                 float(best.shadow_percentage),
                 datetime.now().isoformat()
             ))
@@ -1081,7 +1080,6 @@ def get_optimal_task_schedule():
                 "best_start_time": best.start.strftime('%H:%M'),
                 "end_time": best.end.strftime('%H:%M'),
                 "quality_score": round(best.shadow_percentage, 1),
-                "heat_risk_score": 0.0,
                 "shade_percentage": round(best.shadow_percentage, 1),
                 "is_feasible": True,
                 "location": f"{lat:.4f}, {lon:.4f}"
@@ -1091,7 +1089,6 @@ def get_optimal_task_schedule():
                     "start_time": slot.start.strftime('%H:%M'),
                     "end_time": slot.end.strftime('%H:%M'),
                     "quality_score": round(slot.shadow_percentage, 1),
-                    "heat_risk_score": 0.0,
                     "shade_percentage": round(slot.shadow_percentage, 1)
                 }
                 for slot in recommendation.alternatives
@@ -1187,7 +1184,7 @@ def get_schedule_history():
                     "id": r[0], "task_name": r[1], "lat": r[2], "lon": r[3],
                     "date": r[4], "start_hour": r[5], "end_hour": r[6],
                     "duration_minutes": r[7], "recommended_start": r[8],
-                    "recommended_end": r[9], "heat_risk_score": r[10],
+                    "recommended_end": r[9],
                     "shade_percentage": r[11], "created_at": r[12]
                 } for r in requests_rows
             ],
@@ -1875,8 +1872,8 @@ if __name__ == "__main__":
     print("  GET /api/weather      - Weather data (Open-Meteo)")
     print("-" * 60)
     print("ML-Powered Endpoints:")
-    print("  GET/POST /api/heat-risk    - Heat risk prediction")
-    print("  GET/POST /api/schedule     - Optimal task scheduling")
+    print("  GET/POST /api/heat-risk    - Heat risk prediction (dashboard)")
+    print("  GET/POST /api/schedule     - Shadow-based task scheduling")
     print("  GET/POST /api/shaded-route - Shade-optimized navigation")
     print("  GET /api/ml-status         - ML models status")
     print("=" * 60)
