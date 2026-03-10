@@ -8,7 +8,8 @@ import {
   Bookmark, Trash2,
 } from "lucide-react";
 import { cn } from "../lib/utils";
-import MapboxMap, { LOCATIONS, FlyToTarget, RouteToDraw } from "@/components/MapboxMap";
+import MapboxMap, { LOCATIONS, FlyToTarget, RouteToDraw, queryBuildingsFromMap, ClientBuilding } from "@/components/MapboxMap";
+import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -93,23 +94,58 @@ function qualityTag(quality: WindowRec["quality"]): { label: string; color: stri
 async function fetchScheduleFromBackend(
   taskName: string, lat: number, lon: number, locationName: string,
   dateStr: string, durationMinutes: number, startHour: number, endHour: number,
-  buildingFace?: string
+  buildingFace?: string,
+  polygonPoints?: [number, number][],
+  clientBuildings?: ClientBuilding[]
 ): Promise<WindowRec[]> {
   try {
-    const payload: Record<string, unknown> = {
-      task_name: taskName, lat, lon, location_name: locationName,
-      duration_minutes: durationMinutes, date: dateStr,
-      start_hour: startHour, end_hour: endHour,
-      recommendation_count: 5, building_face: buildingFace || undefined,
-    };
-    const res = await fetch(`${API_BASE}/api/v2/shadow-schedule`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let res: Response;
+    const buildingsPayload = clientBuildings?.length
+      ? clientBuildings.map((b) => ({
+          id: b.id,
+          footprint: b.footprint,
+          height: b.height,
+          name: b.name,
+        }))
+      : undefined;
+
+    if (polygonPoints && polygonPoints.length >= 3) {
+      const payload = {
+        task_name: taskName,
+        polygon_points: polygonPoints.map(([lng, lat]) => [lat, lng]),
+        location_name: locationName,
+        task_duration_minutes: durationMinutes,
+        date: dateStr,
+        start_hour: startHour,
+        end_hour: endHour,
+        recommendation_count: 5,
+        buildings: buildingsPayload,
+      };
+      res = await fetch(`${API_BASE}/api/v2/schedule/area`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const payload: Record<string, unknown> = {
+        task_name: taskName, lat, lon, location_name: locationName,
+        duration_minutes: durationMinutes, date: dateStr,
+        start_hour: startHour, end_hour: endHour,
+        recommendation_count: 5, building_face: buildingFace || undefined,
+        buildings: buildingsPayload,
+      };
+      res = await fetch(`${API_BASE}/api/v2/shadow-schedule`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+
     if (!res.ok) throw new Error(`API error ${res.status}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.error || "Schedule failed");
 
+    console.log(
+      `[schedule] mode=${data.mode} buildings=${data.buildings_used} grid=${data.grid_samples} source=${data.building_source}`
+    );
     const rec = data.recommendation || {};
     const best = rec.best_schedule;
     const alternatives = rec.alternatives || [];
@@ -240,6 +276,9 @@ export default function MapPage() {
   };
 
   // Commercial site flow
+  type AnalysisMode = "workzone" | "facade";
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("workzone");
+  const [drawnPolygon, setDrawnPolygon] = useState<[number, number][] | null>(null);
   const [isSitePopupOpen, setIsSitePopupOpen] = useState(false);
   const [isSelectingSite, setIsSelectingSite] = useState(false);
   const [commercialSite, setCommercialSite] = useState<{ lat: number; lng: number } | null>(null);
@@ -251,9 +290,18 @@ export default function MapPage() {
   const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
-  const [buildingFace, setBuildingFace] = useState<string>("");
+  const [buildingFace, setBuildingFace] = useState<string>("N");
   const [hoveredRecId, setHoveredRecId] = useState<string | null>(null);
   const [mapBearing, setMapBearing] = useState<number>(0);
+  const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
+  const [debugShadowInfo, setDebugShadowInfo] = useState<string | null>(null);
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+
+  const getClientBuildings = useCallback((lat: number, lon: number): ClientBuilding[] => {
+    const map = mapInstanceRef.current;
+    if (!map) return [];
+    return queryBuildingsFromMap(map, lon, lat);
+  }, []);
 
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<SavedPlaceItem[]>([]);
@@ -364,7 +412,7 @@ export default function MapPage() {
 
   const handlePointSelected = useCallback(
     (lat: number, lng: number, which: "from" | "to") => {
-      if (mode === "commercial" && isSelectingSite) {
+      if (mode === "commercial" && isSelectingSite && analysisMode === "facade") {
         setCommercialSite({ lat, lng });
         setSiteDraft((prev) => ({ ...prev, locationLabel: `${lat.toFixed(4)}°N, ${lng.toFixed(4)}°E` }));
         setIsSelectingSite(false);
@@ -383,7 +431,7 @@ export default function MapPage() {
       else { setToCoords([lng, lat]); setRouteTo(label); }
       setSelectingPoint(null);
     },
-    [mode, isSelectingSite, flyToCoords, addingPlaceOnMap],
+    [mode, isSelectingSite, analysisMode, flyToCoords, addingPlaceOnMap],
   );
 
   const selectSuggestion = async (s: SearchSuggestion) => {
@@ -564,36 +612,77 @@ export default function MapPage() {
     setIsSitePopupOpen(true);
     setAnalysisConfirmed(false);
     setSiteRecommendations([]);
+    setDrawnPolygon(null);
   };
 
   const submitSiteAnalysis = async () => {
-    if (!commercialSite) {
-      toast.error("Choose a site on the map or search first.");
-      return;
-    }
     if (siteDraft.endHour <= siteDraft.startHour) {
       toast.error("End hour must be after start hour.");
       return;
     }
-    setScheduleLoading(true);
-    setIsSitePopupOpen(false);
-    try {
-      const recs = await fetchScheduleFromBackend(
-        siteDraft.taskName, commercialSite.lat, commercialSite.lng,
-        siteDraft.locationName || siteDraft.locationLabel || "Dubai",
-        dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
-        buildingFace || undefined
-      );
-      setSiteRecommendations(recs);
-      setAnalysisConfirmed(true);
-      if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows.`);
-    } catch {
-      toast.error("Failed to fetch recommendations.");
-      const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
-      setSiteRecommendations(fallback);
-      setAnalysisConfirmed(true);
+
+    if (analysisMode === "workzone") {
+      if (!drawnPolygon || drawnPolygon.length < 3) {
+        toast.error("Draw a work zone polygon on the map first.");
+        return;
+      }
+      const centroidLng = drawnPolygon.reduce((s, p) => s + p[0], 0) / drawnPolygon.length;
+      const centroidLat = drawnPolygon.reduce((s, p) => s + p[1], 0) / drawnPolygon.length;
+      const buildings = getClientBuildings(centroidLat, centroidLng);
+
+      setScheduleLoading(true);
+      setIsSitePopupOpen(false);
+      try {
+        const recs = await fetchScheduleFromBackend(
+          siteDraft.taskName, centroidLat, centroidLng,
+          siteDraft.locationName || siteDraft.locationLabel || "Work Zone",
+          dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
+          undefined,
+          drawnPolygon,
+          buildings
+        );
+        setSiteRecommendations(recs);
+        setAnalysisConfirmed(true);
+        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows (${buildings.length} buildings).`);
+      } catch {
+        toast.error("Failed to fetch recommendations.");
+        const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
+        setSiteRecommendations(fallback);
+        setAnalysisConfirmed(true);
+      }
+      setScheduleLoading(false);
+    } else {
+      if (!commercialSite) {
+        toast.error("Choose a site on the map or search first.");
+        return;
+      }
+      if (!buildingFace) {
+        toast.error("Select a building face (N / E / S / W).");
+        return;
+      }
+      const buildings = getClientBuildings(commercialSite.lat, commercialSite.lng);
+      setScheduleLoading(true);
+      setIsSitePopupOpen(false);
+      try {
+        const recs = await fetchScheduleFromBackend(
+          siteDraft.taskName, commercialSite.lat, commercialSite.lng,
+          siteDraft.locationName || siteDraft.locationLabel || "Dubai",
+          dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
+          buildingFace,
+          undefined,
+          buildings
+        );
+        setSiteRecommendations(recs);
+        setAnalysisConfirmed(true);
+        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows.`);
+      } catch {
+        toast.error("Failed to fetch recommendations.");
+        const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
+        setSiteRecommendations(fallback);
+        setAnalysisConfirmed(true);
+      }
+      setScheduleLoading(false);
     }
-    setScheduleLoading(false);
   };
 
   const saveRecommendation = async (rec: WindowRec) => {
@@ -636,6 +725,54 @@ export default function MapPage() {
     setIsPlaying(false);
   };
 
+  const fetchDebugShadows = async () => {
+    // Prefer selected site; fall back to current map center so we always
+    // query buildings that are actually visible on screen
+    const mapCenter = mapInstanceRef.current?.getCenter();
+    const lat = commercialSite?.lat ?? mapCenter?.lat ?? 25.0805;
+    const lng = commercialSite?.lng ?? mapCenter?.lng ?? 55.1386;
+    const h = Math.floor(currentMinutes / 60);
+    const m = currentMinutes % 60;
+    const timeStr = `${dateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
+    const buildings = getClientBuildings(lat, lng);
+    const sp = calculateSunPosition(dateStr ? new Date(dateStr) : new Date(), h, m);
+    console.log(`[fetchDebugShadows] lat=${lat}, lng=${lng}, buildings=${buildings.length}, sun az=${sp.azimuth.toFixed(1)} alt=${sp.altitude.toFixed(1)}`);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/v2/debug/shadow-polygons`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lat, lon: lng, time: timeStr,
+          sun_azimuth: sp.azimuth,
+          sun_altitude: sp.altitude,
+          buildings: buildings.map((b) => ({
+            id: b.id, footprint: b.footprint, height: b.height, name: b.name,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDebugShadowGeoJSON({
+          shadows: data.shadow_geojson,
+          footprints: data.footprint_geojson,
+        });
+        const hs = data.height_stats || {};
+        const info =
+          `Sun: az ${data.sun.azimuth}° alt ${data.sun.altitude}° | ` +
+          `${data.buildings_found} buildings (h: ${hs.min}–${hs.max}m, avg ${hs.avg}m) | ` +
+          `${data.shadow_polygons_count} shadows | ` +
+          `Shadow len@30m: ${data.sun.shadow_length_30m}m dir ${data.sun.shadow_direction}°`;
+        setDebugShadowInfo(info);
+        toast.success(`${data.shadow_polygons_count} shadow polygons from ${data.buildings_found} buildings`);
+      } else {
+        toast.error(data.error || "Debug fetch failed");
+      }
+    } catch {
+      toast.error("Could not fetch debug shadow polygons");
+    }
+  };
+
   const uv = calculateUV(dateStr ? new Date(dateStr) : new Date(), currentMinutes);
   const uvCat = getUVCategory(uv);
   const period = sunPos ? getTimePeriod(sunPos.altitude, sunPos.azimuth) : "—";
@@ -676,12 +813,22 @@ export default function MapPage() {
         <div className="flex-1 relative min-h-0">
           <MapboxMap currentMinutes={currentMinutes} dateStr={dateStr} flyTo={flyToTarget}
             routeToDraw={routeToDraw} clearRouteKey={clearRouteKey}
-            selectingPoint={mode === "commercial" && isSelectingSite ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
+            selectingPoint={mode === "commercial" && isSelectingSite && analysisMode === "facade" ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
             onPointSelected={handlePointSelected}
             onMapReady={undefined}
             onBearingChange={(b) => setMapBearing(b)}
             fromMarker={mode === "commercial" ? (commercialSite ? [commercialSite.lng, commercialSite.lat] : null) : fromCoords}
             toMarker={mode === "personal" ? toCoords : null}
+            drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && isSelectingSite}
+            onPolygonDrawn={(pts) => {
+              setDrawnPolygon(pts);
+              setIsSelectingSite(false);
+              setSiteDraft((prev) => ({ ...prev, locationLabel: `Polygon (${pts.length - 1} vertices)` }));
+              setIsSitePopupOpen(true);
+            }}
+            drawnPolygon={drawnPolygon}
+            debugShadowGeoJSON={debugShadowGeoJSON}
+            mapInstanceRef={mapInstanceRef}
           />
 
           {/* Floating time card */}
@@ -1043,6 +1190,33 @@ export default function MapPage() {
                 Solstice
               </button>
             </div>
+            <div className="flex gap-1.5 mt-1.5">
+              <button onClick={fetchDebugShadows}
+                className="flex-1 py-1.5 rounded-lg border border-violet-400/40 bg-violet-500/10 text-[10px] font-medium text-violet-600 hover:bg-violet-500/20">
+                Show Computed Shadows
+              </button>
+              {debugShadowGeoJSON && (
+                <button onClick={() => { setDebugShadowGeoJSON(null); setDebugShadowInfo(null); }}
+                  className="py-1.5 px-2 rounded-lg border border-border/60 text-[10px] font-medium hover:bg-muted">
+                  Clear
+                </button>
+              )}
+            </div>
+            {debugShadowInfo && (
+              <div className="mt-1 space-y-0.5">
+                <p className="text-[9px] text-slate-400 leading-tight">{debugShadowInfo}</p>
+                <div className="flex gap-3 text-[9px]">
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{background:"#1e3a5f",opacity:0.6}} />
+                    Shadow (shaded area)
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm border" style={{background:"#f97316",opacity:0.5}} />
+                    Building footprint
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1054,33 +1228,70 @@ export default function MapPage() {
             <div className="px-5 py-4 border-b border-border flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-semibold text-foreground">New Site Analysis</h3>
-                <p className="text-xs text-muted-foreground">Enter task details, pick site, generate schedules.</p>
+                <p className="text-xs text-muted-foreground">Choose a mode, set task details, generate schedules.</p>
               </div>
               <button onClick={() => setIsSitePopupOpen(false)} className="rounded-lg p-1.5 hover:bg-muted"><X className="w-4 h-4" /></button>
             </div>
+
+            {/* Mode tabs */}
+            <div className="flex border-b border-border">
+              <button
+                onClick={() => setAnalysisMode("workzone")}
+                className={cn("flex-1 py-2.5 text-sm font-medium transition-all text-center",
+                  analysisMode === "workzone"
+                    ? "text-primary border-b-2 border-primary bg-primary/5"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}>
+                Work Zone
+              </button>
+              <button
+                onClick={() => setAnalysisMode("facade")}
+                className={cn("flex-1 py-2.5 text-sm font-medium transition-all text-center",
+                  analysisMode === "facade"
+                    ? "text-primary border-b-2 border-primary bg-primary/5"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                )}>
+                Facade
+              </button>
+            </div>
+
             <div className="p-5 space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Task Name</label>
                 <input value={siteDraft.taskName} onChange={(e) => setSiteDraft((p) => ({ ...p, taskName: e.target.value }))}
-                  placeholder="e.g. Facade Work" className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                  placeholder={analysisMode === "workzone" ? "e.g. Road Cleaning" : "e.g. Facade Cleaning"}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
               </div>
+
+              {/* Location - shared between modes */}
               <div>
                 <label className="block text-sm font-medium mb-1">Location</label>
                 <div className="flex gap-2">
-                  <input value={siteDraft.locationLabel} onChange={(e) => setSiteDraft((p) => ({ ...p, locationLabel: e.target.value }))}
-                    placeholder="Coordinates will appear here" className="flex-1 px-3 py-2 rounded-lg border border-border bg-background" readOnly />
+                  <input
+                    value={siteDraft.locationLabel}
+                    readOnly
+                    placeholder={analysisMode === "workzone" ? "Draw a polygon on the map" : "Pick a point on the map"}
+                    className="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-sm" />
                   <button onClick={() => { setIsSelectingSite(true); setIsSitePopupOpen(false); }}
-                    className="px-3 py-2 rounded-lg border border-primary/25 bg-primary/10 text-primary text-sm font-medium">
-                    Pick on map
+                    className="px-3 py-2 rounded-lg border border-primary/25 bg-primary/10 text-primary text-sm font-medium whitespace-nowrap">
+                    {analysisMode === "workzone" ? "Draw on Map" : "Pick on Map"}
                   </button>
                 </div>
+                {analysisMode === "workzone" && drawnPolygon && (
+                  <p className="text-xs text-green-600 mt-1">Polygon drawn ({drawnPolygon.length - 1} vertices)</p>
+                )}
+                {analysisMode === "facade" && commercialSite && (
+                  <p className="text-xs text-green-600 mt-1">{commercialSite.lat.toFixed(4)}°N, {commercialSite.lng.toFixed(4)}°E</p>
+                )}
               </div>
+
               <div>
                 <label className="block text-sm font-medium mb-1">Location Name (optional)</label>
                 <input value={siteDraft.locationName} onChange={(e) => setSiteDraft((p) => ({ ...p, locationName: e.target.value }))}
                   placeholder="e.g. Downtown Tower, Site A"
                   className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
               </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-sm font-medium mb-1">Duration (min)</label>
@@ -1101,19 +1312,24 @@ export default function MapPage() {
                     className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
                 </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Building Face (optional)</label>
-                <div className="flex gap-2">
-                  {["", "N", "E", "S", "W"].map((face) => (
-                    <button key={face || "none"} type="button" onClick={() => setBuildingFace(face)}
-                      className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
-                        buildingFace === face ? "bg-primary text-primary-foreground border-primary" : "border-border bg-background hover:bg-muted")}>
-                      {face || "Any"}
-                    </button>
-                  ))}
+
+              {/* Building Face selector - only in Facade mode */}
+              {analysisMode === "facade" && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Building Face</label>
+                  <div className="flex gap-2">
+                    {(["N", "E", "S", "W"] as const).map((face) => (
+                      <button key={face} type="button" onClick={() => setBuildingFace(face)}
+                        className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
+                          buildingFace === face ? "bg-primary text-primary-foreground border-primary" : "border-border bg-background hover:bg-muted")}>
+                        {face}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+
             <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
               <button onClick={() => setIsSitePopupOpen(false)} className="px-4 py-2 rounded-lg border border-border">Cancel</button>
               <button onClick={submitSiteAnalysis}
