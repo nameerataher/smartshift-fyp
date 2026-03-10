@@ -21,6 +21,7 @@
     "typecheck": "tsc"
   },
   "dependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.1",
     "@types/mapbox-gl": "^3.4.1",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
