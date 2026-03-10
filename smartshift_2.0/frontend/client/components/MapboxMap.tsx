@@ -56,6 +56,7 @@ export interface MapboxMapProps {
   selectingPoint?: "from" | "to" | null;
   onPointSelected?: (lat: number, lng: number, which: "from" | "to") => void;
   onMapReady?: () => void;
+  onBearingChange?: (bearing: number) => void;
   fromMarker?: [number, number] | null;
   toMarker?: [number, number] | null;
 }
@@ -69,6 +70,7 @@ export default function MapboxMap({
   selectingPoint,
   onPointSelected,
   onMapReady,
+  onBearingChange,
   fromMarker,
   toMarker,
 }: MapboxMapProps) {
@@ -79,8 +81,10 @@ export default function MapboxMap({
   // Stable refs for callbacks (avoid stale closures in map event handlers)
   const selectingPointRef = useRef(selectingPoint);
   const onPointSelectedRef = useRef(onPointSelected);
+  const onBearingChangeRef = useRef(onBearingChange);
   useEffect(() => { selectingPointRef.current = selectingPoint; }, [selectingPoint]);
   useEffect(() => { onPointSelectedRef.current = onPointSelected; }, [onPointSelected]);
+  useEffect(() => { onBearingChangeRef.current = onBearingChange; }, [onBearingChange]);
 
   // Markers for route from/to
   const fromMarkerInstanceRef = useRef<mapboxgl.Marker | null>(null);
@@ -157,6 +161,11 @@ export default function MapboxMap({
         mapReadyRef.current = true;
         onMapReady?.();
       }, 800);
+      // Emit initial bearing once map is ready
+      try {
+        const bearing = map.getBearing();
+        onBearingChangeRef.current?.(bearing);
+      } catch {}
     });
 
     map.on("click", (e) => {
@@ -164,6 +173,15 @@ export default function MapboxMap({
       if (!which) return;
       onPointSelectedRef.current?.(e.lngLat.lat, e.lngLat.lng, which);
     });
+
+    // Report bearing changes when the map is rotated
+    const handleRotate = () => {
+      try {
+        const bearing = map.getBearing();
+        onBearingChangeRef.current?.(bearing);
+      } catch {}
+    };
+    map.on("rotate", handleRotate);
 
     map.on("error", (e) => console.error("Map error:", e));
 

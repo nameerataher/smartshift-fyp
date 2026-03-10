@@ -245,7 +245,7 @@ export default function MapPage() {
   const [commercialSite, setCommercialSite] = useState<{ lat: number; lng: number } | null>(null);
   const [savedRecIds, setSavedRecIds] = useState<Set<string>>(new Set());
   const [siteDraft, setSiteDraft] = useState<SiteDraft>({
-    taskName: "Facade Work", locationLabel: "", locationName: "",
+    taskName: "", locationLabel: "", locationName: "",
     durationMinutes: 120, startHour: 5, endHour: 20,
   });
   const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
@@ -253,6 +253,7 @@ export default function MapPage() {
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [buildingFace, setBuildingFace] = useState<string>("");
   const [hoveredRecId, setHoveredRecId] = useState<string | null>(null);
+  const [mapBearing, setMapBearing] = useState<number>(0);
 
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<SavedPlaceItem[]>([]);
@@ -640,12 +641,6 @@ export default function MapPage() {
   const period = sunPos ? getTimePeriod(sunPos.altitude, sunPos.azimuth) : "—";
   const timeOptions = Array.from({ length: 49 }, (_, i) => i * 30);
 
-  const defaultPlaces = [
-    { key: "marina", label: "Marina" },
-    { key: "downtown", label: "Downtown" },
-    { key: "frame", label: "Dubai Frame" },
-  ];
-
   return (
     <div className="flex flex-col h-screen bg-background">
       <header className="border-b border-border bg-card sticky top-0 z-50 shadow-sm shrink-0">
@@ -683,6 +678,8 @@ export default function MapPage() {
             routeToDraw={routeToDraw} clearRouteKey={clearRouteKey}
             selectingPoint={mode === "commercial" && isSelectingSite ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
             onPointSelected={handlePointSelected}
+            onMapReady={undefined}
+            onBearingChange={(b) => setMapBearing(b)}
             fromMarker={mode === "commercial" ? (commercialSite ? [commercialSite.lng, commercialSite.lat] : null) : fromCoords}
             toMarker={mode === "personal" ? toCoords : null}
           />
@@ -716,6 +713,35 @@ export default function MapPage() {
               <span className="text-[10px] text-muted-foreground">Speed</span>
               <input type="range" min={100} max={2000} step={100} value={2100 - animSpeed} onChange={(e) => setAnimSpeed(2100 - Number(e.target.value))} className="flex-1 accent-primary h-1.5" />
               <span className="text-[10px] text-muted-foreground font-mono">{(1000 / animSpeed).toFixed(1)}x</span>
+            </div>
+          </div>
+
+          {/* Floating compass for building orientation */}
+          <div className="absolute top-4 right-4 z-20 flex flex-col items-center gap-1">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+              Facade Compass
+            </div>
+            <div className="relative w-16 h-16 rounded-full border border-border/70 bg-background/70 backdrop-blur-xl shadow-lg flex items-center justify-center">
+              <span className="absolute top-1.5 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-foreground">
+                N
+              </span>
+              <span className="absolute bottom-1.5 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-muted-foreground">
+                S
+              </span>
+              <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-muted-foreground">
+                W
+              </span>
+              <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-muted-foreground">
+                E
+              </span>
+              {/* Compass needle (rotates with map bearing) */}
+              <div
+                className="relative flex items-center justify-center"
+                style={{ transform: `rotate(${-mapBearing}deg)`, transition: "transform 150ms ease-out" }}
+              >
+                <div className="w-1 h-6 bg-gradient-to-b from-red-500 to-red-700 rounded-full shadow-sm -mt-3" />
+                <div className="absolute w-1.5 h-1.5 rounded-full bg-background border border-red-700" />
+              </div>
             </div>
           </div>
         </div>
@@ -765,12 +791,6 @@ export default function MapPage() {
                     <X className="w-2.5 h-2.5 text-red-500" />
                   </button>
                 </div>
-              ))}
-              {defaultPlaces.map(({ key, label }) => (
-                <button key={key} onClick={() => flyTo(key)}
-                  className="flex items-center gap-1 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-xs font-medium hover:bg-primary/10 hover:border-primary/30">
-                  {label}
-                </button>
               ))}
             </div>
           </div>
@@ -1042,7 +1062,7 @@ export default function MapPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Task Name</label>
                 <input value={siteDraft.taskName} onChange={(e) => setSiteDraft((p) => ({ ...p, taskName: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                  placeholder="e.g. Facade Work" className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Location</label>
@@ -1058,7 +1078,7 @@ export default function MapPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Location Name (optional)</label>
                 <input value={siteDraft.locationName} onChange={(e) => setSiteDraft((p) => ({ ...p, locationName: e.target.value }))}
-                  placeholder="e.g. Downtown Tower, Marina Mall"
+                  placeholder="e.g. Downtown Tower, Site A"
                   className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
               </div>
               <div className="grid grid-cols-3 gap-3">
