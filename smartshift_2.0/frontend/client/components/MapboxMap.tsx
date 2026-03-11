@@ -50,6 +50,111 @@ export interface RouteToDraw {
   key: number; // increment to trigger
 }
 
+export interface SelectedBuilding {
+  footprint: [number, number][];
+  height: number;
+  name: string;
+  faces: BuildingFace[];
+}
+
+export interface BuildingFace {
+  direction: "N" | "E" | "S" | "W";
+  edges: [number, number][][];
+  bearing: number;
+}
+
+/**
+ * Classify a building footprint's edges into N/S/E/W faces.
+ *
+ * For each edge we compute the outward-pointing normal. The normal's
+ * compass bearing determines the cardinal direction:
+ *   N: 315°–45°   E: 45°–135°   S: 135°–225°   W: 225°–315°
+ *
+ * We assume the footprint ring is wound counter-clockwise (standard
+ * GeoJSON). For a CW ring the normals would flip, so we check and
+ * reverse if needed.
+ */
+export function classifyFaces(footprint: [number, number][]): BuildingFace[] {
+  const pts = footprint.length > 3 &&
+    footprint[0][0] === footprint[footprint.length - 1][0] &&
+    footprint[0][1] === footprint[footprint.length - 1][1]
+    ? footprint.slice(0, -1)
+    : [...footprint];
+
+  // Ensure CCW winding (positive signed area = CCW in lon/lat space)
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    area += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1]);
+  }
+  if (area > 0) pts.reverse(); // was CW, flip to CCW
+
+  const buckets: Record<"N" | "E" | "S" | "W", { edges: [number, number][][]; bearings: number[] }> = {
+    N: { edges: [], bearings: [] },
+    E: { edges: [], bearings: [] },
+    S: { edges: [], bearings: [] },
+    W: { edges: [], bearings: [] },
+  };
+
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    const dx = b[0] - a[0]; // delta lon
+    const dy = b[1] - a[1]; // delta lat
+    // Outward normal for CCW winding: rotate edge vector 90° CW → (dy, -dx)
+    const nx = dy;
+    const ny = -dx;
+    // Bearing of normal: atan2(east, north) in degrees
+    let bearing = (Math.atan2(nx, ny) * 180) / Math.PI;
+    if (bearing < 0) bearing += 360;
+
+    let dir: "N" | "E" | "S" | "W";
+    if (bearing >= 315 || bearing < 45) dir = "N";
+    else if (bearing >= 45 && bearing < 135) dir = "E";
+    else if (bearing >= 135 && bearing < 225) dir = "S";
+    else dir = "W";
+
+    buckets[dir].edges.push([a, b]);
+    buckets[dir].bearings.push(bearing);
+  }
+
+  return (["N", "E", "S", "W"] as const)
+    .filter((d) => buckets[d].edges.length > 0)
+    .map((d) => ({
+      direction: d,
+      edges: buckets[d].edges,
+      bearing: buckets[d].bearings.reduce((s, v) => s + v, 0) / buckets[d].bearings.length,
+    }));
+}
+
+/** Find which face a click point is closest to. */
+export function closestFace(
+  click: [number, number],
+  faces: BuildingFace[]
+): BuildingFace | null {
+  let best: BuildingFace | null = null;
+  let bestDist = Infinity;
+  for (const face of faces) {
+    for (const [a, b] of face.edges) {
+      const d = pointToSegmentDist(click, a, b);
+      if (d < bestDist) {
+        bestDist = d;
+        best = face;
+      }
+    }
+  }
+  return best;
+}
+
+function pointToSegmentDist(p: [number, number], a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+
 export interface MapboxMapProps {
   currentMinutes: number;
   dateStr: string;
@@ -67,6 +172,12 @@ export interface MapboxMapProps {
   drawnPolygon?: [number, number][] | null;
   debugShadowGeoJSON?: any | null;
   mapInstanceRef?: React.MutableRefObject<mapboxgl.Map | null>;
+  // Facade mode
+  facadeSelectMode?: boolean;
+  onBuildingSelected?: (building: SelectedBuilding) => void;
+  onFaceClicked?: (face: BuildingFace) => void;
+  selectedBuildingFootprint?: [number, number][] | null;
+  selectedFaceDirection?: "N" | "E" | "S" | "W" | null;
 }
 
 export interface ClientBuilding {
@@ -202,6 +313,11 @@ export default function MapboxMap({
   drawnPolygon,
   debugShadowGeoJSON,
   mapInstanceRef,
+  facadeSelectMode,
+  onBuildingSelected,
+  onFaceClicked,
+  selectedBuildingFootprint,
+  selectedFaceDirection,
 }: MapboxMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -213,10 +329,18 @@ export default function MapboxMap({
   const onPointSelectedRef = useRef(onPointSelected);
   const onBearingChangeRef = useRef(onBearingChange);
   const onPolygonDrawnRef = useRef(onPolygonDrawn);
+  const facadeSelectModeRef = useRef(facadeSelectMode);
+  const onBuildingSelectedRef = useRef(onBuildingSelected);
+  const onFaceClickedRef = useRef(onFaceClicked);
+  const selectedBuildingRef = useRef(selectedBuildingFootprint);
   useEffect(() => { selectingPointRef.current = selectingPoint; }, [selectingPoint]);
   useEffect(() => { onPointSelectedRef.current = onPointSelected; }, [onPointSelected]);
   useEffect(() => { onBearingChangeRef.current = onBearingChange; }, [onBearingChange]);
   useEffect(() => { onPolygonDrawnRef.current = onPolygonDrawn; }, [onPolygonDrawn]);
+  useEffect(() => { facadeSelectModeRef.current = facadeSelectMode; }, [facadeSelectMode]);
+  useEffect(() => { onBuildingSelectedRef.current = onBuildingSelected; }, [onBuildingSelected]);
+  useEffect(() => { onFaceClickedRef.current = onFaceClicked; }, [onFaceClicked]);
+  useEffect(() => { selectedBuildingRef.current = selectedBuildingFootprint; }, [selectedBuildingFootprint]);
 
   // Markers for route from/to
   const fromMarkerInstanceRef = useRef<mapboxgl.Marker | null>(null);
@@ -302,9 +426,106 @@ export default function MapboxMap({
     });
 
     map.on("click", (e) => {
+      // Facade mode: building/face click
+      if (facadeSelectModeRef.current) {
+        const features = map.queryRenderedFeatures(e.point).filter(isBuilding);
+        if (features.length > 0 && !selectedBuildingRef.current) {
+          // First click: select the building
+          const f = features[0];
+          const geom = f.geometry;
+          if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+            const coords: [number, number][] =
+              geom.type === "Polygon"
+                ? (geom.coordinates[0] as [number, number][])
+                : (geom.coordinates[0][0] as [number, number][]);
+            const h = extractHeight(f.properties || {});
+            const faces = classifyFaces(coords);
+            onBuildingSelectedRef.current?.({
+              footprint: coords,
+              height: h > 0 ? h : 30,
+              name: (f.properties as any)?.type || "building",
+              faces,
+            });
+          }
+        } else if (selectedBuildingRef.current) {
+          // Second click: select the face
+          const clickPt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+          const faces = classifyFaces(selectedBuildingRef.current);
+          const face = closestFace(clickPt, faces);
+          if (face) onFaceClickedRef.current?.(face);
+        }
+        return;
+      }
+
       const which = selectingPointRef.current;
       if (!which) return;
       onPointSelectedRef.current?.(e.lngLat.lat, e.lngLat.lng, which);
+    });
+
+    // Facade mode: hover highlight
+    map.on("mousemove", (e) => {
+      if (!facadeSelectModeRef.current) return;
+      const hoverSrc = "facade-hover-src";
+      const hoverFill = "facade-hover-fill";
+      const hoverLine = "facade-hover-line";
+
+      if (selectedBuildingRef.current) {
+        // Building already selected — highlight nearest face edge on hover
+        try { if (map.getLayer(hoverFill)) map.removeLayer(hoverFill); } catch {}
+        try { if (map.getLayer(hoverLine)) map.removeLayer(hoverLine); } catch {}
+        try { if (map.getSource(hoverSrc)) map.removeSource(hoverSrc); } catch {}
+
+        const clickPt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+        const faces = classifyFaces(selectedBuildingRef.current);
+        const face = closestFace(clickPt, faces);
+        if (face) {
+          const lineFeatures = face.edges.map((edge) => ({
+            type: "Feature" as const,
+            properties: { dir: face.direction },
+            geometry: { type: "LineString" as const, coordinates: edge },
+          }));
+          map.addSource(hoverSrc, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: lineFeatures },
+          });
+          map.addLayer({
+            id: hoverLine, type: "line", source: hoverSrc, slot: "top",
+            paint: { "line-color": "#facc15", "line-width": 5, "line-opacity": 0.9 },
+          } as any);
+          map.getCanvas().style.cursor = "pointer";
+        }
+        return;
+      }
+
+      // No building selected yet — highlight building under cursor
+      const features = map.queryRenderedFeatures(e.point).filter(isBuilding);
+      try { if (map.getLayer(hoverFill)) map.removeLayer(hoverFill); } catch {}
+      try { if (map.getLayer(hoverLine)) map.removeLayer(hoverLine); } catch {}
+      try { if (map.getSource(hoverSrc)) map.removeSource(hoverSrc); } catch {}
+
+      if (features.length > 0) {
+        const f = features[0];
+        const geom = f.geometry;
+        if (geom.type === "Polygon" || geom.type === "MultiPolygon") {
+          const coords =
+            geom.type === "Polygon" ? geom.coordinates : geom.coordinates[0];
+          map.addSource(hoverSrc, {
+            type: "geojson",
+            data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: coords } },
+          });
+          map.addLayer({
+            id: hoverFill, type: "fill", source: hoverSrc, slot: "top",
+            paint: { "fill-color": "#3b82f6", "fill-opacity": 0.25 },
+          } as any);
+          map.addLayer({
+            id: hoverLine, type: "line", source: hoverSrc, slot: "top",
+            paint: { "line-color": "#3b82f6", "line-width": 2.5 },
+          } as any);
+          map.getCanvas().style.cursor = "pointer";
+        }
+      } else {
+        map.getCanvas().style.cursor = facadeSelectModeRef.current ? "crosshair" : "";
+      }
     });
 
     // Report bearing changes when the map is rotated
@@ -542,6 +763,86 @@ export default function MapboxMap({
       } as any);
     }
   }, [debugShadowGeoJSON]);
+
+  // ── Facade: selected building + face edges overlay ──────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+
+    const FACE_COLORS: Record<string, string> = {
+      N: "#3b82f6", E: "#22c55e", S: "#ef4444", W: "#f59e0b",
+    };
+    const layers = ["facade-bldg-fill", "facade-bldg-line", "facade-face-N", "facade-face-E", "facade-face-S", "facade-face-W", "facade-sel-line"];
+    const sources = ["facade-bldg-src", "facade-faces-N", "facade-faces-E", "facade-faces-S", "facade-faces-W", "facade-sel-src"];
+    for (const l of layers) { try { if (map.getLayer(l)) map.removeLayer(l); } catch {} }
+    for (const s of sources) { try { if (map.getSource(s)) map.removeSource(s); } catch {} }
+
+    if (!selectedBuildingFootprint || selectedBuildingFootprint.length < 3) return;
+
+    // Building footprint fill
+    const ring = [...selectedBuildingFootprint];
+    if (ring[0][0] !== ring[ring.length - 1][0] || ring[0][1] !== ring[ring.length - 1][1]) ring.push(ring[0]);
+    map.addSource("facade-bldg-src", {
+      type: "geojson",
+      data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [ring] } },
+    });
+    map.addLayer({
+      id: "facade-bldg-fill", type: "fill", source: "facade-bldg-src", slot: "top",
+      paint: { "fill-color": "#6366f1", "fill-opacity": 0.15 },
+    } as any);
+    map.addLayer({
+      id: "facade-bldg-line", type: "line", source: "facade-bldg-src", slot: "top",
+      paint: { "line-color": "#6366f1", "line-width": 2, "line-dasharray": [2, 2] },
+    } as any);
+
+    // Colored edges per face direction
+    const faces = classifyFaces(selectedBuildingFootprint);
+    for (const face of faces) {
+      const srcId = `facade-faces-${face.direction}`;
+      const layerId = `facade-face-${face.direction}`;
+      const lineFeatures = face.edges.map((edge) => ({
+        type: "Feature" as const,
+        properties: {},
+        geometry: { type: "LineString" as const, coordinates: edge },
+      }));
+      map.addSource(srcId, { type: "geojson", data: { type: "FeatureCollection", features: lineFeatures } });
+      const isSelected = selectedFaceDirection === face.direction;
+      map.addLayer({
+        id: layerId, type: "line", source: srcId, slot: "top",
+        paint: {
+          "line-color": FACE_COLORS[face.direction] || "#888",
+          "line-width": isSelected ? 6 : 3.5,
+          "line-opacity": isSelected ? 1 : 0.7,
+        },
+      } as any);
+    }
+
+    // Extra-highlight the selected face
+    if (selectedFaceDirection) {
+      const selFace = faces.find((f) => f.direction === selectedFaceDirection);
+      if (selFace) {
+        const lineFeatures = selFace.edges.map((edge) => ({
+          type: "Feature" as const,
+          properties: {},
+          geometry: { type: "LineString" as const, coordinates: edge },
+        }));
+        map.addSource("facade-sel-src", { type: "geojson", data: { type: "FeatureCollection", features: lineFeatures } });
+        map.addLayer({
+          id: "facade-sel-line", type: "line", source: "facade-sel-src", slot: "top",
+          paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.4 },
+        } as any);
+      }
+    }
+  }, [selectedBuildingFootprint, selectedFaceDirection]);
+
+  // ── Facade: cursor style ────────────────────────────────────────────────
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (facadeSelectMode) {
+      map.getCanvas().style.cursor = "crosshair";
+    }
+  }, [facadeSelectMode]);
 
   return (
     <div style={{ position: "absolute", inset: 0 }}>

@@ -8,7 +8,10 @@ import {
   Bookmark, Trash2,
 } from "lucide-react";
 import { cn } from "../lib/utils";
-import MapboxMap, { LOCATIONS, FlyToTarget, RouteToDraw, queryBuildingsFromMap, ClientBuilding } from "@/components/MapboxMap";
+import MapboxMap, {
+  LOCATIONS, FlyToTarget, RouteToDraw, queryBuildingsFromMap, ClientBuilding,
+  SelectedBuilding, BuildingFace as MapBuildingFace, classifyFaces, closestFace,
+} from "@/components/MapboxMap";
 import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
@@ -291,6 +294,7 @@ export default function MapPage() {
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [buildingFace, setBuildingFace] = useState<string>("N");
+  const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [hoveredRecId, setHoveredRecId] = useState<string | null>(null);
   const [mapBearing, setMapBearing] = useState<number>(0);
   const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
@@ -652,20 +656,35 @@ export default function MapPage() {
       }
       setScheduleLoading(false);
     } else {
-      if (!commercialSite) {
-        toast.error("Choose a site on the map or search first.");
+      if (!commercialSite && !selectedBuilding) {
+        toast.error("Select a building on the map first.");
         return;
       }
       if (!buildingFace) {
         toast.error("Select a building face (N / E / S / W).");
         return;
       }
-      const buildings = getClientBuildings(commercialSite.lat, commercialSite.lng);
+      const lat = commercialSite?.lat ?? 25.2048;
+      const lng = commercialSite?.lng ?? 55.2708;
+      const buildings = getClientBuildings(lat, lng);
+      // Include the selected building itself if not already in the query results
+      if (selectedBuilding) {
+        const selBldg: ClientBuilding = {
+          id: "selected_facade_bldg",
+          footprint: selectedBuilding.footprint,
+          height: selectedBuilding.height,
+          min_height: 0,
+          name: selectedBuilding.name,
+        };
+        if (!buildings.some((b) => b.height === selBldg.height && b.footprint.length === selBldg.footprint.length)) {
+          buildings.unshift(selBldg);
+        }
+      }
       setScheduleLoading(true);
       setIsSitePopupOpen(false);
       try {
         const recs = await fetchScheduleFromBackend(
-          siteDraft.taskName, commercialSite.lat, commercialSite.lng,
+          siteDraft.taskName, lat, lng,
           siteDraft.locationName || siteDraft.locationLabel || "Dubai",
           dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
           buildingFace,
@@ -674,7 +693,7 @@ export default function MapPage() {
         );
         setSiteRecommendations(recs);
         setAnalysisConfirmed(true);
-        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows.`);
+        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows (${buildings.length} buildings).`);
       } catch {
         toast.error("Failed to fetch recommendations.");
         const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
@@ -813,11 +832,11 @@ export default function MapPage() {
         <div className="flex-1 relative min-h-0">
           <MapboxMap currentMinutes={currentMinutes} dateStr={dateStr} flyTo={flyToTarget}
             routeToDraw={routeToDraw} clearRouteKey={clearRouteKey}
-            selectingPoint={mode === "commercial" && isSelectingSite && analysisMode === "facade" ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
+            selectingPoint={mode === "commercial" && isSelectingSite && analysisMode !== "facade" ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
             onPointSelected={handlePointSelected}
             onMapReady={undefined}
             onBearingChange={(b) => setMapBearing(b)}
-            fromMarker={mode === "commercial" ? (commercialSite ? [commercialSite.lng, commercialSite.lat] : null) : fromCoords}
+            fromMarker={mode === "commercial" && !selectedBuilding ? (commercialSite ? [commercialSite.lng, commercialSite.lat] : null) : mode === "personal" ? fromCoords : null}
             toMarker={mode === "personal" ? toCoords : null}
             drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && isSelectingSite}
             onPolygonDrawn={(pts) => {
@@ -829,6 +848,27 @@ export default function MapPage() {
             drawnPolygon={drawnPolygon}
             debugShadowGeoJSON={debugShadowGeoJSON}
             mapInstanceRef={mapInstanceRef}
+            facadeSelectMode={mode === "commercial" && analysisMode === "facade" && isSelectingSite}
+            onBuildingSelected={(bldg) => {
+              setSelectedBuilding(bldg);
+              const fp = bldg.footprint;
+              const cLng = fp.reduce((s, p) => s + p[0], 0) / fp.length;
+              const cLat = fp.reduce((s, p) => s + p[1], 0) / fp.length;
+              setCommercialSite({ lat: cLat, lng: cLng });
+              setSiteDraft((prev) => ({
+                ...prev,
+                locationLabel: `${bldg.name} (${bldg.height.toFixed(0)}m)`,
+              }));
+              toast.success(`Building selected: ${bldg.height.toFixed(0)}m, ${bldg.faces.length} faces. Click a face edge to select it.`);
+            }}
+            onFaceClicked={(face) => {
+              setBuildingFace(face.direction);
+              setIsSelectingSite(false);
+              setIsSitePopupOpen(true);
+              toast.success(`${face.direction} face selected (bearing ${face.bearing.toFixed(0)}°)`);
+            }}
+            selectedBuildingFootprint={selectedBuilding?.footprint ?? null}
+            selectedFaceDirection={analysisMode === "facade" ? buildingFace as "N" | "E" | "S" | "W" : null}
           />
 
           {/* Floating time card */}
@@ -1270,18 +1310,24 @@ export default function MapPage() {
                   <input
                     value={siteDraft.locationLabel}
                     readOnly
-                    placeholder={analysisMode === "workzone" ? "Draw a polygon on the map" : "Pick a point on the map"}
+                    placeholder={analysisMode === "workzone" ? "Draw a polygon on the map" : "Click a building on the map"}
                     className="flex-1 px-3 py-2 rounded-lg border border-border bg-background text-sm" />
-                  <button onClick={() => { setIsSelectingSite(true); setIsSitePopupOpen(false); }}
+                  <button onClick={() => {
+                    setIsSelectingSite(true);
+                    setIsSitePopupOpen(false);
+                    if (analysisMode === "facade") { setSelectedBuilding(null); setBuildingFace("N"); }
+                  }}
                     className="px-3 py-2 rounded-lg border border-primary/25 bg-primary/10 text-primary text-sm font-medium whitespace-nowrap">
-                    {analysisMode === "workzone" ? "Draw on Map" : "Pick on Map"}
+                    {analysisMode === "workzone" ? "Draw on Map" : "Select Building"}
                   </button>
                 </div>
                 {analysisMode === "workzone" && drawnPolygon && (
                   <p className="text-xs text-green-600 mt-1">Polygon drawn ({drawnPolygon.length - 1} vertices)</p>
                 )}
-                {analysisMode === "facade" && commercialSite && (
-                  <p className="text-xs text-green-600 mt-1">{commercialSite.lat.toFixed(4)}°N, {commercialSite.lng.toFixed(4)}°E</p>
+                {analysisMode === "facade" && selectedBuilding && (
+                  <p className="text-xs text-green-600 mt-1">
+                    Building: {selectedBuilding.height.toFixed(0)}m — Face: {buildingFace} ({selectedBuilding.faces.length} faces)
+                  </p>
                 )}
               </div>
 
@@ -1315,16 +1361,44 @@ export default function MapPage() {
 
               {/* Building Face selector - only in Facade mode */}
               {analysisMode === "facade" && (
-                <div>
-                  <label className="block text-sm font-medium mb-1">Building Face</label>
-                  <div className="flex gap-2">
-                    {(["N", "E", "S", "W"] as const).map((face) => (
-                      <button key={face} type="button" onClick={() => setBuildingFace(face)}
-                        className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
-                          buildingFace === face ? "bg-primary text-primary-foreground border-primary" : "border-border bg-background hover:bg-muted")}>
-                        {face}
-                      </button>
-                    ))}
+                <div className="space-y-2">
+                  {selectedBuilding && (
+                    <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
+                            {selectedBuilding.name} — {selectedBuilding.height.toFixed(0)}m
+                          </p>
+                          <p className="text-xs text-indigo-500">
+                            {selectedBuilding.faces.length} faces detected. Click a face on the map or select below.
+                          </p>
+                        </div>
+                        <button onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); }}
+                          className="text-indigo-400 hover:text-indigo-600 p-1"><X className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Building Face</label>
+                    <div className="flex gap-2">
+                      {(["N", "E", "S", "W"] as const).map((face) => {
+                        const colors: Record<string, string> = {
+                          N: "bg-blue-500 border-blue-500 text-white",
+                          E: "bg-green-500 border-green-500 text-white",
+                          S: "bg-red-500 border-red-500 text-white",
+                          W: "bg-amber-500 border-amber-500 text-white",
+                        };
+                        const labels: Record<string, string> = { N: "North", E: "East", S: "South", W: "West" };
+                        return (
+                          <button key={face} type="button" onClick={() => setBuildingFace(face)}
+                            className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
+                              buildingFace === face ? colors[face] : "border-border bg-background hover:bg-muted")}>
+                            <span className="block text-xs">{labels[face]}</span>
+                            <span className="block font-bold">{face}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}

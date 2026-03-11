@@ -195,6 +195,12 @@ class ShadowScheduler:
         """
         buildings = client_buildings if client_buildings else self._fetch_nearby_buildings(lat, lon)
 
+        print(f"[schedule] mode={'facade' if building_face else 'point'} "
+              f"face={building_face} buildings={len(buildings)} "
+              f"source={'client' if client_buildings else 'tilequery'}")
+        for i, b in enumerate(buildings[:10]):
+            print(f"  bldg[{i}] id={b.id} h={b.height:.0f}m pts={len(b.footprint)}")
+
         slots = self._generate_time_slots(
             date, start_hour, end_hour, task_duration_minutes,
             lat, lon, buildings, building_face
@@ -515,13 +521,13 @@ class ShadowScheduler:
         building_face: Optional[str] = None
     ) -> Tuple[float, float, float]:
         """
-        Calculate average shadow coverage for a time slot using 3D projection.
+        Calculate average shadow coverage for a time slot.
 
-        Samples every 5 minutes within the slot. At each sample:
-        - If nighttime → counted as "in shadow"
-        - If a building face is specified and the sun is behind it → self-shaded
-        - Otherwise, project shadow polygons from all nearby buildings and
-          ray-cast to check whether (lat, lon) is inside any of them
+        For AREA/POINT mode: uses ground-plane shadow polygons and PIP tests.
+        For FACADE mode: uses 3D elevation-aware analysis:
+          1. Self-shading: sun behind the face => fully shaded
+          2. External shading: a nearby building tall enough and positioned
+             in the sun's direction blocks sunlight at face elevation
 
         Returns: (shadow_percentage 0-100, avg_sun_altitude, avg_sun_azimuth)
         """
@@ -529,6 +535,24 @@ class ShadowScheduler:
         total_samples = 0
         altitudes: List[float] = []
         azimuths: List[float] = []
+
+        # For facade mode: find the selected building's height
+        facade_height = 0.0
+        face_enum = None
+        if building_face:
+            face_enum = BuildingFace.from_string(building_face)
+            for b in buildings:
+                bc_lon = sum(p[0] for p in b.footprint) / len(b.footprint)
+                bc_lat = sum(p[1] for p in b.footprint) / len(b.footprint)
+                if abs(bc_lat - lat) < 0.0005 and abs(bc_lon - lon) < 0.0005:
+                    facade_height = b.height
+                    break
+            if facade_height == 0:
+                facade_height = 30.0
+
+        self_shaded = 0
+        ext_blocked = 0
+        sun_hit = 0
 
         current = start
         while current <= end:
@@ -542,19 +566,32 @@ class ShadowScheduler:
                 current += timedelta(minutes=5)
                 continue
 
-            # Building-face self-shading: sun behind the face → 100 % shaded
-            if building_face:
-                face_enum = BuildingFace.from_string(building_face)
-                if face_enum:
-                    angle_diff = abs(((sun.azimuth - face_enum.azimuth + 180) % 360) - 180)
-                    if angle_diff > 90:
-                        in_shadow_count += 1
-                        current += timedelta(minutes=5)
-                        continue
+            if building_face and face_enum:
+                # ── Facade mode ──
+                # Step 2: compare sun azimuth with face direction
+                # |sun_azimuth - facade_direction| < 90 => sun hits facade
+                angle_diff = abs(((sun.azimuth - face_enum.azimuth + 180) % 360) - 180)
 
-            # 3D shadow ray-cast against nearby buildings
-            if self._is_point_in_any_shadow(lat, lon, buildings, sun):
-                in_shadow_count += 1
+                if angle_diff >= 90:
+                    # Sun is behind the building => face is self-shaded
+                    in_shadow_count += 1
+                    self_shaded += 1
+                else:
+                    # Sun hits this face. Step 3: check if a nearby
+                    # building blocks the sun at the facade mid-height.
+                    do_verbose = (total_samples <= 2)
+                    if self._is_face_blocked(
+                        lat, lon, facade_height, buildings, sun,
+                        verbose=do_verbose,
+                    ):
+                        in_shadow_count += 1
+                        ext_blocked += 1
+                    else:
+                        sun_hit += 1
+            else:
+                # ── Area / point mode: ground-plane shadow PIP ──
+                if self._is_point_in_any_shadow(lat, lon, buildings, sun):
+                    in_shadow_count += 1
 
             current += timedelta(minutes=5)
 
@@ -562,7 +599,69 @@ class ShadowScheduler:
         avg_alt = sum(altitudes) / len(altitudes) if altitudes else 0
         avg_az = sum(azimuths) / len(azimuths) if azimuths else 0
 
+        if building_face and total_samples > 0:
+            print(
+                f"  [{start.strftime('%H:%M')}-{end.strftime('%H:%M')}] "
+                f"face={building_face}({face_enum.azimuth if face_enum else '?'}deg) "
+                f"h={facade_height:.0f}m midpt={facade_height/2:.0f}m | "
+                f"self-shaded={self_shaded} ext-blocked={ext_blocked} "
+                f"sun-hit={sun_hit} night={total_samples - self_shaded - ext_blocked - sun_hit} "
+                f"/ {total_samples} -> shadow={shadow_pct:.0f}% "
+                f"| sun az={avg_az:.0f} alt={avg_alt:.0f}"
+            )
+
         return shadow_pct, avg_alt, avg_az
+
+    def _is_face_blocked(
+        self,
+        face_lat: float,
+        face_lon: float,
+        face_building_height: float,
+        buildings: List[Building],
+        sun: SunPosition,
+        verbose: bool = False,
+    ) -> bool:
+        """
+        3D check: can any nearby building block the sun from reaching
+        the face at its mid-height?
+
+        From the face midpoint (at half building height), we look toward
+        the sun. If a neighboring building's top rises above the sun's
+        elevation angle as seen from the face midpoint, it blocks the sun.
+        """
+        view_height = face_building_height / 2
+        cos_lat = math.cos(math.radians(face_lat))
+
+        for b in buildings:
+            bc_lon = sum(p[0] for p in b.footprint) / len(b.footprint)
+            bc_lat = sum(p[1] for p in b.footprint) / len(b.footprint)
+
+            dx = (bc_lon - face_lon) * 111320 * cos_lat
+            dy = (bc_lat - face_lat) * 111320
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist < 5:
+                continue
+
+            bearing = math.degrees(math.atan2(dx, dy)) % 360
+            angle_to_sun = abs(((bearing - sun.azimuth + 180) % 360) - 180)
+            if angle_to_sun > 30:
+                continue
+
+            height_diff = b.height - view_height
+            if height_diff <= 0:
+                continue
+
+            apparent_elev = math.degrees(math.atan2(height_diff, dist))
+            if apparent_elev > sun.altitude:
+                if verbose:
+                    print(
+                        f"    BLOCKED by {b.id} ({b.height:.0f}m) "
+                        f"dist={dist:.0f}m bearing={bearing:.0f}deg "
+                        f"apparent_elev={apparent_elev:.1f}deg > sun_alt={sun.altitude:.1f}deg"
+                    )
+                return True
+
+        return False
 
     def _is_point_in_any_shadow(
         self,
@@ -651,7 +750,7 @@ class ShadowScheduler:
             )
             return (
                 f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
-                f"{shadow}% shadow coverage ({source}, sun altitude {alt}°)."
+                f"{shadow}% shadow coverage ({source}, sun altitude {alt}deg)."
             )
 
         if shadow >= 80:
