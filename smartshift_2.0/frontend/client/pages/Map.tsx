@@ -43,6 +43,7 @@ interface RouteResult {
   label?: string;
   durationSeconds?: number;
   departureTime?: string;
+  departureLabel?: string;
 }
 
 interface SearchSuggestion {
@@ -374,6 +375,7 @@ export default function MapPage() {
   const [selectingPoint, setSelectingPoint] = useState<"from" | "to" | null>(null);
   const [routeUpdateInterval, setRouteUpdateInterval] = useState<number>(120);
   const [routeNavigating, setRouteNavigating] = useState(false);
+  const [routeDepartureMode, setRouteDepartureMode] = useState<"now" | "selected">("now");
   const [routeShadowStatus, setRouteShadowStatus] = useState<{
     inShadow: boolean; remainingShadePct: number; rerouteSuggested: boolean; progressPct: number;
   } | null>(null);
@@ -484,6 +486,23 @@ export default function MapPage() {
     });
   };
 
+  const getRouteDepartureSelection = () => {
+    if (routeDepartureMode === "now") {
+      const now = getDubaiNow();
+      return {
+        date: now.dateStr,
+        minutes: now.minutes,
+        label: `Now · ${now.dateStr} ${formatTime(now.minutes)}`,
+      };
+    }
+
+    return {
+      date: dateStr || initDate,
+      minutes: currentMinutes,
+      label: `${dateStr || initDate} · ${formatTime(currentMinutes)}`,
+    };
+  };
+
   const clearRoute = () => {
     setFromCoords(null); setToCoords(null);
     setRouteFrom(""); setRouteTo("");
@@ -511,7 +530,7 @@ export default function MapPage() {
     setRouteNavigating(false);
     setRouteShadowStatus(null);
     try {
-      const curDate = dateStr || new Date().toISOString().split("T")[0];
+      const departureSelection = getRouteDepartureSelection();
 
       const midLat = (fromCoords[1] + toCoords[1]) / 2;
       const midLon = (fromCoords[0] + toCoords[0]) / 2;
@@ -536,8 +555,8 @@ export default function MapPage() {
           end_lat: toCoords[1],
           end_lon: toCoords[0],
           mode: travelMode,
-          date: curDate,
-          current_minutes: currentMinutes,
+          date: departureSelection.date,
+          current_minutes: departureSelection.minutes,
           buildings: allBuildings.map((b) => ({
             id: b.id, footprint: b.footprint, height: b.height, name: b.name,
           })),
@@ -562,6 +581,7 @@ export default function MapPage() {
         reason: r.reason,
         label: r.label,
         departureTime: data.departure_time,
+        departureLabel: departureSelection.label,
       }));
 
       setRouteUpdateInterval(data.update_interval_seconds || 120);
@@ -586,7 +606,7 @@ export default function MapPage() {
       );
       setAltRoutesKey(altRoutesKeyRef.current);
 
-      toast.success(`Found ${routes.length} shadow-analyzed routes – best has ${routes[0].shadePct}% real shade`);
+      toast.success(`Found ${routes.length} shadow-analyzed routes for ${departureSelection.label}`);
     } catch (err) {
       toast.error(`Route error: ${(err as Error).message}`);
     }
@@ -620,7 +640,7 @@ export default function MapPage() {
     if (!routeNavigating || !routeResult?.coordinates?.length || !routeResult.departureTime) return;
 
     const interval = setInterval(async () => {
-      const elapsed = (Date.now() - routeStartTimeRef.current) / 1000;
+      const elapsed = Math.max(0, (Date.now() - routeStartTimeRef.current) / 1000);
       const totalDur = routeResult.durationSeconds || routeResult.durationMin * 60;
       if (elapsed >= totalDur) {
         setRouteNavigating(false);
@@ -674,9 +694,14 @@ export default function MapPage() {
 
   const startNavigation = () => {
     if (!routeResult) return;
-    routeStartTimeRef.current = Date.now();
+    const departureMs = routeResult.departureTime ? new Date(routeResult.departureTime).getTime() : Date.now();
+    routeStartTimeRef.current = Number.isFinite(departureMs) ? departureMs : Date.now();
     setRouteNavigating(true);
-    toast.success("Navigation started – shadow updates active");
+    if (routeResult.departureTime && departureMs > Date.now()) {
+      toast.success(`Route tracking scheduled for ${routeResult.departureLabel || "the selected time"}`);
+    } else {
+      toast.success("Navigation started – shadow updates active");
+    }
   };
 
   const stopNavigation = () => {
@@ -1231,6 +1256,43 @@ export default function MapPage() {
                   </button>
                 ))}
               </div>
+              <div className="rounded-xl border border-border/60 bg-background/45 p-2 mb-2">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Departure</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {routeDepartureMode === "now" ? "Uses live Dubai time" : "Uses slider date/time"}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    onClick={() => setRouteDepartureMode("now")}
+                    className={cn(
+                      "rounded-lg border px-2 py-1.5 text-xs font-medium",
+                      routeDepartureMode === "now"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background/60 border-border/60"
+                    )}
+                  >
+                    Leave Now
+                  </button>
+                  <button
+                    onClick={() => setRouteDepartureMode("selected")}
+                    className={cn(
+                      "rounded-lg border px-2 py-1.5 text-xs font-medium",
+                      routeDepartureMode === "selected"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background/60 border-border/60"
+                    )}
+                  >
+                    Leave Later
+                  </button>
+                </div>
+                <div className="mt-1.5 text-[11px] text-muted-foreground">
+                  {routeDepartureMode === "now"
+                    ? `Current Dubai time will be used when you search.`
+                    : `Selected: ${dateStr || initDate} · ${formatTime(currentMinutes)}`}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-1.5">
                 <button onClick={findRoute} disabled={routeLoading}
                   className="py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-1.5">
@@ -1280,9 +1342,16 @@ export default function MapPage() {
               {alternativeRoutes.length > 0 && (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between">
-                    <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                      {alternativeRoutes.length} Routes · Shadow-Ranked
-                    </p>
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                        {alternativeRoutes.length} Routes · Shadow-Ranked
+                      </p>
+                      {routeResult?.departureLabel && (
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          Evaluated for {routeResult.departureLabel}
+                        </p>
+                      )}
+                    </div>
                     {routeResult && !routeNavigating && (
                       <button onClick={startNavigation}
                         className="text-[10px] px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 text-green-700 font-semibold hover:bg-green-500/25 flex items-center gap-1">
@@ -1294,6 +1363,7 @@ export default function MapPage() {
                     const isActive = idx === selectedRouteIdx;
                     const labelColors: Record<string, string> = {
                       "Best Shade": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+                      "Most Shaded": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
                       "Balanced": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
                       "Shortest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
                     };

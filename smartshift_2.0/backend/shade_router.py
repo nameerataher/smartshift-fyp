@@ -1,62 +1,73 @@
 """
-shade_router.py — Mapbox Directions + segment graph + A* + Yen's
+shade_router.py — realistic shade-aware routing
 
 Pipeline
 --------
-1. Mapbox Directions API  →  1–3 candidate walking / cycling routes
-2. Split each polyline into ~15 m segments  →  directed graph
-3. MERGE nodes from different routes that land on the same road
-   (within NODE_MERGE_DIST)  →  graph branches only where routes diverge
-4. Score every segment:  edge_cost = distance × (1 + α × exposure)
-5. A*  →  optimal shaded path through the merged graph
-6. Yen's K-shortest  →  2–3 *genuinely different* alternatives
-7. Return GeoJSON polylines  →  render on Mapbox
+1. Mapbox Directions API provides realistic, connected candidate routes
+2. Mapbox Tilequery road features enrich the nearby road graph
+3. Both sources are merged into one directed graph
+4. Buildings are fetched along the actual route corridor
+5. Each edge is sampled at multiple points for time-specific shadow exposure
+6. A* optimizes for shade-weighted travel cost
+7. Yen's K-shortest returns a few realistic alternatives
 
+This hybrid approach keeps routes connected and road-realistic while still
+allowing the router to strongly prefer streets with better building shade.
 """
 
-import math
+import hashlib
 import itertools
+import math
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 import requests as http_req
 
-from shadow_calculator import ShadowCalculator, Building
+from shadow_calculator import Building, ShadowCalculator
+from shadow_scheduler import _haversine, _point_in_polygon, parse_client_buildings
 from solar_position import SunPosition
-from shadow_scheduler import parse_client_buildings, _point_in_polygon, _haversine
 
 MAPBOX_TOKEN = (
     "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9"
     ".WI13BJqDyOu6G38-YP6hog"
 )
+
 BUILDING_FETCH_RADIUS = 300
 DEFAULT_BUILDING_HEIGHT = 30.0
-SEGMENT_LENGTH = 15        # metres between sample nodes
-NODE_MERGE_DIST = 10       # metres – nodes closer than this become ONE node
+ROAD_TILEQUERY_RADIUS = 350
+ROAD_SAMPLE_SPACING = 150
+GRAPH_SEGMENT_LENGTH = 15
+NODE_MERGE_DIST = 8
+SHADOW_SAMPLE_SPACING = 5
+MAX_TILEQUERY_CALLS = 60
+MAX_REASONABLE_DETOUR_FACTOR = 1.35
+MAX_REASONABLE_EXTRA_METERS = 1200
+ENDPOINT_CONNECT_RADIUS = 120
+
+WALK_ALLOWED = {
+    "primary", "secondary", "tertiary", "street", "street_limited",
+    "service", "path", "pedestrian", "track", "residential",
+    "living_street", "footway", "steps", "cycleway", "unclassified",
+}
+CYCLE_ALLOWED = WALK_ALLOWED | {
+    "primary_link", "secondary_link", "tertiary_link",
+}
 
 
 class ShadeRouter:
-    """
-    Hybrid routing engine.
+    """Road-realistic shade-aware routing engine."""
 
-    Mapbox supplies realistic road-following candidate routes;
-    this class chops them into a fine-grained directed graph,
-    *merges* nodes that occupy the same physical location so the
-    graph branches only where routes truly diverge, scores each
-    segment with shadow data, then runs A* and Yen's K-shortest
-    to return shade-optimised alternatives.
-    """
+    TZ = 4.0
+    WALK_SPEED = 1.4
+    CYCLE_SPEED = 4.0
 
-    TZ = 4.0               # Dubai UTC+4
-    WALK_SPEED = 1.4       # m/s
-    CYCLE_SPEED = 4.0      # m/s
-
-    def __init__(self, alpha: float = 1.0, segment_length: float = SEGMENT_LENGTH):
+    def __init__(self, alpha: float = 2.0, segment_length: float = GRAPH_SEGMENT_LENGTH):
         self.alpha = alpha
         self.seg_len = segment_length
         self._sc = ShadowCalculator()
         self._bldg_cache: Dict[str, List[Building]] = {}
+        self._road_cache: Dict[str, list] = {}
 
     # ── public ────────────────────────────────────────────────────────
 
@@ -74,26 +85,34 @@ class ShadeRouter:
     ) -> Dict:
         alpha = alpha if alpha is not None else self.alpha
         dep = self._resolve_time(departure_time, date_str, current_minutes)
-        parsed = (parse_client_buildings(client_buildings)
-                  if client_buildings else None)
+        parsed = (
+            parse_client_buildings(client_buildings)
+            if client_buildings else None
+        )
+        allowed = WALK_ALLOWED if mode == "walking" else CYCLE_ALLOWED
 
-        # 1 ── Mapbox candidates
+        # Use realistic Directions routes to seed graph connectivity.
         candidates = self._fetch_directions(
             start_lon, start_lat, end_lon, end_lat, mode,
         )
-        if not candidates:
-            raise ValueError("Mapbox returned no routes for the given points")
+        print(f"[shade-router] {len(candidates)} directions candidate route(s)")
 
-        # 2 ── build merged segment graph
-        G, src, tgt, per_route_nodes = self._build_graph(
-            candidates, start_lon, start_lat, end_lon, end_lat,
+        road_features = self._fetch_road_network(
+            start_lon, start_lat, end_lon, end_lat, allowed, candidates,
         )
-        print(f"[shade-router] Segment graph: {G.number_of_nodes()} nodes, "
-              f"{G.number_of_edges()} edges  "
-              f"({len(candidates)} Mapbox candidates)")
+        print(f"[shade-router] {len(road_features)} road features from tilequery")
 
-        # 3 ── buildings along EVERY route corridor (not just the beeline)
-        buildings = self._gather_buildings(candidates, parsed)
+        G, src, tgt, candidate_paths = self._build_graph(
+            road_features, candidates, start_lon, start_lat, end_lon, end_lat,
+        )
+        print(
+            f"[shade-router] Graph: {G.number_of_nodes()} nodes, "
+            f"{G.number_of_edges()} edges"
+        )
+
+        buildings = self._gather_buildings(
+            candidates, road_features, start_lon, start_lat, end_lon, end_lat, parsed,
+        )
         bldg_idx = self._spatial_index(buildings)
         sun = self._sun(
             dep, (start_lat + end_lat) / 2, (start_lon + end_lon) / 2,
@@ -101,53 +120,84 @@ class ShadeRouter:
 
         shadow_polys: Dict[str, list] = {}
         if sun.is_daylight and sun.altitude > 0:
-            for b in buildings:
-                poly = self._sc.calculate_shadow_polygon(b, sun)
+            for building in buildings:
+                poly = self._sc.calculate_shadow_polygon(building, sun)
                 if poly:
-                    shadow_polys[b.id] = poly
+                    shadow_polys[building.id] = poly
 
-        print(f"[shade-router] {len(buildings)} buildings, "
-              f"{len(shadow_polys)} shadow polygons  "
-              f"(sun alt {sun.altitude:.1f}°)")
+        print(
+            f"[shade-router] {len(buildings)} buildings, "
+            f"{len(shadow_polys)} shadow polygons "
+            f"(sun alt {sun.altitude:.1f}°)"
+        )
 
-        # 4 ── score edges
-        self._score_edges(G, sun, alpha, bldg_idx, shadow_polys)
+        self._score_edges(G, sun, alpha, bldg_idx, shadow_polys, mode)
 
-        # 5 ── A* best path
         try:
-            best = nx.astar_path(
+            shortest_path = nx.astar_path(
+                G, src, tgt,
+                weight="distance",
+                heuristic=lambda u, v: self._h(G, u, v),
+            )
+            shortest_distance = self._path_distance(G, shortest_path)
+        except nx.NetworkXNoPath:
+            raise ValueError("Unable to connect start and destination on the road network.")
+
+        try:
+            best_shaded = nx.astar_path(
                 G, src, tgt,
                 weight="shade_cost",
                 heuristic=lambda u, v: self._h(G, u, v),
             )
         except nx.NetworkXNoPath:
-            raise ValueError("No path found in the segment graph")
+            # This should be rare because the graph is seeded with Directions paths.
+            best_shaded = shortest_path
 
-        # 6 ── Yen's K-shortest, then drop geographic duplicates
-        paths = self._yen(G, src, tgt, k * 3)
+        distance_paths = self._shortest_paths_by_weight(
+            G, src, tgt, "distance", max(k * 6, 10),
+        )
+        shade_paths = self._shortest_paths_by_weight(
+            G, src, tgt, "shade_cost", max(k * 6, 10),
+        )
+        raw_paths = [shortest_path, best_shaded, *distance_paths, *shade_paths, *candidate_paths]
+        if not raw_paths:
+            raw_paths = [best_shaded, shortest_path]
+
+        paths = self._filter_reasonable_paths(
+            G, raw_paths, shortest_distance, keep=max(k * 4, 12),
+        )
         if not paths:
-            paths = [best]
-        paths = self._deduplicate_paths(G, paths, k)
+            paths = [best_shaded]
 
-        # if still fewer than k, add the raw Mapbox candidates as fallback
+        if shortest_path not in paths and not self._is_geo_duplicate(G, shortest_path, paths):
+            if self._path_distance(G, shortest_path) <= self._reasonable_distance_limit(shortest_distance):
+                paths.append(shortest_path)
+
         if len(paths) < k:
-            for rn in per_route_nodes:
-                if len(paths) >= k:
-                    break
-                fallback = ["S"] + rn + ["E"]
-                if self._is_valid_path(G, fallback):
-                    if not self._is_geo_duplicate(G, fallback, paths):
-                        paths.append(fallback)
+            self._append_fallback_paths(
+                G, paths, candidate_paths, shortest_distance, k,
+            )
+        if len(paths) < k:
+            self._append_fallback_paths(
+                G, paths, raw_paths, shortest_distance, k,
+                limit=self._fallback_distance_limit(shortest_distance),
+                duplicate_threshold=0.92,
+            )
+        paths = self._deduplicate_paths(G, paths, max(k * 4, 12))
 
-        # 7 ── assemble response
         speed = self.WALK_SPEED if mode == "walking" else self.CYCLE_SPEED
+        shadow_cache: Dict[str, Dict[str, list]] = {}
         routes = [
-            self._path_to_route(G, p, i, mode, speed, dep)
-            for i, p in enumerate(paths)
+            self._path_to_route(
+                G, path, idx, mode, speed, dep,
+                alpha, buildings, bldg_idx, shadow_cache,
+            )
+            for idx, path in enumerate(paths)
         ]
         self._rank(routes)
+        routes = routes[:k]
 
-        avg_dur = sum(r["duration_seconds"] for r in routes) / len(routes)
+        avg_dur = sum(route["duration_seconds"] for route in routes) / max(len(routes), 1)
         return {
             "success": True,
             "routes": routes,
@@ -158,9 +208,11 @@ class ShadeRouter:
             "graph_info": {
                 "nodes": G.number_of_nodes(),
                 "edges": G.number_of_edges(),
+                "road_features": len(road_features),
                 "candidate_routes": len(candidates),
                 "buildings_used": len(buildings),
                 "shadow_polys": len(shadow_polys),
+                "shortest_distance_meters": round(shortest_distance, 1),
             },
         }
 
@@ -177,9 +229,10 @@ class ShadeRouter:
         parsed = (parse_client_buildings(client_buildings)
                   if client_buildings else [])
         now = departure_time + timedelta(seconds=elapsed_seconds)
+        buildings = self._gather_route_buildings(route_coordinates, parsed)
         sun = self._sun(now, user_lat, user_lon)
 
-        in_shadow = self._point_shaded(user_lat, user_lon, sun, parsed)
+        in_shadow = self._point_shaded(user_lat, user_lon, sun, buildings)
 
         closest = min(
             range(len(route_coordinates)),
@@ -191,18 +244,9 @@ class ShadeRouter:
         remaining = route_coordinates[closest:]
         rem_dur = max(0, total_duration_seconds - elapsed_seconds)
 
-        shaded = total = 0
-        step = max(1, len(remaining) // 15)
-        for i in range(0, len(remaining), step):
-            c = remaining[i]
-            frac = i / max(len(remaining), 1)
-            t = now + timedelta(seconds=frac * rem_dur)
-            s = self._sun(t, c[1], c[0])
-            if self._point_shaded(c[1], c[0], s, parsed):
-                shaded += 1
-            total += 1
-
-        pct = (shaded / max(total, 1)) * 100
+        pct = self._estimate_remaining_shade_pct(
+            remaining, now, rem_dur, buildings,
+        )
         progress = min(100, elapsed_seconds / max(1, total_duration_seconds) * 100)
 
         return {
@@ -215,15 +259,9 @@ class ShadeRouter:
             "sun_azimuth": round(sun.azimuth, 1),
         }
 
-    # ── Mapbox Directions ─────────────────────────────────────────────
+    # ── realistic base routes ─────────────────────────────────────────
 
     def _fetch_directions(self, s_lon, s_lat, e_lon, e_lat, mode):
-        """Fetch 1-3 candidate routes from Mapbox Directions API.
-
-        If Mapbox returns fewer than 3 alternatives, perpendicular
-        via-waypoint queries fill in the remaining slots so the
-        segment graph always has enough diversity for Yen's.
-        """
         profile = "walking" if mode == "walking" else "cycling"
         base = f"https://api.mapbox.com/directions/v5/mapbox/{profile}"
         common = {
@@ -232,208 +270,463 @@ class ShadeRouter:
             "access_token": MAPBOX_TOKEN,
         }
 
-        # ① direct request with alternatives
-        routes: list = []
+        routes: List[Dict] = []
         try:
-            r = http_req.get(
+            resp = http_req.get(
                 f"{base}/{s_lon},{s_lat};{e_lon},{e_lat}",
                 params={**common, "alternatives": "true"},
                 timeout=15,
             )
-            r.raise_for_status()
-            routes = r.json().get("routes", [])
+            resp.raise_for_status()
+            routes = resp.json().get("routes", [])
         except Exception as exc:
-            print(f"[shade-router] Mapbox Directions error: {exc}")
+            print(f"[shade-router] Directions error: {exc}")
 
-        # ② generate via-waypoint alternatives if needed
         if len(routes) < 3:
             mid_lon = (s_lon + e_lon) / 2
             mid_lat = (s_lat + e_lat) / 2
             dx, dy = e_lon - s_lon, e_lat - s_lat
             norm = max(math.hypot(dx, dy), 1e-8)
-            perp_x, perp_y = -dy / norm, dx / norm   # 90° rotation
+            perp_x, perp_y = -dy / norm, dx / norm
 
-            for offset in (0.002, -0.002):            # ~200 m each side
+            for offset in (0.002, -0.002):
                 if len(routes) >= 3:
                     break
                 wp_lon = mid_lon + perp_x * offset
                 wp_lat = mid_lat + perp_y * offset
                 try:
-                    r = http_req.get(
-                        f"{base}/{s_lon},{s_lat};"
-                        f"{wp_lon},{wp_lat};"
-                        f"{e_lon},{e_lat}",
-                        params=common, timeout=15,
+                    resp = http_req.get(
+                        f"{base}/{s_lon},{s_lat};{wp_lon},{wp_lat};{e_lon},{e_lat}",
+                        params=common,
+                        timeout=15,
                     )
-                    r.raise_for_status()
-                    wp = r.json().get("routes", [])
-                    if wp:
-                        routes.append(wp[0])
+                    resp.raise_for_status()
+                    alt_routes = resp.json().get("routes", [])
+                    if alt_routes:
+                        routes.append(alt_routes[0])
                 except Exception:
                     pass
 
-        print(f"[shade-router] {len(routes)} Mapbox candidate route(s)")
         return routes
 
-    # ── segment graph construction ────────────────────────────────────
+    # ── Road network from Tilequery ───────────────────────────────────
 
-    def _build_graph(self, candidates, s_lon, s_lat, e_lon, e_lat):
-        """Build a directed graph from Mapbox candidate polylines.
+    def _fetch_road_network(
+        self, s_lon, s_lat, e_lon, e_lat, allowed_classes, candidates,
+    ):
+        seen_geoms: Set[str] = set()
+        features: List[Dict] = []
+        calls = 0
 
-        Nodes from different routes that fall within NODE_MERGE_DIST
-        of each other are **merged into one node**.  This means shared
-        road stretches have a single chain of nodes; the graph only
-        branches where the routes truly diverge — giving Yen's
-        genuinely different alternatives to explore.
+        samples = self._candidate_corridor_samples(candidates)
+        if not samples:
+            samples = self._beeline_corridor_samples(s_lon, s_lat, e_lon, e_lat)
 
-        Returns (G, source_id, target_id, per_route_node_lists).
-        """
+        for lon, lat in samples:
+            if calls >= MAX_TILEQUERY_CALLS:
+                break
+            for feat in self._tilequery_roads(lon, lat):
+                geom = feat.get("geometry", {})
+                if geom.get("type") != "LineString":
+                    continue
+                road_class = feat.get("properties", {}).get("class", "")
+                if road_class and road_class not in allowed_classes:
+                    continue
+                gkey = self._geom_key(geom)
+                if gkey in seen_geoms:
+                    continue
+                seen_geoms.add(gkey)
+                features.append(feat)
+            calls += 1
+
+        return features
+
+    def _beeline_corridor_samples(self, s_lon, s_lat, e_lon, e_lat):
+        beeline = _haversine(s_lat, s_lon, e_lat, e_lon)
+        count = max(3, int(beeline / ROAD_SAMPLE_SPACING) + 1)
+        dx, dy = e_lon - s_lon, e_lat - s_lat
+        norm = max(math.hypot(dx, dy), 1e-8)
+        px, py = -dy / norm, dx / norm
+        offsets = (0.0, 0.0010, -0.0010)
+
+        samples = []
+        seen = set()
+        for i in range(count):
+            frac = i / max(count - 1, 1)
+            base_lon = s_lon + frac * dx
+            base_lat = s_lat + frac * dy
+            for offset in offsets:
+                key = (round(base_lon + px * offset, 6), round(base_lat + py * offset, 6))
+                if key not in seen:
+                    seen.add(key)
+                    samples.append(key)
+        return samples
+
+    def _candidate_corridor_samples(self, candidates):
+        samples = []
+        seen = set()
+
+        for route in candidates:
+            coords = route.get("geometry", {}).get("coordinates", [])
+            line_samples = self._sample_polyline(coords, ROAD_SAMPLE_SPACING)
+            if not line_samples:
+                continue
+
+            for i, (lon, lat) in enumerate(line_samples):
+                prev_lon, prev_lat = line_samples[max(i - 1, 0)]
+                next_lon, next_lat = line_samples[min(i + 1, len(line_samples) - 1)]
+                dx, dy = next_lon - prev_lon, next_lat - prev_lat
+                norm = max(math.hypot(dx, dy), 1e-8)
+                px, py = -dy / norm, dx / norm
+
+                for offset in (0.0, 0.0010, -0.0010):
+                    key = (round(lon + px * offset, 6), round(lat + py * offset, 6))
+                    if key not in seen:
+                        seen.add(key)
+                        samples.append(key)
+
+        return samples
+
+    def _tilequery_roads(self, lon, lat):
+        ck = f"rd_{round(lon, 4)}_{round(lat, 4)}"
+        if ck in self._road_cache:
+            return self._road_cache[ck]
+
+        url = (
+            f"https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/"
+            f"tilequery/{lon},{lat}.json"
+        )
+        params = {
+            "radius": ROAD_TILEQUERY_RADIUS,
+            "layers": "road",
+            "limit": 50,
+            "access_token": MAPBOX_TOKEN,
+        }
+        try:
+            resp = http_req.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            feats = resp.json().get("features", [])
+        except Exception as exc:
+            print(f"[shade-router] Tilequery error: {exc}")
+            feats = []
+
+        self._road_cache[ck] = feats
+        return feats
+
+    @staticmethod
+    def _geom_key(geom):
+        raw = str((geom.get("type", ""), geom.get("coordinates", [])))
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+    # ── Graph construction ────────────────────────────────────────────
+
+    def _build_graph(self, features, candidates, s_lon, s_lat, e_lon, e_lat):
         G = nx.DiGraph()
-        G.add_node("S", x=s_lon, y=s_lat)
-        G.add_node("E", x=e_lon, y=e_lat)
+        merge_grid: Dict[Tuple[int, int], List[Tuple[str, float, float]]] = {}
+        candidate_node_paths: List[List[str]] = []
 
-        # spatial grid used by _merge_or_create to find existing nodes
-        merge_grid: Dict[Tuple[int, int],
-                         List[Tuple[str, float, float]]] = {}
-
-        per_route_nodes: List[List[str]] = []
+        for f_idx, feat in enumerate(features):
+            props = feat.get("properties", {})
+            coords = feat.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            self._add_polyline(
+                G,
+                merge_grid,
+                coords,
+                route_idx=f_idx,
+                road_class=props.get("class", "street"),
+                is_oneway=str(props.get("oneway", "")).lower() == "true",
+                source="tilequery",
+            )
 
         for r_idx, route in enumerate(candidates):
-            coords = route["geometry"]["coordinates"]
-            nodes, _ = self._segment_polyline(G, coords, r_idx, merge_grid)
-            per_route_nodes.append(nodes)
+            coords = route.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            nodes = self._add_polyline(
+                G,
+                merge_grid,
+                coords,
+                route_idx=10000 + r_idx,
+                road_class="candidate",
+                is_oneway=False,
+                source="directions",
+            )
+            if nodes and len(nodes) >= 2:
+                candidate_node_paths.append(nodes)
 
-            first, last = nodes[0], nodes[-1]
-            d0 = _haversine(s_lat, s_lon,
-                            G.nodes[first]["y"], G.nodes[first]["x"])
-            if not G.has_edge("S", first):
-                G.add_edge("S", first, distance=max(d0, 0.1))
+        if G.number_of_nodes() == 0:
+            raise ValueError("Could not build a routable road graph for these points.")
 
-            d1 = _haversine(G.nodes[last]["y"], G.nodes[last]["x"],
-                            e_lat, e_lon)
-            if not G.has_edge(last, "E"):
-                G.add_edge(last, "E", distance=max(d1, 0.1))
+        self._connect_endpoint(G, s_lon, s_lat, "S", outbound=True)
+        self._connect_endpoint(G, e_lon, e_lat, "E", outbound=False)
 
-        return G, "S", "E", per_route_nodes
+        candidate_paths: List[List[str]] = []
+        for nodes in candidate_node_paths:
+            path = ["S", *nodes, "E"]
+            if self._is_valid_path(G, path):
+                candidate_paths.append(path)
 
-    # ── node merging ──────────────────────────────────────────────────
+        return G, "S", "E", candidate_paths
 
-    def _merge_or_create(self, G, grid, lon, lat, candidate_id,
-                         route_idx, progress):
-        """Return an existing node within NODE_MERGE_DIST, or create a
-        new one.  This collapses overlapping road segments across routes
-        into shared nodes so the graph only branches at real junctions."""
-        cs = 0.0001                       # ~11 m grid cell
-        cr, cc = int(lat / cs), int(lon / cs)
+    def _add_polyline(self, G, merge_grid, coords, route_idx, road_class, is_oneway, source):
+        sampled = self._sample_polyline(coords, self.seg_len)
+        if len(sampled) < 2:
+            return []
 
-        for dr in (-1, 0, 1):
-            for dc in (-1, 0, 1):
-                for eid, ex, ey in grid.get((cr + dr, cc + dc), []):
-                    if _haversine(lat, lon, ey, ex) <= NODE_MERGE_DIST:
-                        return eid        # reuse existing node
+        nodes: List[str] = []
+        for idx, (lon, lat) in enumerate(sampled):
+            node_id = self._merge_or_create(
+                G,
+                merge_grid,
+                lon,
+                lat,
+                f"{source}_{route_idx}_{idx}",
+                route_idx,
+                float(idx),
+            )
+            if not nodes or nodes[-1] != node_id:
+                nodes.append(node_id)
 
-        G.add_node(candidate_id, x=lon, y=lat,
-                   route_idx=route_idx, progress=progress)
-        grid.setdefault((cr, cc), []).append((candidate_id, lon, lat))
+        for i in range(len(nodes) - 1):
+            u, v = nodes[i], nodes[i + 1]
+            d = _haversine(
+                G.nodes[u]["y"], G.nodes[u]["x"],
+                G.nodes[v]["y"], G.nodes[v]["x"],
+            )
+            d = max(d, 0.1)
+            self._add_edge(G, u, v, d, road_class, source)
+            if not is_oneway:
+                self._add_edge(G, v, u, d, road_class, source)
+
+        return nodes
+
+    @staticmethod
+    def _add_edge(G, u, v, distance, road_class, source):
+        if G.has_edge(u, v):
+            edge = G[u][v]
+            edge["distance"] = min(edge.get("distance", distance), distance)
+            if not edge.get("road_class"):
+                edge["road_class"] = road_class
+            if source not in edge.get("source", ""):
+                edge["source"] = f"{edge.get('source', '')},{source}".strip(",")
+            return
+
+        G.add_edge(
+            u,
+            v,
+            distance=distance,
+            road_class=road_class,
+            source=source,
+        )
+
+    def _merge_or_create(self, G, grid, lon, lat, candidate_id, route_idx, progress):
+        cell_size = 0.00008
+        row, col = int(lat / cell_size), int(lon / cell_size)
+
+        for d_row in (-1, 0, 1):
+            for d_col in (-1, 0, 1):
+                for existing_id, ex_lon, ex_lat in grid.get((row + d_row, col + d_col), []):
+                    if _haversine(lat, lon, ex_lat, ex_lon) <= NODE_MERGE_DIST:
+                        return existing_id
+
+        G.add_node(candidate_id, x=lon, y=lat, route_idx=route_idx, progress=progress)
+        grid.setdefault((row, col), []).append((candidate_id, lon, lat))
         return candidate_id
 
-    def _segment_polyline(self, G, coords, r_idx, merge_grid):
-        """Split a polyline into ~seg_len m segments, merging nodes
-        that coincide with already-placed nodes from other routes."""
+    def _connect_endpoint(self, G, lon, lat, label, outbound, n_connect=6):
+        G.add_node(label, x=lon, y=lat)
+
+        candidates = []
+        for node_id, attrs in G.nodes(data=True):
+            if node_id in ("S", "E"):
+                continue
+            d = _haversine(lat, lon, attrs.get("y", 0), attrs.get("x", 0))
+            candidates.append((d, node_id))
+        candidates.sort(key=lambda item: item[0])
+
+        close = [item for item in candidates if item[0] <= ENDPOINT_CONNECT_RADIUS]
+        chosen = close[:n_connect] if close else candidates[:1]
+
+        for distance, node_id in chosen:
+            if outbound:
+                self._add_edge(G, label, node_id, max(distance, 0.1), "connector", "endpoint")
+            else:
+                self._add_edge(G, node_id, label, max(distance, 0.1), "connector", "endpoint")
+
+    def _sample_polyline(self, coords, spacing_m):
+        if not coords:
+            return []
+        if len(coords) == 1:
+            return [(coords[0][0], coords[0][1])]
+
         cum = [0.0]
-        for i in range(1, len(coords)):
-            d = _haversine(coords[i-1][1], coords[i-1][0],
-                           coords[i][1], coords[i][0])
-            cum.append(cum[-1] + d)
-        total = cum[-1]
-
-        if total < 1:
-            nid = self._merge_or_create(
-                G, merge_grid, coords[0][0], coords[0][1],
-                f"r{r_idx}_0", r_idx, 0.0,
+        for idx in range(1, len(coords)):
+            seg_d = _haversine(
+                coords[idx - 1][1], coords[idx - 1][0],
+                coords[idx][1], coords[idx][0],
             )
-            return [nid], 0.0
+            cum.append(cum[-1] + seg_d)
 
-        targets: List[float] = []
-        t = 0.0
-        while t < total:
-            targets.append(t)
-            t += self.seg_len
+        total = cum[-1]
+        if total < 1:
+            return [(coords[0][0], coords[0][1]), (coords[-1][0], coords[-1][1])]
+
+        targets = [0.0]
+        cursor = spacing_m
+        while cursor < total:
+            targets.append(cursor)
+            cursor += spacing_m
         if total - targets[-1] > 1.0:
             targets.append(total)
 
-        nodes: List[str] = []
-        seg_j = 0
-        for s_idx, tgt in enumerate(targets):
-            while seg_j < len(cum) - 2 and cum[seg_j + 1] < tgt:
-                seg_j += 1
-            leg = cum[seg_j + 1] - cum[seg_j] if seg_j + 1 < len(cum) else 1.0
-            frac = max(0.0, min(1.0, (tgt - cum[seg_j]) / max(leg, 1e-10)))
-            j2 = min(seg_j + 1, len(coords) - 1)
-            lon = coords[seg_j][0] + frac * (coords[j2][0] - coords[seg_j][0])
-            lat = coords[seg_j][1] + frac * (coords[j2][1] - coords[seg_j][1])
+        sampled = []
+        seg_idx = 0
+        for target in targets:
+            while seg_idx < len(cum) - 2 and cum[seg_idx + 1] < target:
+                seg_idx += 1
 
-            nid = self._merge_or_create(
-                G, merge_grid, lon, lat,
-                f"r{r_idx}_{s_idx}", r_idx, tgt,
-            )
+            leg = max(cum[seg_idx + 1] - cum[seg_idx], 1e-10)
+            frac = max(0.0, min(1.0, (target - cum[seg_idx]) / leg))
+            next_idx = min(seg_idx + 1, len(coords) - 1)
+            lon = coords[seg_idx][0] + frac * (coords[next_idx][0] - coords[seg_idx][0])
+            lat = coords[seg_idx][1] + frac * (coords[next_idx][1] - coords[seg_idx][1])
+            point = (lon, lat)
+            if not sampled or _haversine(lat, lon, sampled[-1][1], sampled[-1][0]) > 0.5:
+                sampled.append(point)
 
-            # skip consecutive duplicates created by merging
-            if nodes and nodes[-1] == nid:
-                continue
-            nodes.append(nid)
+        if sampled[-1] != (coords[-1][0], coords[-1][1]):
+            sampled.append((coords[-1][0], coords[-1][1]))
+        return sampled
 
-            if len(nodes) >= 2:
-                prev = nodes[-2]
-                d = _haversine(G.nodes[prev]["y"], G.nodes[prev]["x"],
-                               lat, lon)
-                if not G.has_edge(prev, nid):
-                    G.add_edge(prev, nid, distance=max(d, 0.1))
-
-        return nodes, total
-
-    # ── edge scoring ──────────────────────────────────────────────────
+    # ── edge scoring with multi-point shadow sampling ─────────────────
 
     def _spatial_index(self, buildings):
         idx: Dict[Tuple[int, int], List[Building]] = {}
-        cs = 0.003
-        for b in buildings:
-            cx, cy = b.get_centroid()
-            cell = (int(cy / cs), int(cx / cs))
-            idx.setdefault(cell, []).append(b)
+        cell_size = 0.003
+        for building in buildings:
+            cx, cy = building.get_centroid()
+            idx.setdefault((int(cy / cell_size), int(cx / cell_size)), []).append(building)
         return idx
 
-    def _score_edges(self, G, sun, alpha, bldg_idx, shadow_polys):
-        cs = 0.003
+    def _score_edges(self, G, sun, alpha, bldg_idx, shadow_polys, mode):
         for u, v, data in G.edges(data=True):
-            d = data.get("distance", 0)
-            ux = G.nodes[u].get("x", 0)
-            uy = G.nodes[u].get("y", 0)
-            vx = G.nodes[v].get("x", 0)
-            vy = G.nodes[v].get("y", 0)
-            mlat, mlon = (uy + vy) / 2, (ux + vx) / 2
+            d = data.get("distance", 0.0)
+            ux = G.nodes[u].get("x", 0.0)
+            uy = G.nodes[u].get("y", 0.0)
+            vx = G.nodes[v].get("x", 0.0)
+            vy = G.nodes[v].get("y", 0.0)
+            road_class = data.get("road_class", "street")
 
-            exp = self._exposure_at(mlat, mlon, sun, bldg_idx, shadow_polys, cs)
-            data["sun_exposure"] = exp
-            data["shade_cost"] = d * (1.0 + alpha * exp)
+            shadow_fraction = self._edge_shadow_fraction(
+                uy, ux, vy, vx, d, sun, bldg_idx, shadow_polys,
+                road_class=road_class, mode=mode,
+            )
+            exposure = 1.0 - shadow_fraction
 
-    def _exposure_at(self, lat, lon, sun, bldg_idx, shadow_polys, cs=0.003):
+            data["sun_exposure"] = exposure
+            data["shadow_fraction"] = shadow_fraction
+            data["shade_cost"] = d * (1.0 + alpha * exposure)
+
+    def _edge_shadow_fraction(
+        self, lat1, lon1, lat2, lon2, distance, sun, bldg_idx, shadow_polys,
+        road_class="street", mode="walking",
+    ):
+        if not sun.is_daylight or sun.altitude <= 0:
+            return 1.0
+
+        samples = max(2, int(distance / SHADOW_SAMPLE_SPACING) + 1)
+        offsets = self._road_sampling_offsets(road_class, mode)
+        profile_fracs: List[float] = []
+
+        for offset_m in offsets:
+            shaded = 0
+            for idx in range(samples):
+                frac = idx / max(samples - 1, 1)
+                lat = lat1 + frac * (lat2 - lat1)
+                lon = lon1 + frac * (lon2 - lon1)
+                if abs(offset_m) > 1e-6:
+                    lon, lat = self._offset_point_perpendicular(
+                        lat, lon, lat1, lon1, lat2, lon2, offset_m,
+                    )
+                if self._exposure_at(lat, lon, sun, bldg_idx, shadow_polys) == 0.0:
+                    shaded += 1
+            profile_fracs.append(shaded / samples)
+
+        if not profile_fracs:
+            return 0.0
+        if mode == "walking":
+            return max(profile_fracs)
+        if len(profile_fracs) == 1:
+            return profile_fracs[0]
+        center = profile_fracs[0]
+        sides = profile_fracs[1:]
+        return min(1.0, 0.7 * center + 0.3 * (sum(sides) / max(len(sides), 1)))
+
+    def _road_sampling_offsets(self, road_class, mode):
+        width = self._estimate_road_width_m(road_class)
+        if width <= 3.5:
+            return [0.0]
+
+        side_offset = max(1.2, min(width / 2.5, 5.0))
+        if mode == "walking":
+            return [0.0, side_offset, -side_offset]
+        return [0.0, side_offset * 0.5, -side_offset * 0.5]
+
+    @staticmethod
+    def _estimate_road_width_m(road_class):
+        widths = {
+            "primary": 18.0,
+            "primary_link": 14.0,
+            "secondary": 14.0,
+            "secondary_link": 12.0,
+            "tertiary": 11.0,
+            "tertiary_link": 10.0,
+            "street": 9.0,
+            "street_limited": 8.0,
+            "residential": 8.0,
+            "service": 7.0,
+            "unclassified": 8.0,
+            "pedestrian": 6.0,
+            "living_street": 6.0,
+            "track": 5.0,
+            "path": 3.0,
+            "footway": 2.5,
+            "steps": 2.0,
+            "cycleway": 3.0,
+            "candidate": 8.0,
+            "connector": 4.0,
+        }
+        return widths.get(road_class, 8.0)
+
+    def _offset_point_perpendicular(self, lat, lon, lat1, lon1, lat2, lon2, offset_m):
+        dx_m = (lon2 - lon1) * self._sc.meters_per_degree_lon
+        dy_m = (lat2 - lat1) * self._sc.METERS_PER_DEGREE_LAT
+        norm = max(math.hypot(dx_m, dy_m), 1e-6)
+        perp_x = -dy_m / norm
+        perp_y = dx_m / norm
+        dlon = (perp_x * offset_m) / self._sc.meters_per_degree_lon
+        dlat = (perp_y * offset_m) / self._sc.METERS_PER_DEGREE_LAT
+        return lon + dlon, lat + dlat
+
+    def _exposure_at(self, lat, lon, sun, bldg_idx, shadow_polys, cell_size=0.003):
         if not sun.is_daylight or sun.altitude <= 0:
             return 0.0
-        cell = (int(lat / cs), int(lon / cs))
+        cell = (int(lat / cell_size), int(lon / cell_size))
         for dx in range(-1, 2):
             for dy in range(-1, 2):
-                for b in bldg_idx.get((cell[0] + dx, cell[1] + dy), []):
-                    if b.id in shadow_polys:
-                        if _point_in_polygon(lon, lat, shadow_polys[b.id]):
-                            return 0.0
+                for building in bldg_idx.get((cell[0] + dx, cell[1] + dy), []):
+                    poly = shadow_polys.get(building.id)
+                    if poly and _point_in_polygon(lon, lat, poly):
+                        return 0.0
         return 1.0
 
     def _point_shaded(self, lat, lon, sun, buildings):
         if not sun.is_daylight or sun.altitude <= 0:
             return True
-        for b in buildings:
-            poly = self._sc.calculate_shadow_polygon(b, sun)
+        for building in buildings:
+            poly = self._sc.calculate_shadow_polygon(building, sun)
             if poly and _point_in_polygon(lon, lat, poly):
                 return True
         return False
@@ -441,229 +734,447 @@ class ShadeRouter:
     # ── routing algorithms ────────────────────────────────────────────
 
     def _h(self, G, u, v):
-        """Admissible haversine heuristic for A*."""
         return _haversine(
             G.nodes[u]["y"], G.nodes[u]["x"],
             G.nodes[v]["y"], G.nodes[v]["x"],
         )
 
     def _yen(self, G, src, tgt, k):
-        """Yen's K-shortest simple paths (NetworkX)."""
         try:
-            return list(itertools.islice(
-                nx.shortest_simple_paths(G, src, tgt, weight="shade_cost"),
-                k,
-            ))
-        except (nx.NetworkXNoPath, nx.NodeNotFound,
-                nx.NetworkXNotImplemented):
+            return list(
+                itertools.islice(
+                    nx.shortest_simple_paths(G, src, tgt, weight="shade_cost"),
+                    k,
+                )
+            )
+        except (nx.NetworkXNoPath, nx.NodeNotFound, nx.NetworkXNotImplemented):
             return []
 
-    # ── deduplication ─────────────────────────────────────────────────
+    def _shortest_paths_by_weight(self, G, src, tgt, weight, k):
+        try:
+            return list(
+                itertools.islice(
+                    nx.shortest_simple_paths(G, src, tgt, weight=weight),
+                    k,
+                )
+            )
+        except (nx.NetworkXNoPath, nx.NodeNotFound, nx.NetworkXNotImplemented):
+            return []
 
-    def _deduplicate_paths(self, G, paths, keep):
-        """Drop paths whose geographic trace overlaps > 70 % with an
-        already-kept path.  Returns at most *keep* unique paths."""
-        if len(paths) <= 1:
-            return paths
-        unique = [paths[0]]
-        for p in paths[1:]:
+    def _reasonable_distance_limit(self, shortest_distance):
+        return min(
+            shortest_distance * MAX_REASONABLE_DETOUR_FACTOR,
+            shortest_distance + MAX_REASONABLE_EXTRA_METERS,
+        )
+
+    def _fallback_distance_limit(self, shortest_distance):
+        return min(
+            shortest_distance * 1.6,
+            shortest_distance + 1800,
+        )
+
+    def _filter_reasonable_paths(self, G, paths, shortest_distance, keep):
+        limit = self._reasonable_distance_limit(shortest_distance)
+        unique = []
+        for path in paths:
+            if not self._is_valid_path(G, path):
+                continue
+            if self._path_distance(G, path) > limit:
+                continue
+            if not self._is_geo_duplicate(G, path, unique):
+                unique.append(path)
             if len(unique) >= keep:
                 break
-            if not self._is_geo_duplicate(G, p, unique):
-                unique.append(p)
         return unique
 
+    def _deduplicate_paths(self, G, paths, keep):
+        unique = []
+        for path in paths:
+            if len(unique) >= keep:
+                break
+            if not self._is_geo_duplicate(G, path, unique):
+                unique.append(path)
+        return unique
+
+    def _append_fallback_paths(
+        self, G, target_paths, candidate_paths, shortest_distance, keep,
+        limit=None, duplicate_threshold=0.85,
+    ):
+        limit = limit if limit is not None else self._reasonable_distance_limit(shortest_distance)
+        for path in candidate_paths:
+            if len(target_paths) >= keep:
+                break
+            if not path or not self._is_valid_path(G, path):
+                continue
+            if self._path_distance(G, path) > limit:
+                continue
+            if self._contains_exact_path(target_paths, path):
+                continue
+            if self._is_geo_duplicate(G, path, target_paths, threshold=duplicate_threshold):
+                continue
+            target_paths.append(path)
+
+        if len(target_paths) >= keep:
+            return
+
+        for path in candidate_paths:
+            if len(target_paths) >= keep:
+                break
+            if not path or not self._is_valid_path(G, path):
+                continue
+            if self._path_distance(G, path) > limit:
+                continue
+            if self._contains_exact_path(target_paths, path):
+                continue
+            target_paths.append(path)
+
     def _is_geo_duplicate(self, G, path, existing_paths, threshold=0.70):
-        for u in existing_paths:
-            shared = len(set(path) & set(u))
-            overlap = shared / max(len(path), len(u), 1)
+        for existing in existing_paths:
+            shared = len(set(path) & set(existing))
+            overlap = shared / max(len(path), len(existing), 1)
             if overlap > threshold:
                 return True
         return False
 
     @staticmethod
+    def _contains_exact_path(existing_paths, candidate):
+        return any(path == candidate for path in existing_paths)
+
+    @staticmethod
     def _is_valid_path(G, path):
+        return all(G.has_edge(path[i], path[i + 1]) for i in range(len(path) - 1))
+
+    @staticmethod
+    def _path_distance(G, path):
+        total = 0.0
         for i in range(len(path) - 1):
-            if not G.has_edge(path[i], path[i + 1]):
-                return False
-        return True
+            total += G[path[i]][path[i + 1]].get("distance", 0.0)
+        return total
+
+    def _evaluate_path_metrics(
+        self, G, path, dep, speed, alpha, buildings, bldg_idx, shadow_cache, mode,
+    ):
+        total_distance = 0.0
+        total_shade_cost = 0.0
+        weighted_exposure = 0.0
+        elapsed_seconds = 0.0
+
+        for i in range(len(path) - 1):
+            u = path[i]
+            v = path[i + 1]
+            edge = G[u][v]
+            seg_d = edge.get("distance", 0.0)
+            road_class = edge.get("road_class", "street")
+            ux = G.nodes[u].get("x", 0.0)
+            uy = G.nodes[u].get("y", 0.0)
+            vx = G.nodes[v].get("x", 0.0)
+            vy = G.nodes[v].get("y", 0.0)
+            mid_lon = (ux + vx) / 2
+            mid_lat = (uy + vy) / 2
+
+            edge_time = dep + timedelta(seconds=elapsed_seconds + seg_d / max(speed * 2, 0.1))
+            sun = self._sun(edge_time, mid_lat, mid_lon)
+            shadow_polys = self._shadow_polys_for_bucket(
+                buildings, sun, edge_time, shadow_cache,
+            )
+            shadow_fraction = self._edge_shadow_fraction(
+                uy, ux, vy, vx, seg_d, sun, bldg_idx, shadow_polys,
+                road_class=road_class, mode=mode,
+            )
+            exposure = 1.0 - shadow_fraction
+
+            total_distance += seg_d
+            total_shade_cost += seg_d * (1.0 + alpha * exposure)
+            weighted_exposure += exposure * seg_d
+            elapsed_seconds += seg_d / max(speed, 0.1)
+
+        return {
+            "distance_meters": total_distance,
+            "duration_seconds": elapsed_seconds,
+            "avg_exposure": weighted_exposure / max(total_distance, 1.0),
+            "shade_cost": total_shade_cost,
+        }
+
+    def _shadow_polys_for_bucket(self, buildings, sun, dt, shadow_cache):
+        bucket = dt.strftime("%Y-%m-%dT%H:%M")
+        if bucket in shadow_cache:
+            return shadow_cache[bucket]
+
+        shadow_polys: Dict[str, list] = {}
+        if sun.is_daylight and sun.altitude > 0:
+            for building in buildings:
+                poly = self._sc.calculate_shadow_polygon(building, sun)
+                if poly:
+                    shadow_polys[building.id] = poly
+
+        shadow_cache[bucket] = shadow_polys
+        return shadow_polys
 
     # ── route building ────────────────────────────────────────────────
 
-    def _path_to_route(self, G, path, rid, mode, speed, dep):
+    def _path_to_route(
+        self, G, path, rid, mode, speed, dep,
+        alpha, buildings, bldg_idx, shadow_cache,
+    ):
         coords: List[List[float]] = []
-        dist = exp_sum = exp_dist = edges = 0.0
 
         for node in path:
             x = G.nodes[node].get("x")
             y = G.nodes[node].get("y")
-            if x is not None and y is not None:
-                if not coords or (
-                    abs(x - coords[-1][0]) > 1e-8
-                    or abs(y - coords[-1][1]) > 1e-8
-                ):
-                    coords.append([x, y])
+            if x is None or y is None:
+                continue
+            if not coords or abs(x - coords[-1][0]) > 1e-8 or abs(y - coords[-1][1]) > 1e-8:
+                coords.append([x, y])
 
-        for i in range(len(path) - 1):
-            ed = G[path[i]][path[i + 1]]
-            seg_d = ed.get("distance", 0)
-            seg_e = ed.get("sun_exposure", 0.5)
-            dist += seg_d
-            exp_sum += seg_e
-            exp_dist += seg_e * seg_d
-            edges += 1
-
-        avg_exp = exp_dist / max(dist, 1)
-        shade_pct = round((1 - avg_exp) * 100, 1)
-        dur_s = dist / speed
-        dur_m = round(dur_s / 60)
-        sun_min = round(dur_m * avg_exp)
+        metrics = self._evaluate_path_metrics(
+            G, path, dep, speed, alpha, buildings, bldg_idx, shadow_cache, mode,
+        )
+        total_distance = metrics["distance_meters"]
+        avg_exp = metrics["avg_exposure"]
+        shade_pct = round((1.0 - avg_exp) * 100, 1)
+        duration_seconds = metrics["duration_seconds"]
+        duration_minutes = round(duration_seconds / 60)
+        sun_minutes = round(duration_minutes * avg_exp)
 
         if shade_pct >= 60:
-            risk, rc = "LOW", "#22c55e"
+            risk, risk_color = "LOW", "#22c55e"
         elif shade_pct >= 30:
-            risk, rc = "MEDIUM", "#f59e0b"
+            risk, risk_color = "MEDIUM", "#f59e0b"
         else:
-            risk, rc = "HIGH", "#ef4444"
+            risk, risk_color = "HIGH", "#ef4444"
 
-        dk = round(dist / 1000, 1)
+        distance_km = round(total_distance / 1000, 1)
         if shade_pct >= 70:
-            reason = (f"{dk}km · {dur_m}min · {shade_pct}% shaded – "
-                      "excellent building shadow coverage")
+            reason = (
+                f"{distance_km}km · {duration_minutes}min · {shade_pct}% shaded – "
+                "strong building shade coverage"
+            )
         elif shade_pct >= 40:
-            reason = (f"{dk}km · {dur_m}min · {shade_pct}% shaded – "
-                      "moderate shadow along path")
+            reason = (
+                f"{distance_km}km · {duration_minutes}min · {shade_pct}% shaded – "
+                "balanced shade and travel time"
+            )
         else:
-            reason = (f"{dk}km · {dur_m}min · {shade_pct}% shaded – "
-                      f"limited shade, ~{sun_min}min in direct sun")
+            reason = (
+                f"{distance_km}km · {duration_minutes}min · {shade_pct}% shaded – "
+                f"faster route with ~{sun_minutes}min in direct sun"
+            )
 
         return {
             "route_id": rid,
             "geometry": {"type": "LineString", "coordinates": coords},
-            "distance_meters": round(dist, 1),
-            "distance_km": dk,
-            "duration_seconds": round(dur_s, 1),
-            "duration_minutes": dur_m,
+            "distance_meters": round(total_distance, 1),
+            "distance_km": distance_km,
+            "duration_seconds": round(duration_seconds, 1),
+            "duration_minutes": duration_minutes,
             "shade_coverage_pct": shade_pct,
-            "sun_exposure_minutes": sun_min,
+            "sun_exposure_minutes": sun_minutes,
             "shade_score": round(shade_pct / 100, 3),
             "duration_score": 0.0,
             "final_score": 0.0,
             "label": "",
             "risk_level": risk,
-            "risk_color": rc,
+            "risk_color": risk_color,
             "reason": reason,
+            "optimisation_cost": metrics["shade_cost"],
         }
 
     def _rank(self, routes):
         if not routes:
             return
 
-        maxd = max(r["duration_seconds"] for r in routes)
-        mind = min(r["duration_seconds"] for r in routes)
-        rng = maxd - mind if maxd != mind else 1
-        for r in routes:
-            ds = 1.0 - (r["duration_seconds"] - mind) / rng
-            r["duration_score"] = round(ds, 3)
-            r["final_score"] = round(
-                (0.75 * r["shade_score"] + 0.25 * ds) * 100, 1,
+        max_duration = max(route["duration_seconds"] for route in routes)
+        min_duration = min(route["duration_seconds"] for route in routes)
+        duration_range = max(max_duration - min_duration, 1.0)
+
+        for route in routes:
+            duration_score = 1.0 - (route["duration_seconds"] - min_duration) / duration_range
+            route["duration_score"] = round(duration_score, 3)
+            route["final_score"] = round(
+                (0.9 * route["shade_score"] + 0.1 * duration_score) * 100,
+                1,
             )
-        routes.sort(key=lambda r: r["final_score"], reverse=True)
+
+        routes.sort(
+            key=lambda route: (-route["final_score"], route["optimisation_cost"]),
+        )
 
         if len(routes) == 1:
             routes[0]["label"] = "Best Route"
             return
 
-        # label based on actual characteristics
-        best_shade_idx = max(range(len(routes)),
-                            key=lambda i: routes[i]["shade_coverage_pct"])
-        shortest_idx = min(range(len(routes)),
-                          key=lambda i: routes[i]["duration_seconds"])
+        best_shade_idx = max(
+            range(len(routes)),
+            key=lambda idx: routes[idx]["shade_coverage_pct"],
+        )
+        shortest_idx = min(
+            range(len(routes)),
+            key=lambda idx: routes[idx]["duration_seconds"],
+        )
 
-        for i, r in enumerate(routes):
-            if i == best_shade_idx:
-                r["label"] = "Most Shaded"
-            elif i == shortest_idx:
-                r["label"] = "Shortest"
+        for idx, route in enumerate(routes):
+            if idx == best_shade_idx:
+                route["label"] = "Most Shaded"
+            elif idx == shortest_idx:
+                route["label"] = "Shortest"
             else:
-                r["label"] = "Balanced"
+                route["label"] = "Balanced"
 
     # ── building data ─────────────────────────────────────────────────
 
-    def _gather_buildings(self, candidates, client_buildings):
-        """Fetch buildings along every Mapbox candidate's actual polyline
-        (not just the beeline) so shadow checks cover all the streets
-        A* might consider."""
-        if client_buildings:
-            return client_buildings
+    def _gather_buildings(
+        self, candidates, road_features, s_lon, s_lat, e_lon, e_lat, parsed,
+    ):
+        all_buildings: List[Building] = []
+        seen: Set[str] = set()
 
-        all_b: List[Building] = []
-        seen: set = set()
-        total_samples = 0
+        if parsed:
+            for building in parsed:
+                if building.id not in seen:
+                    seen.add(building.id)
+                    all_buildings.append(building)
 
+        sample_points = []
         for route in candidates:
-            coords = route["geometry"]["coordinates"]
-            # ~8 evenly-spaced samples per route polyline
-            step = max(1, len(coords) // 8)
-            for i in range(0, len(coords), step):
-                lat, lon = coords[i][1], coords[i][0]
-                for b in self._fetch_buildings(lat, lon):
-                    if b.id not in seen:
-                        seen.add(b.id)
-                        all_b.append(b)
-                total_samples += 1
+            coords = route.get("geometry", {}).get("coordinates", [])
+            sample_points.extend(self._sample_polyline(coords, ROAD_SAMPLE_SPACING))
 
-        print(f"[shade-router] {len(all_b)} buildings from "
-              f"{total_samples} corridor samples across "
-              f"{len(candidates)} route(s)")
-        return all_b
+        feature_step = max(1, len(road_features) // 30) if road_features else 1
+        for feat in road_features[::feature_step]:
+            coords = feat.get("geometry", {}).get("coordinates", [])
+            sample_points.extend(self._sample_polyline(coords, ROAD_SAMPLE_SPACING * 2))
+
+        if not sample_points:
+            sample_points = self._beeline_corridor_samples(s_lon, s_lat, e_lon, e_lat)
+
+        for lon, lat in sample_points:
+            for building in self._fetch_buildings(lat, lon):
+                if building.id not in seen:
+                    seen.add(building.id)
+                    all_buildings.append(building)
+
+        print(
+            f"[shade-router] {len(all_buildings)} buildings from "
+            f"{len(sample_points)} corridor samples"
+        )
+        return all_buildings
+
+    def _gather_route_buildings(self, route_coordinates, parsed):
+        buildings: List[Building] = []
+        seen: Set[str] = set()
+
+        for building in parsed:
+            if building.id not in seen:
+                seen.add(building.id)
+                buildings.append(building)
+
+        for lon, lat in self._sample_polyline(route_coordinates, ROAD_SAMPLE_SPACING):
+            for building in self._fetch_buildings(lat, lon):
+                if building.id not in seen:
+                    seen.add(building.id)
+                    buildings.append(building)
+
+        return buildings
+
+    def _estimate_remaining_shade_pct(self, remaining, now, rem_dur, buildings):
+        if len(remaining) < 2:
+            return 100.0
+
+        sampled = self._sample_polyline(remaining, self.seg_len)
+        if len(sampled) < 2:
+            return 100.0
+
+        total_distance = 0.0
+        segment_distances = []
+        for idx in range(len(sampled) - 1):
+            seg_d = _haversine(
+                sampled[idx][1], sampled[idx][0],
+                sampled[idx + 1][1], sampled[idx + 1][0],
+            )
+            segment_distances.append(seg_d)
+            total_distance += seg_d
+
+        shaded = 0
+        total = 0
+        walked = 0.0
+        for idx, seg_d in enumerate(segment_distances):
+            mid_lon = (sampled[idx][0] + sampled[idx + 1][0]) / 2
+            mid_lat = (sampled[idx][1] + sampled[idx + 1][1]) / 2
+            t = now + timedelta(seconds=(rem_dur * ((walked + seg_d / 2) / max(total_distance, 1.0))))
+            s = self._sun(t, mid_lat, mid_lon)
+            if self._point_shaded(mid_lat, mid_lon, s, buildings):
+                shaded += 1
+            total += 1
+            walked += seg_d
+
+        return (shaded / max(total, 1)) * 100
 
     def _fetch_buildings(self, lat, lon) -> List[Building]:
         ck = f"{round(lat, 3)},{round(lon, 3)}"
         if ck in self._bldg_cache:
             return self._bldg_cache[ck]
-        url = (f"https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/"
-               f"tilequery/{lon},{lat}.json")
+
+        url = (
+            f"https://api.mapbox.com/v4/mapbox.mapbox-streets-v8/"
+            f"tilequery/{lon},{lat}.json"
+        )
         params = {
-            "radius": BUILDING_FETCH_RADIUS, "layers": "building",
-            "limit": 50, "access_token": MAPBOX_TOKEN,
+            "radius": BUILDING_FETCH_RADIUS,
+            "layers": "building",
+            "limit": 50,
+            "access_token": MAPBOX_TOKEN,
         }
         try:
-            r = http_req.get(url, params=params, timeout=10)
-            r.raise_for_status()
-            data = r.json()
+            resp = http_req.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
         except Exception:
             self._bldg_cache[ck] = []
             return []
 
-        blds: List[Building] = []
+        buildings: List[Building] = []
         for idx, feat in enumerate(data.get("features", [])):
             geom = feat.get("geometry", {})
             props = feat.get("properties", {})
             gtype = geom.get("type", "")
+
             if gtype == "Polygon":
                 ring = geom.get("coordinates", [[]])[0]
-                fp = [(c[0], c[1]) for c in ring]
-                if len(fp) < 3:
+                footprint = [(coord[0], coord[1]) for coord in ring]
+                if len(footprint) < 3:
                     continue
             elif gtype == "Point":
                 gc = geom.get("coordinates", [])
                 if len(gc) < 2:
                     continue
                 cx, cy = gc[0], gc[1]
-                s = 0.00015
-                fp = [(cx-s, cy-s), (cx+s, cy-s),
-                      (cx+s, cy+s), (cx-s, cy+s), (cx-s, cy-s)]
+                size = 0.00015
+                footprint = [
+                    (cx - size, cy - size),
+                    (cx + size, cy - size),
+                    (cx + size, cy + size),
+                    (cx - size, cy + size),
+                    (cx - size, cy - size),
+                ]
             else:
                 continue
-            h = max(1.0, float(props.get("height") or DEFAULT_BUILDING_HEIGHT)
-                    - float(props.get("min_height") or 0))
-            blds.append(Building(
-                id=f"b_{ck}_{idx}", footprint=fp,
-                height=h, name=props.get("type", "building"),
-            ))
-        self._bldg_cache[ck] = blds
-        return blds
+
+            height = max(
+                1.0,
+                float(props.get("height") or DEFAULT_BUILDING_HEIGHT)
+                - float(props.get("min_height") or 0),
+            )
+            buildings.append(
+                Building(
+                    id=f"b_{ck}_{idx}",
+                    footprint=footprint,
+                    height=height,
+                    name=props.get("type", "building"),
+                )
+            )
+
+        self._bldg_cache[ck] = buildings
+        return buildings
 
     # ── helpers ───────────────────────────────────────────────────────
 
@@ -671,31 +1182,40 @@ class ShadeRouter:
         if dt:
             return dt
         if date_str and minutes is not None:
-            d = datetime.strptime(date_str, "%Y-%m-%d")
-            return d.replace(hour=int(minutes) // 60, minute=int(minutes) % 60)
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            return date_obj.replace(
+                hour=int(minutes) // 60,
+                minute=int(minutes) % 60,
+            )
         return datetime.now()
 
     def _sun(self, dt, lat, lon) -> SunPosition:
         tz = self.TZ
         doy = dt.timetuple().tm_yday
         dec = 23.45 * math.sin(math.radians(360 / 365 * (284 + doy)))
-        B = math.radians(360 / 365 * (doy - 81))
-        EoT = 9.87 * math.sin(2*B) - 7.53 * math.cos(B) - 1.5 * math.sin(B)
-        st = dt.hour * 60 + dt.minute + EoT + 4 * (lon - tz * 15)
-        ha = st / 4 - 180
-        la, de, hr = math.radians(lat), math.radians(dec), math.radians(ha)
-        sa = (math.sin(la) * math.sin(de)
-              + math.cos(la) * math.cos(de) * math.cos(hr))
-        sa = max(-1.0, min(1.0, sa))
-        alt = math.degrees(math.asin(sa))
-        ca = (math.sin(de) - math.sin(la) * sa) / (
-            math.cos(la) * math.cos(math.asin(sa)) + 1e-10
+        b_angle = math.radians(360 / 365 * (doy - 81))
+        eot = 9.87 * math.sin(2 * b_angle) - 7.53 * math.cos(b_angle) - 1.5 * math.sin(b_angle)
+        solar_time = dt.hour * 60 + dt.minute + eot + 4 * (lon - tz * 15)
+        ha = solar_time / 4 - 180
+        lat_r = math.radians(lat)
+        dec_r = math.radians(dec)
+        ha_r = math.radians(ha)
+        sin_alt = (
+            math.sin(lat_r) * math.sin(dec_r)
+            + math.cos(lat_r) * math.cos(dec_r) * math.cos(ha_r)
         )
-        ca = max(-1.0, min(1.0, ca))
-        az = math.degrees(math.acos(ca))
+        sin_alt = max(-1.0, min(1.0, sin_alt))
+        alt = math.degrees(math.asin(sin_alt))
+        cos_az = (math.sin(dec_r) - math.sin(lat_r) * sin_alt) / (
+            math.cos(lat_r) * math.cos(math.asin(sin_alt)) + 1e-10
+        )
+        cos_az = max(-1.0, min(1.0, cos_az))
+        az = math.degrees(math.acos(cos_az))
         if ha > 0:
             az = 360 - az
         return SunPosition(
-            azimuth=az, altitude=alt,
-            zenith=90 - alt, is_daylight=alt > 0,
+            azimuth=az,
+            altitude=alt,
+            zenith=90 - alt,
+            is_daylight=alt > 0,
         )

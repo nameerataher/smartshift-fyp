@@ -1346,11 +1346,12 @@ def get_shaded_navigation_route():
 @app.route('/api/v2/shadow-route', methods=['POST'])
 def get_shadow_optimized_route():
     """
-    Shadow-optimised routing via OSM graph + A* + Yen's K-shortest.
+    Shadow-optimised routing via Tilequery road graph + A* + Yen's.
 
-    Downloads the road network from OpenStreetMap, scores every road
-    segment by sun exposure using 3D shadow projections, then finds the
-    best shaded route with A* and 2 alternatives with Yen's algorithm.
+    Fetches the road network from Mapbox vector tiles (tilequery API),
+    builds a directed graph with multi-point shadow sampling on every
+    edge, then finds shade-optimised routes with A* and alternatives
+    with Yen's K-shortest algorithm.
 
     edge_cost = distance × (1 + α × sun_exposure)
     """
