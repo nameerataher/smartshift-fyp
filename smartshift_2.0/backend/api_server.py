@@ -49,6 +49,14 @@ except ImportError:
     SHADOW_SCHEDULER_AVAILABLE = False
     print("Warning: ShadowScheduler not available")
 
+try:
+    from shadow_route_navigator import ShadowRouteNavigator
+    SHADOW_ROUTE_AVAILABLE = True
+except ImportError:
+    ShadowRouteNavigator = None
+    SHADOW_ROUTE_AVAILABLE = False
+    print("Warning: ShadowRouteNavigator not available")
+
 # weather api configuration
 import requests
 import os
@@ -1332,6 +1340,108 @@ def get_shaded_navigation_route():
             "success": False,
             "error": str(e)
         }), 400
+
+
+@app.route('/api/v2/shadow-route', methods=['POST'])
+def get_shadow_optimized_route():
+    """
+    Find shadow-optimized routes using real 3D building shadow projections.
+
+    Uses Mapbox Directions API for candidate routes, then evaluates each
+    route's shadow coverage by sampling points and checking against
+    projected building shadows at each point's estimated arrival time.
+
+    Returns up to 3 ranked alternatives scored by shade coverage and duration.
+    """
+    if not SHADOW_ROUTE_AVAILABLE or not ShadowRouteNavigator:
+        return jsonify({
+            "success": False,
+            "error": "shadow route navigator not available."
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+
+        start_lat = float(data.get('start_lat', DUBAI.LATITUDE))
+        start_lon = float(data.get('start_lon', DUBAI.LONGITUDE))
+        end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
+
+        mode = data.get('mode', 'walking')
+        if mode not in ['walking', 'cycling']:
+            mode = 'walking'
+
+        date_str = data.get('date')
+        current_minutes = data.get('current_minutes')
+        client_buildings = data.get('buildings')
+
+        navigator = ShadowRouteNavigator()
+        result = navigator.find_shadow_routes(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            mode=mode,
+            client_buildings=client_buildings,
+            date_str=date_str,
+            current_minutes=int(current_minutes) if current_minutes is not None else None,
+        )
+
+        return jsonify(result.to_dict())
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/v2/shadow-route/update', methods=['POST'])
+def update_shadow_route():
+    """
+    Real-time shadow update for a route in progress.
+
+    Called periodically as the user walks/cycles to evaluate current shadow
+    state and remaining route shade coverage. Suggests reroute if coverage
+    drops below threshold.
+    """
+    if not SHADOW_ROUTE_AVAILABLE or not ShadowRouteNavigator:
+        return jsonify({
+            "success": False,
+            "error": "shadow route navigator not available."
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+
+        route_coordinates = data.get('route_coordinates', [])
+        user_lat = float(data.get('user_lat'))
+        user_lon = float(data.get('user_lon'))
+        departure_time_str = data.get('departure_time')
+        elapsed_seconds = float(data.get('elapsed_seconds', 0))
+        mode = data.get('mode', 'walking')
+        total_duration = float(data.get('total_duration_seconds', 0))
+        client_buildings = data.get('buildings')
+
+        departure_time = datetime.fromisoformat(departure_time_str)
+
+        navigator = ShadowRouteNavigator()
+        result = navigator.update_route_shadows(
+            route_coordinates=route_coordinates,
+            user_lat=user_lat,
+            user_lon=user_lon,
+            departure_time=departure_time,
+            elapsed_seconds=elapsed_seconds,
+            mode=mode,
+            total_duration_seconds=total_duration,
+            client_buildings=client_buildings,
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route('/api/route/history', methods=['GET'])

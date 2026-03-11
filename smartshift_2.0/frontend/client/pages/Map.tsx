@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import MapboxMap, {
-  LOCATIONS, FlyToTarget, RouteToDraw, queryBuildingsFromMap, ClientBuilding,
+  LOCATIONS, FlyToTarget, RouteToDraw, AltRouteToDraw, queryBuildingsFromMap, ClientBuilding,
   SelectedBuilding, BuildingFace as MapBuildingFace, classifyFaces, closestFace,
 } from "@/components/MapboxMap";
 import mapboxgl from "mapbox-gl";
@@ -40,6 +40,9 @@ interface RouteResult {
   reason?: string;
   coordinates: [number, number][];
   selected?: boolean;
+  label?: string;
+  durationSeconds?: number;
+  departureTime?: string;
 }
 
 interface SearchSuggestion {
@@ -360,12 +363,21 @@ export default function MapPage() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const [routeToDraw, setRouteToDraw] = useState<RouteToDraw | null>(null);
+  const [altRoutesToDraw, setAltRoutesToDraw] = useState<AltRouteToDraw[] | null>(null);
+  const altRoutesKeyRef = useRef(0);
+  const [altRoutesKey, setAltRoutesKey] = useState(0);
   const [clearRouteKey, setClearRouteKey] = useState(0);
   const routeKeyRef = useRef(0);
   const clearKeyRef = useRef(0);
   const [fromCoords, setFromCoords] = useState<[number, number] | null>(null);
   const [toCoords, setToCoords] = useState<[number, number] | null>(null);
   const [selectingPoint, setSelectingPoint] = useState<"from" | "to" | null>(null);
+  const [routeUpdateInterval, setRouteUpdateInterval] = useState<number>(120);
+  const [routeNavigating, setRouteNavigating] = useState(false);
+  const [routeShadowStatus, setRouteShadowStatus] = useState<{
+    inShadow: boolean; remainingShadePct: number; rerouteSuggested: boolean; progressPct: number;
+  } | null>(null);
+  const routeStartTimeRef = useRef<number>(0);
 
   // From search
   const [fromSearch, setFromSearch] = useState("");
@@ -384,7 +396,9 @@ export default function MapPage() {
     if (val.trim().length < 2) { setSugg([]); return; }
     timeoutRef.current = setTimeout(async () => {
       try {
-        const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&limit=5&access_token=${MAPBOX_TOKEN}`);
+        const res = await fetch(
+          `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&limit=6&proximity=55.2708,25.2048&session_token=${searchSessionToken}&access_token=${MAPBOX_TOKEN}`
+        );
         const data = await res.json();
         setSugg(data.suggestions || []);
       } catch { setSugg([]); }
@@ -393,7 +407,7 @@ export default function MapPage() {
 
   const selectRouteLocation = async (s: SearchSuggestion, type: "from" | "to") => {
     try {
-      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?access_token=${MAPBOX_TOKEN}`);
+      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?session_token=${searchSessionToken}&access_token=${MAPBOX_TOKEN}`);
       const data = await res.json();
       const coords = data.features?.[0]?.geometry?.coordinates as [number, number] | undefined;
       const label = s.full_address || s.place_formatted || s.name;
@@ -476,35 +490,15 @@ export default function MapPage() {
     setRouteResult(null);
     setAlternativeRoutes([]);
     setSelectedRouteIdx(0);
+    setAltRoutesToDraw(null);
+    setRouteNavigating(false);
+    setRouteShadowStatus(null);
     clearKeyRef.current += 1;
     setClearRouteKey(clearKeyRef.current);
   };
 
   const [alternativeRoutes, setAlternativeRoutes] = useState<RouteResult[]>([]);
   const [selectedRouteIdx, setSelectedRouteIdx] = useState(0);
-
-  const computeRouteShade = (
-    coords: [number, number][],
-    durationSec: number,
-    startMinutes: number,
-    curDate: string
-  ) => {
-    const sampleCount = Math.min(coords.length, 20);
-    const step = Math.max(1, Math.floor(coords.length / sampleCount));
-    let totalShade = 0;
-    let samples = 0;
-
-    for (let i = 0; i < coords.length; i += step) {
-      const progress = i / coords.length;
-      const elapsedMin = Math.round(progress * (durationSec / 60));
-      const sampleMinutes = startMinutes + elapsedMin;
-      const d = new Date(curDate);
-      const sp = calculateSunPosition(d, Math.floor(sampleMinutes / 60) % 24, sampleMinutes % 60);
-      totalShade += calculateShadowCoverage(sp.altitude);
-      samples++;
-    }
-    return samples > 0 ? Math.round(totalShade / samples) : 0;
-  };
 
   const findRoute = async () => {
     if (!fromCoords || !toCoords) {
@@ -514,70 +508,63 @@ export default function MapPage() {
     setRouteLoading(true);
     setAlternativeRoutes([]);
     setSelectedRouteIdx(0);
+    setRouteNavigating(false);
+    setRouteShadowStatus(null);
     try {
       const curDate = dateStr || new Date().toISOString().split("T")[0];
 
-      const profile = travelMode === "cycling" ? "cycling" : "walking";
-      const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${fromCoords[0]},${fromCoords[1]};${toCoords[0]},${toCoords[1]}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`;
-
-      const res = await fetch(directionsUrl);
-      const data = await res.json();
-
-      if (!data.routes || data.routes.length === 0) throw new Error("No route found");
-
-      const routes: RouteResult[] = data.routes.slice(0, 3).map((route: any) => {
-        const distanceKm = (route.distance / 1000).toFixed(1);
-        const durationMin = Math.round(route.duration / 60);
-        const coords = route.geometry.coordinates as [number, number][];
-
-        const shadePct = computeRouteShade(coords, route.duration, currentMinutes, curDate);
-        const score = Math.round(shadePct * 0.85 + Math.max(0, 100 - durationMin) * 0.15);
-
-        return {
-          distanceKm,
-          durationMin,
-          shadePct,
-          score,
-          riskLevel: shadePct >= 60 ? "LOW" : shadePct >= 30 ? "MEDIUM" : "HIGH",
-          riskColor: shadePct >= 60 ? "#22c55e" : shadePct >= 30 ? "#f59e0b" : "#ef4444",
-          sunExposure: Math.round(durationMin * (1 - shadePct / 100)),
-          coordinates: coords,
-          reason: `${distanceKm} km via ${profile} · ${shadePct}% avg shade along path`,
-        };
-      });
-
-      routes.sort((a, b) => b.score - a.score);
-
-      if (routes.length < 3) {
-        const base = data.routes[0];
-        const baseCoords = base.geometry.coordinates as [number, number][];
-        while (routes.length < 3) {
-          const variant = routes.length;
-          const offsetCoords = baseCoords.map((c: [number, number], idx: number) => {
-            const mid = baseCoords.length / 2;
-            const dist = 1 - Math.abs(idx - mid) / mid;
-            const offset = dist * 0.0008 * (variant === 1 ? 1 : -1);
-            return [c[0] + offset, c[1] + offset * 0.7] as [number, number];
-          });
-          const extraDuration = base.duration * (1 + variant * 0.15);
-          const extraDist = base.distance * (1 + variant * 0.12);
-          const extraShade = computeRouteShade(offsetCoords, extraDuration, currentMinutes, curDate);
-          const extraScore = Math.round(extraShade * 0.85 + Math.max(0, 100 - Math.round(extraDuration / 60)) * 0.15);
-          routes.push({
-            distanceKm: (extraDist / 1000).toFixed(1),
-            durationMin: Math.round(extraDuration / 60),
-            shadePct: extraShade,
-            score: extraScore,
-            riskLevel: extraShade >= 60 ? "LOW" : extraShade >= 30 ? "MEDIUM" : "HIGH",
-            riskColor: extraShade >= 60 ? "#22c55e" : extraShade >= 30 ? "#f59e0b" : "#ef4444",
-            sunExposure: Math.round(Math.round(extraDuration / 60) * (1 - extraShade / 100)),
-            coordinates: offsetCoords,
-            reason: `${(extraDist / 1000).toFixed(1)} km alt route · ${extraShade}% avg shade`,
-          });
+      const midLat = (fromCoords[1] + toCoords[1]) / 2;
+      const midLon = (fromCoords[0] + toCoords[0]) / 2;
+      const buildings = getClientBuildings(midLat, midLon);
+      const fromBuildings = getClientBuildings(fromCoords[1], fromCoords[0]);
+      const toBuildings = getClientBuildings(toCoords[1], toCoords[0]);
+      const allBuildingIds = new Set<string>();
+      const allBuildings: ClientBuilding[] = [];
+      for (const b of [...buildings, ...fromBuildings, ...toBuildings]) {
+        if (!allBuildingIds.has(b.id)) {
+          allBuildingIds.add(b.id);
+          allBuildings.push(b);
         }
-        routes.sort((a, b) => b.score - a.score);
       }
 
+      const res = await fetch(`${API_BASE}/api/v2/shadow-route`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start_lat: fromCoords[1],
+          start_lon: fromCoords[0],
+          end_lat: toCoords[1],
+          end_lon: toCoords[0],
+          mode: travelMode,
+          date: curDate,
+          current_minutes: currentMinutes,
+          buildings: allBuildings.map((b) => ({
+            id: b.id, footprint: b.footprint, height: b.height, name: b.name,
+          })),
+        }),
+      });
+      const data = await res.json();
+
+      if (!data.success || !data.routes?.length) {
+        throw new Error(data.error || "No routes found");
+      }
+
+      const routes: RouteResult[] = data.routes.map((r: any) => ({
+        distanceKm: String(r.distance_km),
+        durationMin: r.duration_minutes,
+        durationSeconds: r.duration_seconds,
+        shadePct: Math.round(r.shade_coverage_pct),
+        score: Math.round(r.final_score),
+        riskLevel: r.risk_level,
+        riskColor: r.risk_color,
+        sunExposure: Math.round(r.sun_exposure_minutes),
+        coordinates: r.geometry.coordinates as [number, number][],
+        reason: r.reason,
+        label: r.label,
+        departureTime: data.departure_time,
+      }));
+
+      setRouteUpdateInterval(data.update_interval_seconds || 120);
       setAlternativeRoutes(routes);
       setSelectedRouteIdx(0);
       setRouteResult(routes[0]);
@@ -587,7 +574,19 @@ export default function MapPage() {
         setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current });
       }
 
-      toast.success(`Found ${routes.length} routes – best has ${routes[0].shadePct}% shade`);
+      const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
+      altRoutesKeyRef.current += 1;
+      setAltRoutesToDraw(
+        routes.map((r, idx) => ({
+          coordinates: r.coordinates,
+          color: routeColors[idx] || "#94a3b8",
+          active: idx === 0,
+          routeId: idx,
+        }))
+      );
+      setAltRoutesKey(altRoutesKeyRef.current);
+
+      toast.success(`Found ${routes.length} shadow-analyzed routes – best has ${routes[0].shadePct}% real shade`);
     } catch (err) {
       toast.error(`Route error: ${(err as Error).message}`);
     }
@@ -603,6 +602,86 @@ export default function MapPage() {
       routeKeyRef.current += 1;
       setRouteToDraw({ coordinates: route.coordinates, travelMode, key: routeKeyRef.current });
     }
+    const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
+    altRoutesKeyRef.current += 1;
+    setAltRoutesToDraw(
+      alternativeRoutes.map((r, i) => ({
+        coordinates: r.coordinates,
+        color: routeColors[i] || "#94a3b8",
+        active: i === idx,
+        routeId: i,
+      }))
+    );
+    setAltRoutesKey(altRoutesKeyRef.current);
+  };
+
+  // Real-time shadow polling along navigating route
+  useEffect(() => {
+    if (!routeNavigating || !routeResult?.coordinates?.length || !routeResult.departureTime) return;
+
+    const interval = setInterval(async () => {
+      const elapsed = (Date.now() - routeStartTimeRef.current) / 1000;
+      const totalDur = routeResult.durationSeconds || routeResult.durationMin * 60;
+      if (elapsed >= totalDur) {
+        setRouteNavigating(false);
+        setRouteShadowStatus(null);
+        return;
+      }
+
+      const progress = elapsed / totalDur;
+      const coordIdx = Math.min(
+        Math.floor(progress * routeResult.coordinates.length),
+        routeResult.coordinates.length - 1,
+      );
+      const userLon = routeResult.coordinates[coordIdx][0];
+      const userLat = routeResult.coordinates[coordIdx][1];
+
+      try {
+        const buildings = getClientBuildings(userLat, userLon);
+        const res = await fetch(`${API_BASE}/api/v2/shadow-route/update`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            route_coordinates: routeResult.coordinates,
+            user_lat: userLat,
+            user_lon: userLon,
+            departure_time: routeResult.departureTime,
+            elapsed_seconds: elapsed,
+            mode: travelMode,
+            total_duration_seconds: totalDur,
+            buildings: buildings.map((b) => ({
+              id: b.id, footprint: b.footprint, height: b.height, name: b.name,
+            })),
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          setRouteShadowStatus({
+            inShadow: data.current_in_shadow,
+            remainingShadePct: data.remaining_shade_pct,
+            rerouteSuggested: data.reroute_suggested,
+            progressPct: data.progress_pct,
+          });
+          if (data.reroute_suggested) {
+            toast.info("Shadow coverage dropping – consider rerouting", { id: "reroute-hint" });
+          }
+        }
+      } catch {}
+    }, routeUpdateInterval * 1000);
+
+    return () => clearInterval(interval);
+  }, [routeNavigating, routeResult, routeUpdateInterval, travelMode, getClientBuildings]);
+
+  const startNavigation = () => {
+    if (!routeResult) return;
+    routeStartTimeRef.current = Date.now();
+    setRouteNavigating(true);
+    toast.success("Navigation started – shadow updates active");
+  };
+
+  const stopNavigation = () => {
+    setRouteNavigating(false);
+    setRouteShadowStatus(null);
   };
 
   // Open site popup on new task
@@ -831,7 +910,7 @@ export default function MapPage() {
       <div className="flex-1 flex min-h-0">
         <div className="flex-1 relative min-h-0">
           <MapboxMap currentMinutes={currentMinutes} dateStr={dateStr} flyTo={flyToTarget}
-            routeToDraw={routeToDraw} clearRouteKey={clearRouteKey}
+            routeToDraw={routeToDraw} altRoutes={altRoutesToDraw} altRoutesKey={altRoutesKey} clearRouteKey={clearRouteKey}
             selectingPoint={mode === "commercial" && isSelectingSite && analysisMode !== "facade" ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
             onPointSelected={handlePointSelected}
             onMapReady={undefined}
@@ -1077,7 +1156,7 @@ export default function MapPage() {
             </div>
           ) : (
             <div className="px-4 py-3 border-b border-border/40">
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Shade-Optimized Route</h2>
+              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Shadow-Optimized Route</h2>
               <div className="space-y-2 mb-3">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0" />
@@ -1087,7 +1166,8 @@ export default function MapPage() {
                       className="w-full px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60 text-xs pr-16" />
                     <div className="absolute right-1 top-0.5 flex gap-0.5">
                       <button onClick={() => setSelectingPoint(selectingPoint === "from" ? null : "from")}
-                        className={cn("p-1 rounded text-xs", selectingPoint === "from" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}>
+                        className={cn("p-1 rounded text-xs", selectingPoint === "from" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}
+                        title="Pick on map">
                         <MapPin className="w-3.5 h-3.5" />
                       </button>
                       <button onClick={() => {
@@ -1098,16 +1178,17 @@ export default function MapPage() {
                             flyToCoords([pos.coords.longitude, pos.coords.latitude]);
                           });
                         }
-                      }} className="p-1 rounded text-muted-foreground hover:text-foreground">
+                      }} className="p-1 rounded text-muted-foreground hover:text-foreground" title="Use current location">
                         <Locate className="w-3.5 h-3.5" />
                       </button>
                     </div>
                     {fromSuggestions.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-xl z-50 max-h-40 overflow-y-auto">
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-card/95 backdrop-blur border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
                         {fromSuggestions.map((s) => (
                           <button key={s.mapbox_id} onClick={() => selectRouteLocation(s, "from")}
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted border-b last:border-0">
-                            {s.name}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-muted/60 border-b border-border/40 last:border-0">
+                            <div className="font-medium">{s.name}</div>
+                            {s.full_address && <div className="text-[10px] text-muted-foreground truncate">{s.full_address}</div>}
                           </button>
                         ))}
                       </div>
@@ -1122,15 +1203,17 @@ export default function MapPage() {
                       className="w-full px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60 text-xs pr-10" />
                     <button onClick={() => setSelectingPoint(selectingPoint === "to" ? null : "to")}
                       className={cn("absolute right-1 top-0.5 p-1 rounded text-xs",
-                        selectingPoint === "to" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}>
+                        selectingPoint === "to" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}
+                      title="Pick on map">
                       <MapPin className="w-3.5 h-3.5" />
                     </button>
                     {toSuggestions.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-lg shadow-xl z-50 max-h-40 overflow-y-auto">
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-card/95 backdrop-blur border border-border rounded-lg shadow-xl z-50 max-h-48 overflow-y-auto">
                         {toSuggestions.map((s) => (
                           <button key={s.mapbox_id} onClick={() => selectRouteLocation(s, "to")}
-                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted border-b last:border-0">
-                            {s.name}
+                            className="w-full text-left px-3 py-2 text-xs hover:bg-muted/60 border-b border-border/40 last:border-0">
+                            <div className="font-medium">{s.name}</div>
+                            {s.full_address && <div className="text-[10px] text-muted-foreground truncate">{s.full_address}</div>}
                           </button>
                         ))}
                       </div>
@@ -1150,27 +1233,71 @@ export default function MapPage() {
               </div>
               <div className="grid grid-cols-2 gap-1.5">
                 <button onClick={findRoute} disabled={routeLoading}
-                  className="py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50">
-                  {routeLoading ? "Finding..." : "Find Route"}
+                  className="py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  {routeLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing shadows...</> : "Find Route"}
                 </button>
                 <button onClick={clearRoute}
                   className="py-2 rounded-lg border border-border/60 bg-background/60 text-sm font-medium flex items-center justify-center gap-1">
                   <RotateCcw className="w-3.5 h-3.5" /> Clear
                 </button>
               </div>
+
+              {/* Real-time navigation status */}
+              {routeNavigating && routeShadowStatus && (
+                <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Live Shadow Tracking</span>
+                    <button onClick={stopNavigation} className="text-[10px] text-red-500 font-medium hover:underline">Stop</button>
+                  </div>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <div className={cn("w-3 h-3 rounded-full animate-pulse", routeShadowStatus.inShadow ? "bg-green-500" : "bg-amber-500")} />
+                    <span className="text-xs font-medium">{routeShadowStatus.inShadow ? "Currently in shade" : "Currently in sun"}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-[11px]">
+                    <div>
+                      <span className="text-muted-foreground">Remaining shade:</span>
+                      <span className={cn("ml-1 font-semibold", routeShadowStatus.remainingShadePct >= 50 ? "text-green-600" : "text-amber-600")}>
+                        {routeShadowStatus.remainingShadePct}%
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Progress:</span>
+                      <span className="ml-1 font-semibold">{Math.round(routeShadowStatus.progressPct)}%</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-border/40 rounded-full h-1.5 mt-2">
+                    <div className="bg-primary rounded-full h-1.5 transition-all" style={{ width: `${routeShadowStatus.progressPct}%` }} />
+                  </div>
+                  {routeShadowStatus.rerouteSuggested && (
+                    <button onClick={() => { stopNavigation(); findRoute(); }}
+                      className="mt-2 w-full py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 text-xs font-semibold hover:bg-amber-500/25">
+                      Shadow coverage low – Tap to reroute
+                    </button>
+                  )}
+                </div>
+              )}
+
               {alternativeRoutes.length > 0 && (
                 <div className="mt-3 space-y-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                    {alternativeRoutes.length} Routes · Sorted by Shade
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      {alternativeRoutes.length} Routes · Shadow-Ranked
+                    </p>
+                    {routeResult && !routeNavigating && (
+                      <button onClick={startNavigation}
+                        className="text-[10px] px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 text-green-700 font-semibold hover:bg-green-500/25 flex items-center gap-1">
+                        <Navigation className="w-3 h-3" /> Start Nav
+                      </button>
+                    )}
+                  </div>
                   {alternativeRoutes.map((route, idx) => {
                     const isActive = idx === selectedRouteIdx;
-                    const labels = ["Best Shade", "Alternative", "Shortest"];
-                    const labelColors = [
-                      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-                      "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-                      "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-                    ];
+                    const labelColors: Record<string, string> = {
+                      "Best Shade": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+                      "Balanced": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                      "Shortest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+                    };
+                    const dotColors = ["bg-green-500", "bg-blue-500", "bg-amber-500"];
                     return (
                       <button key={idx} onClick={() => selectRoute(idx)}
                         className={cn(
@@ -1181,9 +1308,11 @@ export default function MapPage() {
                         )}>
                         <div className="flex items-center justify-between mb-1">
                           <div className="flex items-center gap-2">
+                            <div className={cn("w-2 h-2 rounded-full", dotColors[idx] || "bg-gray-400")} />
                             <span className="text-xs font-semibold text-foreground">Route {idx + 1}</span>
-                            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", labelColors[idx] || labelColors[2])}>
-                              {labels[idx] || `Option ${idx + 1}`}
+                            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                              labelColors[route.label || ""] || "bg-gray-100 text-gray-700")}>
+                              {route.label || `Option ${idx + 1}`}
                             </span>
                           </div>
                           <span className="text-sm font-bold" style={{ color: route.riskColor }}>
@@ -1196,6 +1325,9 @@ export default function MapPage() {
                         <div className="text-[10px] text-muted-foreground mt-0.5">
                           Sun exposure: ~{route.sunExposure} min · Risk: <span style={{ color: route.riskColor }}>{route.riskLevel}</span>
                         </div>
+                        {route.reason && (
+                          <p className="text-[10px] text-muted-foreground/70 mt-1 italic leading-tight">{route.reason}</p>
+                        )}
                       </button>
                     );
                   })}

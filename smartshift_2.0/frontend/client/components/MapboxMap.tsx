@@ -50,6 +50,13 @@ export interface RouteToDraw {
   key: number; // increment to trigger
 }
 
+export interface AltRouteToDraw {
+  coordinates: [number, number][];
+  color: string;
+  active: boolean;
+  routeId: number;
+}
+
 export interface SelectedBuilding {
   footprint: [number, number][];
   height: number;
@@ -160,6 +167,8 @@ export interface MapboxMapProps {
   dateStr: string;
   flyTo?: FlyToTarget | null;
   routeToDraw?: RouteToDraw | null;
+  altRoutes?: AltRouteToDraw[] | null;
+  altRoutesKey?: number;
   clearRouteKey?: number;
   selectingPoint?: "from" | "to" | null;
   onPointSelected?: (lat: number, lng: number, which: "from" | "to") => void;
@@ -301,6 +310,8 @@ export default function MapboxMap({
   dateStr,
   flyTo,
   routeToDraw,
+  altRoutes,
+  altRoutesKey,
   clearRouteKey,
   selectingPoint,
   onPointSelected,
@@ -350,6 +361,7 @@ export default function MapboxMap({
   const prevFlyKeyRef = useRef<number | null>(null);
   const prevRouteKeyRef = useRef<number | null>(null);
   const prevClearKeyRef = useRef<number | undefined>(undefined);
+  const prevAltRoutesKeyRef = useRef<number | undefined>(undefined);
 
   // ── Lighting helper ──────────────────────────────────────────────────────
   const applyLighting = useCallback((sp: SunPosition) => {
@@ -608,6 +620,44 @@ export default function MapboxMap({
     map.fitBounds(bounds, { padding: 60 });
   }, [routeToDraw]);
 
+  // ── Draw alternative routes ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!altRoutes || !mapRef.current) return;
+    if (altRoutesKey === prevAltRoutesKeyRef.current) return;
+    prevAltRoutesKeyRef.current = altRoutesKey;
+    const map = mapRef.current;
+
+    for (let i = 0; i < 5; i++) {
+      try {
+        if (map.getSource(`alt-route-${i}`)) {
+          map.removeLayer(`alt-route-line-${i}`);
+          map.removeSource(`alt-route-${i}`);
+        }
+      } catch {}
+    }
+
+    altRoutes.forEach((route, idx) => {
+      if (route.coordinates.length < 2 || route.active) return;
+      const srcId = `alt-route-${idx}`;
+      map.addSource(srcId, {
+        type: "geojson",
+        data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: route.coordinates } },
+      });
+      map.addLayer({
+        id: `alt-route-line-${idx}`,
+        type: "line",
+        source: srcId,
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": route.color,
+          "line-width": 4,
+          "line-opacity": 0.4,
+          "line-dasharray": [2, 2],
+        },
+      });
+    });
+  }, [altRoutes, altRoutesKey]);
+
   // ── Clear route ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (clearRouteKey === undefined || clearRouteKey === prevClearKeyRef.current) return;
@@ -620,6 +670,14 @@ export default function MapboxMap({
         map.removeSource("shaded-route");
       }
     } catch {}
+    for (let i = 0; i < 5; i++) {
+      try {
+        if (map.getSource(`alt-route-${i}`)) {
+          map.removeLayer(`alt-route-line-${i}`);
+          map.removeSource(`alt-route-${i}`);
+        }
+      } catch {}
+    }
   }, [clearRouteKey]);
 
   // ── From marker ──────────────────────────────────────────────────────────
