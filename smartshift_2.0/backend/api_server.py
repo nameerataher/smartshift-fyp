@@ -50,12 +50,13 @@ except ImportError:
     print("Warning: ShadowScheduler not available")
 
 try:
-    from shadow_route_navigator import ShadowRouteNavigator
-    SHADOW_ROUTE_AVAILABLE = True
-except ImportError:
-    ShadowRouteNavigator = None
-    SHADOW_ROUTE_AVAILABLE = False
-    print("Warning: ShadowRouteNavigator not available")
+    from shade_router import ShadeRouter
+    SHADE_ROUTER_AVAILABLE = True
+except ImportError as _e:
+    ShadeRouter = None
+    SHADE_ROUTER_AVAILABLE = False
+    print(f"Warning: ShadeRouter not available ({_e}). "
+          "Install: pip install networkx")
 
 # weather api configuration
 import requests
@@ -1345,18 +1346,19 @@ def get_shaded_navigation_route():
 @app.route('/api/v2/shadow-route', methods=['POST'])
 def get_shadow_optimized_route():
     """
-    Find shadow-optimized routes using real 3D building shadow projections.
+    Shadow-optimised routing via OSM graph + A* + Yen's K-shortest.
 
-    Uses Mapbox Directions API for candidate routes, then evaluates each
-    route's shadow coverage by sampling points and checking against
-    projected building shadows at each point's estimated arrival time.
+    Downloads the road network from OpenStreetMap, scores every road
+    segment by sun exposure using 3D shadow projections, then finds the
+    best shaded route with A* and 2 alternatives with Yen's algorithm.
 
-    Returns up to 3 ranked alternatives scored by shade coverage and duration.
+    edge_cost = distance × (1 + α × sun_exposure)
     """
-    if not SHADOW_ROUTE_AVAILABLE or not ShadowRouteNavigator:
+    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
         return jsonify({
             "success": False,
-            "error": "shadow route navigator not available."
+            "error": ("ShadeRouter not available. "
+                      "Install: pip install networkx")
         }), 503
 
     try:
@@ -1375,8 +1377,8 @@ def get_shadow_optimized_route():
         current_minutes = data.get('current_minutes')
         client_buildings = data.get('buildings')
 
-        navigator = ShadowRouteNavigator()
-        result = navigator.find_shadow_routes(
+        router = ShadeRouter()
+        result = router.find_routes(
             start_lat=start_lat,
             start_lon=start_lon,
             end_lat=end_lat,
@@ -1384,10 +1386,11 @@ def get_shadow_optimized_route():
             mode=mode,
             client_buildings=client_buildings,
             date_str=date_str,
-            current_minutes=int(current_minutes) if current_minutes is not None else None,
+            current_minutes=(int(current_minutes)
+                             if current_minutes is not None else None),
         )
 
-        return jsonify(result.to_dict())
+        return jsonify(result)
 
     except Exception as e:
         import traceback
@@ -1400,14 +1403,13 @@ def update_shadow_route():
     """
     Real-time shadow update for a route in progress.
 
-    Called periodically as the user walks/cycles to evaluate current shadow
-    state and remaining route shade coverage. Suggests reroute if coverage
-    drops below threshold.
+    Evaluates current shadow state at the user's position and remaining
+    route shade coverage.  Suggests reroute if coverage drops below 25 %.
     """
-    if not SHADOW_ROUTE_AVAILABLE or not ShadowRouteNavigator:
+    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
         return jsonify({
             "success": False,
-            "error": "shadow route navigator not available."
+            "error": "ShadeRouter not available."
         }), 503
 
     try:
@@ -1424,8 +1426,8 @@ def update_shadow_route():
 
         departure_time = datetime.fromisoformat(departure_time_str)
 
-        navigator = ShadowRouteNavigator()
-        result = navigator.update_route_shadows(
+        router = ShadeRouter()
+        result = router.update_route_shadows(
             route_coordinates=route_coordinates,
             user_lat=user_lat,
             user_lon=user_lon,
