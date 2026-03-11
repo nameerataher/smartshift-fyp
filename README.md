@@ -10,7 +10,7 @@ Key Features
 - Heat Risk Model: A Simulation-Based Supervised Classification Model using RandomForestClassifier to predict localized heat risk at a given place & time by fetching accurate data upto 7 days through Open-Meteo's official SDK.
 - TODO: Intelligent Scheduling & Routing Engine: Optimizes worker schedules and pedestrian routes to align with shaded intervals and areas.
 - TODO: Real-Time Heat Alerts: Issues automatic warnings when conditions exceed safe exposure thresholds.
-- TODO: Dashboard Visualization: Interactive UI for monitoring shadows and worker routes.
+- Dashboard Visualization: Interactive UI for monitoring analytics.
 
 System Architecture (Tentative) 
 - Data Input Layer:
