@@ -16,6 +16,7 @@ import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
 import { ThemeSelect } from "@/components/ThemeSelect";
+import ShadowDensityOverlay from "@/components/ShadowDensityOverlay";
 import {
   calculateSunPosition,
   formatTime,
@@ -304,6 +305,7 @@ export default function MapPage() {
   const [mapBearing, setMapBearing] = useState<number>(0);
   const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
   const [debugShadowInfo, setDebugShadowInfo] = useState<string | null>(null);
+  const [showDensityOverlay, setShowDensityOverlay] = useState(false);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
 
   const getClientBuildings = useCallback((lat: number, lon: number): ClientBuilding[] => {
@@ -984,6 +986,13 @@ export default function MapPage() {
             selectedFaceDirection={analysisMode === "facade" ? buildingFace as "N" | "E" | "S" | "W" : null}
           />
 
+          <ShadowDensityOverlay
+            map={mapInstanceRef.current}
+            dateStr={dateStr}
+            currentMinutes={currentMinutes}
+            visible={showDensityOverlay}
+          />
+
           {/* Floating time card */}
           <div className="absolute top-4 left-4 z-20 w-[310px] rounded-2xl border border-white/20 bg-background/45 backdrop-blur-xl shadow-2xl p-3">
             <div className="flex items-baseline justify-between mb-2">
@@ -1453,6 +1462,17 @@ export default function MapPage() {
                 </button>
               )}
             </div>
+            <button
+              onClick={() => setShowDensityOverlay((v) => !v)}
+              className={cn(
+                "w-full mt-1.5 py-1.5 rounded-lg border text-[10px] font-medium transition-colors",
+                showDensityOverlay
+                  ? "border-indigo-500/60 bg-indigo-500/20 text-indigo-500"
+                  : "border-indigo-400/40 bg-indigo-500/10 text-indigo-600 hover:bg-indigo-500/20"
+              )}
+            >
+              {showDensityOverlay ? "Hide" : "Show"} Shadow Density Map
+            </button>
             {debugShadowInfo && (
               <div className="mt-1 space-y-0.5">
                 <p className="text-[9px] text-slate-400 leading-tight">{debugShadowInfo}</p>

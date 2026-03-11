@@ -521,6 +521,68 @@ def get_shadow_at_point():
     })
 
 
+@app.route('/api/shadow-density', methods=['POST'])
+def get_shadow_density():
+    """
+    Compute a grid-based shadow density map for a bounding box.
+
+    POST body:
+        bbox: { min_lat, max_lat, min_lon, max_lon }
+        grid_size_meters: float (default 20)
+        date: YYYY-MM-DD (optional)
+        time: HH:MM (optional)
+        buildings: [ { id, footprint, height, name } ] (optional)
+
+    Returns:
+        GeoJSON FeatureCollection of rectangular cells with shadow_pct property.
+    """
+    try:
+        from shadow_density import ShadowDensityCalculator
+        from shadow_scheduler import parse_client_buildings
+    except ImportError as e:
+        return jsonify({"success": False, "error": f"Module not available: {e}"}), 500
+
+    try:
+        data = request.get_json()
+        bbox = data.get("bbox", {})
+        required = ("min_lat", "max_lat", "min_lon", "max_lon")
+        if not all(k in bbox for k in required):
+            return jsonify({"success": False, "error": f"bbox must include {required}"}), 400
+
+        bbox = {k: float(bbox[k]) for k in required}
+        grid_size = float(data.get("grid_size_meters", 20))
+
+        date_str = data.get("date")
+        time_str = data.get("time")
+        dt = parse_datetime_param(date_str, time_str)
+
+        client_buildings = None
+        if data.get("buildings"):
+            client_buildings = parse_client_buildings(data["buildings"])
+
+        calc = ShadowDensityCalculator()
+        result = calc.compute_density_grid(
+            bbox=bbox,
+            dt=dt,
+            grid_size_m=grid_size,
+            client_buildings=client_buildings,
+        )
+
+        return jsonify({
+            "success": True,
+            "grid": result,
+            "metadata": result.get("metadata", {}),
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }), 500
+
+
 # global cache for 7-day hourly forecast
 weather_forecast_cache = {
     "data": None,
