@@ -41,7 +41,7 @@ const STATUS_COLORS: Record<string, { bg: string; text: string; label: string }>
 
 export default function Tasks() {
   const navigate = useNavigate();
-  const { mode } = useMode();
+  const { mode, isPersonalUser } = useMode();
   const { user } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -65,8 +65,8 @@ export default function Tasks() {
 
   useEffect(() => { fetchTasks(); }, [user]);
 
-  // Redirect personal mode away from tasks
-  if (mode === "personal") {
+  // Redirect personal users away from tasks (commercial-only)
+  if (isPersonalUser) {
     navigate("/map");
     return null;
   }

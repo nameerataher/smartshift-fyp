@@ -215,14 +215,14 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
 export default function MapPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const { mode, setMode } = useMode();
+  const { mode, setMode, isPersonalUser } = useMode();
   const { user } = useAuth();
   const { minutes: initMinutes, dateStr: initDate } = getDubaiNow();
 
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { path: "/map", label: mode === "commercial" ? "Task Map" : "Route Map", icon: Map },
-    ...(mode === "commercial" ? [{ path: "/tasks", label: "Tasks", icon: CheckSquare }] : []),
+    { path: "/map", label: isPersonalUser || mode === "personal" ? "Route Map" : "Task Map", icon: Map },
+    ...(!isPersonalUser && mode === "commercial" ? [{ path: "/tasks", label: "Tasks", icon: CheckSquare }] : []),
     { path: "/settings", label: "Settings", icon: Settings },
   ];
 
@@ -912,14 +912,16 @@ export default function MapPage() {
               </div>
               <span className="text-xl font-bold text-foreground hidden sm:block">SmartShift</span>
             </Link>
-            <div className="hidden sm:flex items-center gap-2 bg-muted rounded-lg p-1">
-              <button onClick={() => setMode("commercial")} className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5", mode === "commercial" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-                <Briefcase className="w-4 h-4" /><span className="hidden lg:inline">Commercial</span>
-              </button>
-              <button onClick={() => setMode("personal")} className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5", mode === "personal" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
-                <Navigation className="w-4 h-4" /><span className="hidden lg:inline">Personal</span>
-              </button>
-            </div>
+            {!isPersonalUser && (
+              <div className="hidden sm:flex items-center gap-2 bg-muted rounded-lg p-1">
+                <button onClick={() => setMode("commercial")} className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5", mode === "commercial" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <Briefcase className="w-4 h-4" /><span className="hidden lg:inline">Commercial</span>
+                </button>
+                <button onClick={() => setMode("personal")} className={cn("px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5", mode === "personal" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+                  <Navigation className="w-4 h-4" /><span className="hidden lg:inline">Personal</span>
+                </button>
+              </div>
+            )}
             <nav className="flex items-center gap-1">
               {navItems.map(({ path, label, icon: Icon }) => (
                 <Link key={path} to={path} className={cn("flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200", location.pathname === path ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted")}>

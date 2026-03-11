@@ -13,7 +13,7 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import Dashboard from "./pages/Dashboard";
 import Map from "./pages/Map";
-import Tasks from "./pages/Tasks";
+import { TasksGuard } from "./components/TasksGuard";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 
@@ -33,7 +33,7 @@ const App = () => (
               <Route path="/register" element={<Login />} />
               <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/map" element={<Map />} />
-              <Route path="/tasks" element={<Tasks />} />
+              <Route path="/tasks" element={<TasksGuard />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<NotFound />} />
             </Routes>

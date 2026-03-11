@@ -63,9 +63,14 @@ export default function Index() {
                   <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Dashboard</Button>
                 </Link>
               ) : (
-                <Link to="/login">
-                  <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Start</Button>
-                </Link>
+                <>
+                  <Link to="/login">
+                    <Button size="sm" variant="outline">Sign In</Button>
+                  </Link>
+                  <Link to="/register">
+                    <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Get Started</Button>
+                  </Link>
+                </>
               )}
             </div>
           </div>
@@ -294,7 +299,7 @@ export default function Index() {
                   </li>
                 ))}
               </ul>
-              <Link to="/map" onClick={handlePersonalClick}>
+              <Link to="/register">
                 <Button variant="outline" className="w-full">Get Started</Button>
               </Link>
             </div>
@@ -304,7 +309,7 @@ export default function Index() {
               </div>
               <h3 className="text-xl font-bold text-foreground mb-1">Commercial</h3>
               <p className="text-sm text-muted-foreground mb-4">For teams & businesses</p>
-              <div className="text-4xl font-bold text-primary mb-1">$49</div>
+              <div className="text-4xl font-bold text-primary mb-1">$29</div>
               <p className="text-sm text-muted-foreground mb-6">per month</p>
               <ul className="space-y-3 mb-8 flex-1">
                 {["Everything in Personal", "Task scheduling & analytics", "Team management dashboard", "Polygon area analysis",

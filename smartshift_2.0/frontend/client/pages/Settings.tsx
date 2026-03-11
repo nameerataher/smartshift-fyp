@@ -25,10 +25,11 @@ const SECTIONS = [
 ];
 
 export default function SettingsPage() {
-  const { mode, setMode } = useMode();
+  const { mode, setMode, isPersonalUser } = useMode();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const [activeSection, setActiveSection] = useState("mode");
+  const visibleSections = SECTIONS.filter((s) => !(isPersonalUser && s.id === "mode"));
+  const [activeSection, setActiveSection] = useState(visibleSections[0]?.id ?? "notifications");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const [settings, setSettings] = useState<Setting[]>([
@@ -58,11 +59,14 @@ export default function SettingsPage() {
     alert("Settings saved!");
   };
 
-  const isPersonalUser = user?.user_type === "personal";
+  const displaySettings = isPersonalUser
+    ? settings.filter((s) => !["shift-reminders", "organization"].includes(s.id))
+    : settings;
 
   const renderSection = () => {
     switch (activeSection) {
       case "mode":
+        if (isPersonalUser) return null;
         return (
           <div className="bg-card border border-border rounded-2xl p-6 shadow-sm">
             <div className="flex items-center gap-3 mb-6">
@@ -71,16 +75,13 @@ export default function SettingsPage() {
             </div>
             <p className="text-sm text-muted-foreground mb-4">
               Switch between Commercial (task management for teams) and Personal (route navigation for individuals).
-              {isPersonalUser && <span className="text-amber-600 ml-1">Commercial mode requires a commercial account.</span>}
             </p>
             <div className="grid grid-cols-2 gap-3">
               <button
-                onClick={() => !isPersonalUser && setMode("commercial")}
-                disabled={isPersonalUser}
+                onClick={() => setMode("commercial")}
                 className={cn(
                   "flex items-center justify-center gap-2 p-4 rounded-xl border-2 transition-all",
-                  mode === "commercial" ? "bg-primary/10 border-primary text-primary" : "bg-background border-border text-muted-foreground hover:bg-muted",
-                  isPersonalUser && "opacity-50 cursor-not-allowed"
+                  mode === "commercial" ? "bg-primary/10 border-primary text-primary" : "bg-background border-border text-muted-foreground hover:bg-muted"
                 )}>
                 <Briefcase className="w-5 h-5" />
                 <div className="text-left">
@@ -111,7 +112,7 @@ export default function SettingsPage() {
               <h2 className="text-xl font-semibold text-foreground">Notifications</h2>
             </div>
             <div className="space-y-4">
-              {settings.slice(0, 3).map((setting) => (
+              {displaySettings.filter((s) => ["heat-alerts", "uv-warnings", "shift-reminders"].includes(s.id)).map((setting) => (
                 <div key={setting.id} className="flex items-center justify-between p-4 hover:bg-muted/50 rounded-lg transition-colors">
                   <div className="flex-1">
                     <h3 className="font-medium text-foreground">{setting.label}</h3>
@@ -134,7 +135,7 @@ export default function SettingsPage() {
               <Shield className="w-5 h-5 text-primary" />
               <h2 className="text-xl font-semibold text-foreground">Safety Settings</h2>
             </div>
-            {settings.slice(3, 4).map((setting) => (
+            {displaySettings.filter((s) => s.id === "temp-threshold").map((setting) => (
               <div key={setting.id} className="p-4 hover:bg-muted/50 rounded-lg transition-colors">
                 <h3 className="font-medium text-foreground mb-2">{setting.label}</h3>
                 <p className="text-sm text-muted-foreground mb-3">{setting.description}</p>
@@ -158,7 +159,7 @@ export default function SettingsPage() {
               <h2 className="text-xl font-semibold text-foreground">Preferences</h2>
             </div>
             <div className="space-y-4">
-              {settings.slice(4, 6).map((setting) => (
+              {displaySettings.filter((s) => ["language", "organization"].includes(s.id)).map((setting) => (
                 <div key={setting.id} className="p-4 hover:bg-muted/50 rounded-lg transition-colors">
                   <label className="block">
                     <h3 className="font-medium text-foreground mb-1">{setting.label}</h3>
@@ -185,7 +186,7 @@ export default function SettingsPage() {
               <MapPin className="w-5 h-5 text-primary" />
               <h2 className="text-xl font-semibold text-foreground">Map & API</h2>
             </div>
-            {settings.slice(6).map((setting) => (
+            {displaySettings.filter((s) => s.id === "mapbox-token").map((setting) => (
               <div key={setting.id} className="p-4">
                 <h3 className="font-medium text-foreground mb-1">{setting.label}</h3>
                 <p className="text-sm text-muted-foreground mb-3">{setting.description}</p>
@@ -255,7 +256,7 @@ export default function SettingsPage() {
               {sidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
               {!sidebarCollapsed && <span>Collapse</span>}
             </button>
-            {SECTIONS.map(({ id, label, icon: Icon }) => (
+            {visibleSections.map(({ id, label, icon: Icon }) => (
               <button key={id} onClick={() => setActiveSection(id)}
                 className={cn(
                   "flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium transition-all",

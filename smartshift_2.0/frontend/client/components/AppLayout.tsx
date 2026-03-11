@@ -26,16 +26,16 @@ export function AppLayout({ children }: AppLayoutProps) {
     setMode(newMode);
   };
 
-  const isPersonalUser = user?.user_type === "personal";
+  const { isPersonalUser } = useMode();
 
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     {
       path: "/map",
-      label: mode === "commercial" ? "Task Map" : "Route Map",
+      label: isPersonalUser ? "Route Map" : mode === "commercial" ? "Task Map" : "Route Map",
       icon: Map,
     },
-    ...(mode === "commercial"
+    ...(!isPersonalUser && mode === "commercial"
       ? [{ path: "/tasks", label: "Tasks", icon: CheckSquare }]
       : []),
     { path: "/settings", label: "Settings", icon: Settings },
@@ -53,35 +53,34 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span className="text-xl font-bold text-foreground hidden sm:block">SmartShift</span>
             </Link>
 
-            <div className="hidden sm:flex items-center gap-2 bg-muted rounded-lg p-1">
-              <button
-                onClick={() => handleModeSwitch("commercial")}
-                disabled={isPersonalUser}
-                className={cn(
-                  "px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5",
-                  mode === "commercial"
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground",
-                  isPersonalUser && "opacity-50 cursor-not-allowed"
-                )}
-                title={isPersonalUser ? "Upgrade to commercial to access this mode" : ""}
-              >
-                <Briefcase className="w-4 h-4" />
-                <span className="hidden lg:inline">Commercial</span>
-              </button>
-              <button
-                onClick={() => handleModeSwitch("personal")}
-                className={cn(
-                  "px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5",
-                  mode === "personal"
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <Navigation className="w-4 h-4" />
-                <span className="hidden lg:inline">Personal</span>
-              </button>
-            </div>
+            {!isPersonalUser && (
+              <div className="hidden sm:flex items-center gap-2 bg-muted rounded-lg p-1">
+                <button
+                  onClick={() => handleModeSwitch("commercial")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5",
+                    mode === "commercial"
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Briefcase className="w-4 h-4" />
+                  <span className="hidden lg:inline">Commercial</span>
+                </button>
+                <button
+                  onClick={() => handleModeSwitch("personal")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5",
+                    mode === "personal"
+                      ? "bg-primary text-primary-foreground shadow-sm"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <Navigation className="w-4 h-4" />
+                  <span className="hidden lg:inline">Personal</span>
+                </button>
+              </div>
+            )}
 
             <div className="flex items-center gap-1">
               <nav className="flex items-center gap-1">

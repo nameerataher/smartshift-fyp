@@ -1,14 +1,15 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Sun, Mail, Lock, User, Building2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useMode } from "@/hooks/useMode";
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { login, register } = useAuth();
   const { setMode } = useMode();
-  const [isRegister, setIsRegister] = useState(false);
+  const isRegister = location.pathname === "/register";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -166,10 +167,10 @@ export default function Login() {
 
           <div className="mt-6 text-center text-sm text-muted-foreground">
             {isRegister ? "Already have an account?" : "Don't have an account?"}{" "}
-            <button onClick={() => { setIsRegister(!isRegister); setError(""); }}
+            <Link to={isRegister ? "/login" : "/register"} onClick={() => setError("")}
               className="text-primary font-semibold hover:underline">
               {isRegister ? "Sign In" : "Create Account"}
-            </button>
+            </Link>
           </div>
         </div>
       </div>
