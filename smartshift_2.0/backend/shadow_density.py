@@ -114,6 +114,7 @@ class ShadowDensityCalculator:
 
         # --- grid evaluation ---
         features = []
+        points = []
         for r in range(rows):
             lat_lo = min_lat + r * dlat
             lat_hi = lat_lo + dlat
@@ -127,6 +128,12 @@ class ShadowDensityCalculator:
                     lon_c, lat_c, shadow_polys, sp_idx, SPATIAL_CELL_DEG,
                 )
                 shadow_pct = 100.0 if in_shadow else 0.0
+
+                points.append({
+                    "lat": lat_c,
+                    "lon": lon_c,
+                    "shadow_pct": shadow_pct,
+                })
 
                 features.append({
                     "type": "Feature",
@@ -147,19 +154,22 @@ class ShadowDensityCalculator:
                     },
                 })
 
+        meta = {
+            "rows": rows,
+            "cols": cols,
+            "cell_size_m": grid_size_m,
+            "buildings_used": len(buildings),
+            "shadow_polys": len(shadow_polys),
+            "sun_altitude": round(sun.altitude, 1),
+            "sun_azimuth": round(sun.azimuth, 1),
+            "is_daylight": sun.is_daylight,
+        }
+
         return {
             "type": "FeatureCollection",
             "features": features,
-            "metadata": {
-                "rows": rows,
-                "cols": cols,
-                "cell_size_m": grid_size_m,
-                "buildings_used": len(buildings),
-                "shadow_polys": len(shadow_polys),
-                "sun_altitude": round(sun.altitude, 1),
-                "sun_azimuth": round(sun.azimuth, 1),
-                "is_daylight": sun.is_daylight,
-            },
+            "points": points,
+            "metadata": meta,
         }
 
     # ------------------------------------------------------------------
