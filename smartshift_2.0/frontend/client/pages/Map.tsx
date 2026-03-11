@@ -15,6 +15,7 @@ import MapboxMap, {
 import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
+import { ThemeSelect } from "@/components/ThemeSelect";
 import {
   calculateSunPosition,
   formatTime,
@@ -903,10 +904,13 @@ export default function MapPage() {
 
   return (
     <div className="flex flex-col h-screen bg-background">
+      <a href="#main-content" className="skip-link bg-primary text-primary-foreground font-medium">
+        Skip to content
+      </a>
       <header className="border-b border-border bg-card sticky top-0 z-50 shadow-sm shrink-0">
         <div className="max-w-full px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <Link to="/" className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-4">
+            <Link to="/" className="flex items-center gap-3 shrink-0">
               <div className="w-10 h-10 bg-gradient-to-br from-primary to-amber-400 rounded-lg flex items-center justify-center shadow-md">
                 <Sun className="w-6 h-6 text-primary-foreground" />
               </div>
@@ -922,7 +926,9 @@ export default function MapPage() {
                 </button>
               </div>
             )}
-            <nav className="flex items-center gap-1">
+            <div className="flex items-center gap-2 shrink-0">
+              <ThemeSelect variant="compact" />
+              <nav className="flex items-center gap-1" aria-label="Main navigation">
               {navItems.map(({ path, label, icon: Icon }) => (
                 <Link key={path} to={path} className={cn("flex items-center gap-2 px-4 py-2 rounded-lg transition-all duration-200", location.pathname === path ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted")}>
                   <Icon className="w-5 h-5" />
@@ -930,11 +936,12 @@ export default function MapPage() {
                 </Link>
               ))}
             </nav>
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0">
+      <div id="main-content" className="flex-1 flex min-h-0" tabIndex={-1}>
         <div className="flex-1 relative min-h-0">
           <MapboxMap currentMinutes={currentMinutes} dateStr={dateStr} flyTo={flyToTarget}
             routeToDraw={routeToDraw} altRoutes={altRoutesToDraw} altRoutesKey={altRoutesKey} clearRouteKey={clearRouteKey}
@@ -995,10 +1002,10 @@ export default function MapPage() {
                 {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
               </select>
               <input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
-              <button onClick={() => setIsPlaying((p) => !p)} className={cn("rounded-lg px-2 py-1.5 text-xs font-medium", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}>
+              <button onClick={() => setIsPlaying((p) => !p)} className={cn("rounded-lg px-2 py-1.5 text-xs font-medium", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")} aria-label={isPlaying ? "Pause time animation" : "Play time animation"}>
                 {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
               </button>
-              <button onClick={() => { setIsPlaying(false); setCurrentMinutes(720); }} className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50">
+              <button onClick={() => { setIsPlaying(false); setCurrentMinutes(720); }} className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50" aria-label="Reset time to noon">
                 <RotateCcw className="w-3 h-3" />
               </button>
             </div>

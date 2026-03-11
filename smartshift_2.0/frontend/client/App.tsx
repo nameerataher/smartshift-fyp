@@ -9,11 +9,20 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ModeProvider } from "./hooks/useMode";
 import { AuthProvider } from "./hooks/useAuth";
+import { useTheme } from "./hooks/useTheme";
+import { useFontSize } from "./hooks/useFontSize";
+
+function ThemeAndFontInitializer({ children }: { children: React.ReactNode }) {
+  useTheme();
+  useFontSize();
+  return <>{children}</>;
+}
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import Dashboard from "./pages/Dashboard";
 import Map from "./pages/Map";
 import { TasksGuard } from "./components/TasksGuard";
+import { KeyboardShortcutsModal } from "./components/KeyboardShortcutsModal";
 import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 
@@ -26,6 +35,7 @@ const App = () => (
         <ModeProvider>
           <Toaster />
           <Sonner />
+          <ThemeAndFontInitializer>
           <BrowserRouter>
             <Routes>
               <Route path="/" element={<Index />} />
@@ -37,7 +47,9 @@ const App = () => (
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
+            <KeyboardShortcutsModal />
           </BrowserRouter>
+          </ThemeAndFontInitializer>
         </ModeProvider>
       </AuthProvider>
     </TooltipProvider>

@@ -1,12 +1,11 @@
 import { Link } from "react-router-dom";
-import { Sun, Cloud, Navigation, Clock, Map, Moon, Target, CloudSun, Cpu, Zap, Mail, Phone, MapPin, Check, CalendarClock, Route } from "lucide-react";
+import { Sun, Cloud, Navigation, Clock, Map, Target, CloudSun, Cpu, Zap, Mail, Phone, MapPin, Check, CalendarClock, Route } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useDarkMode } from "../hooks/use-dark-mode";
 import { useAuth } from "@/hooks/useAuth";
+import { ThemeSelect } from "@/components/ThemeSelect";
 import { useMode } from "@/hooks/useMode";
 
 export default function Index() {
-  const { isDark, toggle: toggleDarkMode } = useDarkMode();
   const { user } = useAuth();
   const { mode, setMode } = useMode();
 
@@ -33,10 +32,7 @@ export default function Index() {
               <a href="#solutions" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Solutions</a>
               <a href="#pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Pricing</a>
               <a href="#contact" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Contact</a>
-              <button onClick={toggleDarkMode} className="p-2 hover:bg-secondary/20 rounded-lg transition"
-                title={isDark ? "Switch to light mode" : "Switch to dark mode"}>
-                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </button>
+              <ThemeSelect variant="compact" />
               {user ? (
                 <Link to="/dashboard">
                   <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">
@@ -55,9 +51,7 @@ export default function Index() {
               )}
             </div>
             <div className="md:hidden flex items-center gap-2">
-              <button onClick={toggleDarkMode} className="p-2 hover:bg-secondary/20 rounded-lg transition">
-                {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              </button>
+              <ThemeSelect variant="compact" />
               {user ? (
                 <Link to="/dashboard">
                   <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground">Dashboard</Button>

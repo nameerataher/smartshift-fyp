@@ -4,6 +4,7 @@ import { cn } from "../lib/utils";
 import { useLocation } from "react-router-dom";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
+import { ThemeSelect } from "@/components/ThemeSelect";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -43,10 +44,13 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <a href="#main-content" className="skip-link bg-primary text-primary-foreground font-medium">
+        Skip to content
+      </a>
       <header className="border-b border-border bg-card sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <Link to="/" className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-4">
+            <Link to="/" className="flex items-center gap-3 shrink-0">
               <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-amber-400 flex items-center justify-center">
                 <Sun className="w-6 h-6 text-primary-foreground" />
               </div>
@@ -82,8 +86,9 @@ export function AppLayout({ children }: AppLayoutProps) {
               </div>
             )}
 
-            <div className="flex items-center gap-1">
-              <nav className="flex items-center gap-1">
+            <div className="flex items-center gap-2 shrink-0">
+              <ThemeSelect variant="compact" />
+              <nav className="flex items-center gap-1" aria-label="Main navigation">
                 {navItems.map(({ path, label, icon: Icon }) => (
                   <Link key={path} to={path}
                     className={cn(
@@ -101,7 +106,9 @@ export function AppLayout({ children }: AppLayoutProps) {
                 <div className="flex items-center gap-1 ml-2 border-l border-border pl-2">
                   <span className="hidden lg:inline text-xs text-muted-foreground">{user.display_name}</span>
                   <button onClick={() => { logout(); navigate("/"); }}
-                    className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground" title="Sign out">
+                    className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
+                    aria-label="Sign out"
+                    title="Sign out">
                     <LogOut className="w-4 h-4" />
                   </button>
                 </div>
@@ -111,7 +118,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" tabIndex={-1}>
         {children}
       </main>
     </div>
