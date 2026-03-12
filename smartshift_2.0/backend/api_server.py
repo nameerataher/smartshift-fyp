@@ -6,6 +6,23 @@ This module provides a REST API for the sun-shadow simulation system.
 
 """
 
+import os
+from pathlib import Path
+
+# Load .env from backend directory so GOOGLE_DIRECTIONS_API_KEY is available
+_env_path = Path(__file__).resolve().parent / ".env"
+if _env_path.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_path)
+    except ImportError:
+        pass
+# Log so you can confirm Compare (Google) has a key when starting the server
+if os.environ.get("GOOGLE_DIRECTIONS_API_KEY", "").strip():
+    print("[api_server] GOOGLE_DIRECTIONS_API_KEY is set (Compare will use Google)")
+else:
+    print("[api_server] GOOGLE_DIRECTIONS_API_KEY not set — Compare will show Mapbox only")
+
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -1408,14 +1425,11 @@ def get_shaded_navigation_route():
 @app.route('/api/v2/shadow-route', methods=['POST'])
 def get_shadow_optimized_route():
     """
-    Shadow-optimised routing via Tilequery road graph + A* + Yen's.
+    Shadow-optimised routing: up to 3 recommendations.
 
-    Fetches the road network from Mapbox vector tiles (tilequery API),
-    builds a directed graph with multi-point shadow sampling on every
-    edge, then finds shade-optimised routes with A* and alternatives
-    with Yen's K-shortest algorithm.
-
-    edge_cost = distance × (1 + α × sun_exposure)
+    Uses ShadeRouter: road graph from Mapbox Tilequery + direction candidates
+    from Mapbox Directions; pathfinding is A* and Yen's k-shortest on that
+    graph (no Mapbox API used for the final route choice).
     """
     if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
         return jsonify({
@@ -1447,6 +1461,7 @@ def get_shadow_optimized_route():
             end_lat=end_lat,
             end_lon=end_lon,
             mode=mode,
+            k=3,
             client_buildings=client_buildings,
             date_str=date_str,
             current_minutes=(int(current_minutes)
@@ -1503,6 +1518,145 @@ def update_shadow_route():
 
         return jsonify(result)
 
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/v2/route-segment-shadows', methods=['POST'])
+def get_route_segment_shadows():
+    """
+    Debug/validation: return per-segment shadow fraction for a route.
+
+    POST body:
+        route_coordinates: [[lon, lat], ...]
+        departure_time: ISO datetime string
+        mode: "walking" or "cycling" (optional)
+        buildings: optional client buildings
+
+    Returns:
+        {"segments": [{"lon", "lat", "shadow_fraction", "segment_index"}, ...], ...}
+    """
+    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
+        return jsonify({
+            "success": False,
+            "error": "ShadeRouter not available."
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+        route_coordinates = data.get("route_coordinates", [])
+        departure_time_str = data.get("departure_time")
+        mode = data.get("mode", "walking")
+        client_buildings = data.get("buildings")
+
+        if not route_coordinates or len(route_coordinates) < 2:
+            return jsonify({"success": False, "error": "route_coordinates must have at least 2 points"}), 400
+        if not departure_time_str:
+            return jsonify({"success": False, "error": "departure_time required"}), 400
+
+        departure_time = datetime.fromisoformat(departure_time_str.replace("Z", "+00:00"))
+
+        router = ShadeRouter()
+        result = router.get_route_segment_shadows(
+            route_coordinates=route_coordinates,
+            departure_time=departure_time,
+            mode=mode,
+            client_buildings=client_buildings,
+        )
+
+        return jsonify({"success": True, **result})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+try:
+    from mapbox_directions import get_directions as mapbox_get_directions
+    MAPBOX_DIRECTIONS_AVAILABLE = True
+except ImportError:
+    mapbox_get_directions = None
+    MAPBOX_DIRECTIONS_AVAILABLE = False
+
+
+try:
+    from google_directions import get_directions as google_get_directions
+    GOOGLE_DIRECTIONS_AVAILABLE = True
+except ImportError:
+    google_get_directions = None
+    GOOGLE_DIRECTIONS_AVAILABLE = False
+
+
+@app.route('/api/v2/google-directions', methods=['POST'])
+def get_google_directions():
+    """
+    Google Directions API: route with geometry and steps.
+    Requires GOOGLE_DIRECTIONS_API_KEY environment variable.
+
+    POST body: start_lat, start_lon, end_lat, end_lon, mode ("walking"|"running"|"cycling")
+    """
+    if not GOOGLE_DIRECTIONS_AVAILABLE or not google_get_directions:
+        return jsonify({
+            "success": False,
+            "error": "Google directions module not available.",
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+        start_lat = float(data.get("start_lat", DUBAI.LATITUDE))
+        start_lon = float(data.get("start_lon", DUBAI.LONGITUDE))
+        end_lat = float(data.get("end_lat", DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get("end_lon", DUBAI.LONGITUDE + 0.01))
+        mode = data.get("mode", "walking")
+        if mode not in ("walking", "running", "cycling"):
+            mode = "walking"
+
+        result = google_get_directions(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            mode=mode,
+        )
+        return jsonify(result)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/v2/mapbox-cycling-directions', methods=['POST'])
+def get_mapbox_cycling_directions():
+    """
+    Mapbox Directions API with cycling profile only. Returns multiple routes (alternatives).
+    POST body: start_lat, start_lon, end_lat, end_lon (mode ignored; always cycling).
+    """
+    if not MAPBOX_DIRECTIONS_AVAILABLE or not mapbox_get_directions:
+        return jsonify({
+            "success": False,
+            "error": "Mapbox directions module not available.",
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+        start_lat = float(data.get("start_lat", DUBAI.LATITUDE))
+        start_lon = float(data.get("start_lon", DUBAI.LONGITUDE))
+        end_lat = float(data.get("end_lat", DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get("end_lon", DUBAI.LONGITUDE + 0.01))
+
+        result = mapbox_get_directions(
+            start_lon=start_lon,
+            start_lat=start_lat,
+            end_lon=end_lon,
+            end_lat=end_lat,
+            mode="cycling",
+            alternatives=True,
+            steps=True,
+        )
+        return jsonify(result)
     except Exception as e:
         import traceback
         traceback.print_exc()

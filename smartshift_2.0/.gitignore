@@ -58,7 +58,9 @@ coverage.xml
 venv/
 .venv/
 env/
+.env
 .env/
+.env.local
 
 # IDE
 .idea/
