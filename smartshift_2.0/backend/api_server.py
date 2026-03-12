@@ -1156,7 +1156,7 @@ def get_optimal_task_schedule():
         requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
         building_face = data.get('building_face')
 
-        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
             lat=lat,

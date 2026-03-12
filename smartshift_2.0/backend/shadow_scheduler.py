@@ -150,7 +150,7 @@ class ShadowScheduler:
     def __init__(
         self,
         mapbox_token: Optional[str] = None,
-        temporal_resolution_minutes: int = 10,
+        temporal_resolution_minutes: int = 30,
         search_radius_meters: int = BUILDING_FETCH_RADIUS
     ):
         self.resolution = temporal_resolution_minutes

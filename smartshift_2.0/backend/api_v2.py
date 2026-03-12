@@ -194,7 +194,7 @@ def find_optimal_schedule():
             lat = sum(p[0] for p in points) / len(points)
             lon = sum(p[1] for p in points) / len(points)
 
-        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
             lat=lat,
@@ -263,7 +263,7 @@ def schedule_for_area():
         raw_buildings = data.get('buildings')
         client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
 
-        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule_for_area(
             task_name=task_name,
             polygon_points=polygon_tuples,
@@ -329,7 +329,7 @@ def schedule_for_building_face():
         end_hour = int(data.get('end_hour', 20))
         recommendation_count = int(data.get('recommendation_count', 5))
 
-        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
             lat=building_lat,
@@ -676,7 +676,7 @@ def shadow_schedule():
         raw_buildings = data.get('buildings')
         client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
 
-        scheduler = ShadowScheduler(temporal_resolution_minutes=10)
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule(
             task_name=task_name,
             lat=lat,
