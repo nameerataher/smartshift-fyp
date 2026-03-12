@@ -5,7 +5,7 @@ import {
   Sun, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin,
   RotateCcw, Play, Pause, Briefcase, X, CheckCircle,
   Plus, Clock, Zap, Search, Loader2, LayoutDashboard, Locate,
-  Bookmark, Trash2,
+  Bookmark, Trash2, Activity,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import MapboxMap, {
@@ -31,6 +31,13 @@ import {
 const API_BASE = "http://localhost:8002";
 const MAPBOX_TOKEN = "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
 
+interface TurnStep {
+  instruction: string;
+  name: string;
+  distance: number;
+  duration: number;
+}
+
 interface RouteResult {
   distanceKm: string;
   durationMin: number;
@@ -39,6 +46,8 @@ interface RouteResult {
   riskLevel: string;
   riskColor: string;
   sunExposure: number;
+  /** Heat risk for route area: low | medium | high */
+  heatRisk?: "low" | "medium" | "high";
   reason?: string;
   coordinates: [number, number][];
   selected?: boolean;
@@ -46,7 +55,16 @@ interface RouteResult {
   durationSeconds?: number;
   departureTime?: string;
   departureLabel?: string;
+  /** Turn-by-turn steps (Google routes, etc.) */
+  turnByTurn?: TurnStep[];
 }
+
+/** Default quick place tags for route From/To (Dubai). [lon, lat], name */
+const DEFAULT_QUICK_PLACES: { name: string; coords: [number, number] }[] = [
+  { name: "Downtown", coords: [55.274376, 25.197197] },
+  { name: "Marina", coords: [55.1386, 25.0805] },
+  { name: "Palm", coords: [55.138, 25.1124] },
+];
 
 interface SearchSuggestion {
   mapbox_id: string;
@@ -249,6 +267,36 @@ export default function MapPage() {
     return () => { if (animRef.current) clearInterval(animRef.current); };
   }, [isPlaying, animSpeed]);
 
+  // Live clock: when not playing, sync time every minute so sun metrics and time display update
+  useEffect(() => {
+    if (isPlaying) return;
+    const tick = () => {
+      const { dateStr: d, minutes: m } = getDubaiNow();
+      setDateStr(d);
+      setCurrentMinutes(m);
+    };
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [isPlaying]);
+
+  // When time/date change and shadows overlay is visible, refetch shadows after debounce so they update live
+  const [shadowRefetchTrigger, setShadowRefetchTrigger] = useState(0);
+  const shadowRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!debugShadowGeoJSON) return;
+    if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current);
+    shadowRefetchRef.current = setTimeout(() => {
+      shadowRefetchRef.current = null;
+      setShadowRefetchTrigger((t) => t + 1);
+    }, 800);
+    return () => { if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current); };
+  }, [currentMinutes, dateStr]);
+
+  useEffect(() => {
+    if (shadowRefetchTrigger === 0 || !debugShadowGeoJSON) return;
+    fetchDebugShadows();
+  }, [shadowRefetchTrigger]);
+
   const [flyToTarget, setFlyToTarget] = useState<FlyToTarget | null>(null);
   const flyToKeyRef = useRef(0);
   const flyTo = (key: string) => {
@@ -294,7 +342,7 @@ export default function MapPage() {
   const [savedRecIds, setSavedRecIds] = useState<Set<string>>(new Set());
   const [siteDraft, setSiteDraft] = useState<SiteDraft>({
     taskName: "", locationLabel: "", locationName: "",
-    durationMinutes: 120, startHour: 5, endHour: 20,
+    durationMinutes: 60, startHour: 9, endHour: 17,
   });
   const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
@@ -363,7 +411,7 @@ export default function MapPage() {
   // Routing (personal mode)
   const [routeFrom, setRouteFrom] = useState("");
   const [routeTo, setRouteTo] = useState("");
-  const [travelMode, setTravelMode] = useState<"walking" | "cycling">("walking");
+  const [travelMode, setTravelMode] = useState<"walking" | "running" | "cycling">("walking");
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
   const [routeToDraw, setRouteToDraw] = useState<RouteToDraw | null>(null);
@@ -379,6 +427,8 @@ export default function MapPage() {
   const [routeUpdateInterval, setRouteUpdateInterval] = useState<number>(120);
   const [routeNavigating, setRouteNavigating] = useState(false);
   const [routeDepartureMode, setRouteDepartureMode] = useState<"now" | "selected">("now");
+  const [routeDepartureDate, setRouteDepartureDate] = useState(initDate);
+  const [routeDepartureMinutes, setRouteDepartureMinutes] = useState(initMinutes);
   const [routeShadowStatus, setRouteShadowStatus] = useState<{
     inShadow: boolean; remainingShadePct: number; rerouteSuggested: boolean; progressPct: number;
   } | null>(null);
@@ -495,14 +545,13 @@ export default function MapPage() {
       return {
         date: now.dateStr,
         minutes: now.minutes,
-        label: `Now · ${now.dateStr} ${formatTime(now.minutes)}`,
+        label: "Leave now",
       };
     }
-
     return {
-      date: dateStr || initDate,
-      minutes: currentMinutes,
-      label: `${dateStr || initDate} · ${formatTime(currentMinutes)}`,
+      date: routeDepartureDate || initDate,
+      minutes: routeDepartureMinutes,
+      label: `Leave later · ${routeDepartureDate || initDate} ${formatTime(routeDepartureMinutes)}`,
     };
   };
 
@@ -533,83 +582,136 @@ export default function MapPage() {
     setRouteNavigating(false);
     setRouteShadowStatus(null);
     try {
-      const departureSelection = getRouteDepartureSelection();
-
-      const midLat = (fromCoords[1] + toCoords[1]) / 2;
-      const midLon = (fromCoords[0] + toCoords[0]) / 2;
-      const buildings = getClientBuildings(midLat, midLon);
-      const fromBuildings = getClientBuildings(fromCoords[1], fromCoords[0]);
-      const toBuildings = getClientBuildings(toCoords[1], toCoords[0]);
-      const allBuildingIds = new Set<string>();
-      const allBuildings: ClientBuilding[] = [];
-      for (const b of [...buildings, ...fromBuildings, ...toBuildings]) {
-        if (!allBuildingIds.has(b.id)) {
-          allBuildingIds.add(b.id);
-          allBuildings.push(b);
+      const isCycling = travelMode === "cycling";
+        const endpoint = isCycling ? `${API_BASE}/api/v2/mapbox-cycling-directions` : `${API_BASE}/api/v2/google-directions`;
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            start_lat: fromCoords[1],
+            start_lon: fromCoords[0],
+            end_lat: toCoords[1],
+            end_lon: toCoords[0],
+            ...(isCycling ? {} : { mode: travelMode }),
+          }),
+        });
+        const data = await res.json();
+        if (!data.success || !data.routes?.length) {
+          throw new Error(data.error || "No routes found");
         }
-      }
+        let routes: RouteResult[] = data.routes.map((r: any) => {
+          const allSteps: TurnStep[] = [];
+          for (const leg of r.legs || []) {
+            for (const s of leg.steps || []) {
+              allSteps.push({
+                instruction: s.instruction || "",
+                name: s.name || "",
+                distance: s.distance ?? 0,
+                duration: s.duration ?? 0,
+              });
+            }
+          }
+          return {
+            distanceKm: String(r.distance_km),
+            durationMin: r.duration_minutes,
+            durationSeconds: r.duration_seconds,
+            shadePct: 0,
+            score: 0,
+            riskLevel: "N/A",
+            riskColor: "#94a3b8",
+            sunExposure: 0,
+            coordinates: (r.geometry?.coordinates || []) as [number, number][],
+            label: r.label,
+            turnByTurn: allSteps,
+          };
+        });
 
-      const res = await fetch(`${API_BASE}/api/v2/shadow-route`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          start_lat: fromCoords[1],
-          start_lon: fromCoords[0],
-          end_lat: toCoords[1],
-          end_lon: toCoords[0],
-          mode: travelMode,
-          date: departureSelection.date,
-          current_minutes: departureSelection.minutes,
-          buildings: allBuildings.map((b) => ({
-            id: b.id, footprint: b.footprint, height: b.height, name: b.name,
-          })),
-        }),
-      });
-      const data = await res.json();
+        const departureSelection = getRouteDepartureSelection();
+        const midLat = (fromCoords[1] + toCoords[1]) / 2;
+        const midLon = (fromCoords[0] + toCoords[0]) / 2;
+        const buildings = getClientBuildings(midLat, midLon);
+        const fromBuildings = getClientBuildings(fromCoords[1], fromCoords[0]);
+        const toBuildings = getClientBuildings(toCoords[1], toCoords[0]);
+        const allBuildingIds = new Set<string>();
+        const allBuildings: ClientBuilding[] = [];
+        for (const b of [...buildings, ...fromBuildings, ...toBuildings]) {
+          if (!allBuildingIds.has(b.id)) {
+            allBuildingIds.add(b.id);
+            allBuildings.push(b);
+          }
+        }
 
-      if (!data.success || !data.routes?.length) {
-        throw new Error(data.error || "No routes found");
-      }
+        const scoreRes = await fetch(`${API_BASE}/api/v2/routes-shade-score`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            routes: routes.map((r) => ({ coordinates: r.coordinates })),
+            date: departureSelection.date,
+            current_minutes: departureSelection.minutes,
+            mode: travelMode,
+            buildings: allBuildings.map((b) => ({
+              id: b.id,
+              footprint: b.footprint,
+              height: b.height,
+              name: b.name,
+            })),
+          }),
+        });
+        const scoreData = await scoreRes.json();
+        if (scoreData.success && scoreData.route_scores?.length) {
+          for (const s of scoreData.route_scores) {
+            const i = s.route_index;
+            if (i >= 0 && i < routes.length) {
+              routes[i] = {
+                ...routes[i],
+                shadePct: Math.round(s.shade_pct),
+                score: s.score ?? Math.round(s.shade_pct),
+                sunExposure: s.sun_exposure_minutes ?? 0,
+                heatRisk: s.heat_risk === "medium" ? "medium" : s.heat_risk === "high" ? "high" : "low",
+              };
+            }
+          }
+          const distKm = (r: RouteResult) => parseFloat(r.distanceKm) || 0;
+          // Rank by score (desc) then shortest distance (asc)
+          routes = [...routes].sort((a, b) => {
+            const scoreA = a.score ?? 0;
+            const scoreB = b.score ?? 0;
+            if (scoreB !== scoreA) return scoreB - scoreA;
+            return distKm(a) - distKm(b);
+          });
+          const mostShadedIdx = 0;
+          const shortestIdx = routes.reduce((best, r, i) => (distKm(r) < distKm(routes[best]) ? i : best), 0);
+          const others = routes.map((_, i) => i).filter((i) => i !== mostShadedIdx && i !== shortestIdx);
+          const balancedIdx = others.length > 0
+            ? others.reduce((best, i) => (routes[i].score - distKm(routes[i]) * 2 > routes[best].score - distKm(routes[best]) * 2 ? i : best), others[0])
+            : -1;
+          routes = routes.map((r, i) => ({
+            ...r,
+            label: i === mostShadedIdx ? "Most shaded" : i === shortestIdx ? "Shortest" : i === balancedIdx ? "Balanced" : r.label,
+          }));
+        }
 
-      const routes: RouteResult[] = data.routes.map((r: any) => ({
-        distanceKm: String(r.distance_km),
-        durationMin: r.duration_minutes,
-        durationSeconds: r.duration_seconds,
-        shadePct: Math.round(r.shade_coverage_pct),
-        score: Math.round(r.final_score),
-        riskLevel: r.risk_level,
-        riskColor: r.risk_color,
-        sunExposure: Math.round(r.sun_exposure_minutes),
-        coordinates: r.geometry.coordinates as [number, number][],
-        reason: r.reason,
-        label: r.label,
-        departureTime: data.departure_time,
-        departureLabel: departureSelection.label,
-      }));
-
-      setRouteUpdateInterval(data.update_interval_seconds || 120);
-      setAlternativeRoutes(routes);
-      setSelectedRouteIdx(0);
-      setRouteResult(routes[0]);
-
-      if (routes[0].coordinates.length >= 2) {
-        routeKeyRef.current += 1;
-        setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current });
-      }
-
-      const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
-      altRoutesKeyRef.current += 1;
-      setAltRoutesToDraw(
-        routes.map((r, idx) => ({
-          coordinates: r.coordinates,
-          color: routeColors[idx] || "#94a3b8",
-          active: idx === 0,
-          routeId: idx,
-        }))
-      );
-      setAltRoutesKey(altRoutesKeyRef.current);
-
-      toast.success(`Found ${routes.length} shadow-analyzed routes for ${departureSelection.label}`);
+        setAlternativeRoutes(routes);
+        setSelectedRouteIdx(0);
+        setRouteResult({ ...routes[0], departureLabel: departureSelection.label });
+        if (routes[0].coordinates.length >= 2) {
+          routeKeyRef.current += 1;
+          setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current });
+        }
+        const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
+        altRoutesKeyRef.current += 1;
+        setAltRoutesToDraw(
+          routes.map((r, idx) => ({
+            coordinates: r.coordinates,
+            color: routeColors[idx] || "#94a3b8",
+            active: idx === 0,
+            routeId: idx,
+          }))
+        );
+        setAltRoutesKey(altRoutesKeyRef.current);
+        toast.success(isCycling ? `Found ${routes.length} cycling route(s)` : `Found ${routes.length} route(s)`);
+        setRouteLoading(false);
+        return;
     } catch (err) {
       toast.error(`Route error: ${(err as Error).message}`);
     }
@@ -947,6 +1049,7 @@ export default function MapPage() {
         <div className="flex-1 relative min-h-0">
           <MapboxMap currentMinutes={currentMinutes} dateStr={dateStr} flyTo={flyToTarget}
             routeToDraw={routeToDraw} altRoutes={altRoutesToDraw} altRoutesKey={altRoutesKey} clearRouteKey={clearRouteKey}
+            compareRoutes={null}
             selectingPoint={mode === "commercial" && isSelectingSite && analysisMode !== "facade" ? "from" : addingPlaceOnMap ? "from" : selectingPoint}
             onPointSelected={handlePointSelected}
             onMapReady={undefined}
@@ -985,6 +1088,7 @@ export default function MapPage() {
             selectedBuildingFootprint={selectedBuilding?.footprint ?? null}
             selectedFaceDirection={analysisMode === "facade" ? buildingFace as "N" | "E" | "S" | "W" : null}
           />
+
 
           <ShadowDensityOverlay
             map={mapInstanceRef.current}
@@ -1093,6 +1197,12 @@ export default function MapPage() {
               </button>
             </div>
             <div className="flex flex-wrap gap-1.5">
+              {DEFAULT_QUICK_PLACES.map((place) => (
+                <button key={place.name} onClick={() => flyToCoords(place.coords, 16)}
+                  className="rounded-full border border-border/60 bg-background/60 pl-2.5 pr-2.5 py-1 text-xs font-medium hover:text-primary hover:bg-primary/5">
+                  {place.name}
+                </button>
+              ))}
               {savedPlaces.map((p) => (
                 <div key={p.id} className="group flex items-center gap-1 rounded-full border border-border/60 bg-background/60 pl-2.5 pr-1 py-1">
                   <button onClick={() => flyToCoords([p.lon, p.lat], 16)} className="text-xs font-medium hover:text-primary">{p.name}</button>
@@ -1264,57 +1374,48 @@ export default function MapPage() {
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-1.5 mb-2">
-                {(["walking", "cycling"] as const).map((m) => (
+              <div className="mb-2">
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Departure</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button onClick={() => setRouteDepartureMode("now")}
+                    className={cn("py-1.5 rounded-lg border text-[10px] font-medium flex items-center justify-center",
+                      routeDepartureMode === "now" ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
+                    Leave now
+                  </button>
+                  <button onClick={() => setRouteDepartureMode("selected")}
+                    className={cn("py-1.5 rounded-lg border text-[10px] font-medium flex items-center justify-center",
+                      routeDepartureMode === "selected" ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
+                    Leave later
+                  </button>
+                </div>
+                {routeDepartureMode === "selected" && (
+                  <div className="mt-2 grid grid-cols-2 gap-1.5">
+                    <input type="date" value={routeDepartureDate} onChange={(e) => setRouteDepartureDate(e.target.value)}
+                      className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-[11px]" />
+                    <select value={Math.round(routeDepartureMinutes / 15) * 15} onChange={(e) => setRouteDepartureMinutes(Number(e.target.value))}
+                      className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-[11px]">
+                      {Array.from({ length: 96 }, (_, i) => i * 15).map((m) => (
+                        <option key={m} value={m}>{formatTime(m)}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 mb-2">
+                {(["walking", "running", "cycling"] as const).map((m) => (
                   <button key={m} onClick={() => setTravelMode(m)}
-                    className={cn("py-1.5 rounded-lg border text-sm font-medium flex items-center justify-center gap-1.5",
+                    className={cn("py-1.5 rounded-lg border text-sm font-medium flex items-center justify-center gap-1",
                       travelMode === m ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
-                    {m === "walking" ? <Navigation2 className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-                    {m === "walking" ? "Walk" : "Cycle"}
+                    {m === "walking" ? <Navigation2 className="w-3.5 h-3.5" /> : m === "running" ? <Activity className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                    {m === "walking" ? "Walk" : m === "running" ? "Run" : "Cycle"}
                   </button>
                 ))}
               </div>
-              <div className="rounded-xl border border-border/60 bg-background/45 p-2 mb-2">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Departure</span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {routeDepartureMode === "now" ? "Uses live Dubai time" : "Uses slider date/time"}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    onClick={() => setRouteDepartureMode("now")}
-                    className={cn(
-                      "rounded-lg border px-2 py-1.5 text-xs font-medium",
-                      routeDepartureMode === "now"
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background/60 border-border/60"
-                    )}
-                  >
-                    Leave Now
-                  </button>
-                  <button
-                    onClick={() => setRouteDepartureMode("selected")}
-                    className={cn(
-                      "rounded-lg border px-2 py-1.5 text-xs font-medium",
-                      routeDepartureMode === "selected"
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background/60 border-border/60"
-                    )}
-                  >
-                    Leave Later
-                  </button>
-                </div>
-                <div className="mt-1.5 text-[11px] text-muted-foreground">
-                  {routeDepartureMode === "now"
-                    ? `Current Dubai time will be used when you search.`
-                    : `Selected: ${dateStr || initDate} · ${formatTime(currentMinutes)}`}
-                </div>
-              </div>
+              <>
               <div className="grid grid-cols-2 gap-1.5">
                 <button onClick={findRoute} disabled={routeLoading}
                   className="py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-1.5">
-                  {routeLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing shadows...</> : "Find Route"}
+                  {routeLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Getting routes...</> : "Find Route"}
                 </button>
                 <button onClick={clearRoute}
                   className="py-2 rounded-lg border border-border/60 bg-background/60 text-sm font-medium flex items-center justify-center gap-1">
@@ -1322,68 +1423,35 @@ export default function MapPage() {
                 </button>
               </div>
 
-              {/* Real-time navigation status */}
-              {routeNavigating && routeShadowStatus && (
-                <div className="mt-3 rounded-xl border border-primary/30 bg-primary/5 p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Live Shadow Tracking</span>
-                    <button onClick={stopNavigation} className="text-[10px] text-red-500 font-medium hover:underline">Stop</button>
-                  </div>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <div className={cn("w-3 h-3 rounded-full animate-pulse", routeShadowStatus.inShadow ? "bg-green-500" : "bg-amber-500")} />
-                    <span className="text-xs font-medium">{routeShadowStatus.inShadow ? "Currently in shade" : "Currently in sun"}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px]">
-                    <div>
-                      <span className="text-muted-foreground">Remaining shade:</span>
-                      <span className={cn("ml-1 font-semibold", routeShadowStatus.remainingShadePct >= 50 ? "text-green-600" : "text-amber-600")}>
-                        {routeShadowStatus.remainingShadePct}%
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Progress:</span>
-                      <span className="ml-1 font-semibold">{Math.round(routeShadowStatus.progressPct)}%</span>
-                    </div>
-                  </div>
-                  <div className="w-full bg-border/40 rounded-full h-1.5 mt-2">
-                    <div className="bg-primary rounded-full h-1.5 transition-all" style={{ width: `${routeShadowStatus.progressPct}%` }} />
-                  </div>
-                  {routeShadowStatus.rerouteSuggested && (
-                    <button onClick={() => { stopNavigation(); findRoute(); }}
-                      className="mt-2 w-full py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 text-xs font-semibold hover:bg-amber-500/25">
-                      Shadow coverage low – Tap to reroute
-                    </button>
-                  )}
-                </div>
-              )}
+              </>
 
               {alternativeRoutes.length > 0 && (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                        {alternativeRoutes.length} Routes · Shadow-Ranked
+                        {alternativeRoutes.length} Routes
                       </p>
                       {routeResult?.departureLabel && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
-                          Evaluated for {routeResult.departureLabel}
-                        </p>
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium mt-0.5 inline-block",
+                          routeResult.departureLabel === "Leave now" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300")}>
+                          {routeResult.departureLabel}
+                        </span>
                       )}
                     </div>
-                    {routeResult && !routeNavigating && (
-                      <button onClick={startNavigation}
-                        className="text-[10px] px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 text-green-700 font-semibold hover:bg-green-500/25 flex items-center gap-1">
-                        <Navigation className="w-3 h-3" /> Start Nav
-                      </button>
-                    )}
                   </div>
                   {alternativeRoutes.map((route, idx) => {
                     const isActive = idx === selectedRouteIdx;
                     const labelColors: Record<string, string> = {
                       "Best Shade": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
                       "Most Shaded": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+                      "Most shaded": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+                      "Fastest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
                       "Balanced": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
                       "Shortest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+                      "Route 1": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+                      "Route 2": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                      "Alternative 2": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
                     };
                     const dotColors = ["bg-green-500", "bg-blue-500", "bg-amber-500"];
                     return (
@@ -1395,24 +1463,40 @@ export default function MapPage() {
                             : "border-border/60 bg-background/55 hover:border-primary/40"
                         )}>
                         <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <div className={cn("w-2 h-2 rounded-full", dotColors[idx] || "bg-gray-400")} />
                             <span className="text-xs font-semibold text-foreground">Route {idx + 1}</span>
                             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
                               labelColors[route.label || ""] || "bg-gray-100 text-gray-700")}>
                               {route.label || `Option ${idx + 1}`}
                             </span>
+                            {route.heatRisk != null && (
+                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize",
+                                route.heatRisk === "low" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+                                route.heatRisk === "medium" && "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+                                route.heatRisk === "high" && "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+                              )}>
+                                {route.heatRisk === "medium" ? "Med" : route.heatRisk}
+                              </span>
+                            )}
                           </div>
-                          <span className="text-sm font-bold" style={{ color: route.riskColor }}>
-                            {route.score}/100
-                          </span>
+                          {route.score != null && (
+                            <span className="text-xs font-bold text-foreground tabular-nums shrink-0 ml-1">
+                              {route.score}/100
+                            </span>
+                          )}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {route.distanceKm} km · {route.durationMin} min · <span className="text-green-600 font-medium">{route.shadePct}% shade</span>
+                          {route.distanceKm} km · {route.durationMin} min
+                          {route.shadePct != null && (
+                            <><span className="text-green-600 font-medium"> · {route.shadePct}% shade</span></>
+                          )}
                         </div>
-                        <div className="text-[10px] text-muted-foreground mt-0.5">
-                          Sun exposure: ~{route.sunExposure} min · Risk: <span style={{ color: route.riskColor }}>{route.riskLevel}</span>
-                        </div>
+                        {route.sunExposure != null && route.sunExposure > 0 && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            Approx sun exposure: {route.sunExposure} min
+                          </p>
+                        )}
                         {route.reason && (
                           <p className="text-[10px] text-muted-foreground/70 mt-1 italic leading-tight">{route.reason}</p>
                         )}
@@ -1440,15 +1524,18 @@ export default function MapPage() {
                 </div>
               ))}
             </div>
-            <div className="flex gap-1.5 mt-2">
-              <button onClick={() => { setDateStr("2026-03-20"); toast.info("Set to Vernal Equinox (Mar 20)"); }}
-                className="flex-1 py-1.5 rounded-lg border border-border/60 text-[10px] font-medium hover:bg-primary/10">
-                Equinox
-              </button>
-              <button onClick={() => { setDateStr("2026-06-21"); toast.info("Set to Summer Solstice (Jun 21)"); }}
-                className="flex-1 py-1.5 rounded-lg border border-border/60 text-[10px] font-medium hover:bg-primary/10">
-                Solstice
-              </button>
+            <div className="flex gap-1 mt-2 flex-wrap">
+              {[
+                { label: "Vernal", date: "2026-03-20" },
+                { label: "Summer", date: "2026-06-21" },
+                { label: "Autumnal", date: "2026-09-22" },
+                { label: "Winter", date: "2026-12-21" },
+              ].map(({ label, date }) => (
+                <button key={date} onClick={() => { setDateStr(date); toast.info(`Set to ${label} (${date})`); }}
+                  className="flex-1 min-w-0 py-1 rounded border border-border/60 text-[9px] font-medium hover:bg-primary/10">
+                  {label}
+                </button>
+              ))}
             </div>
             <div className="flex gap-1.5 mt-1.5">
               <button onClick={fetchDebugShadows}

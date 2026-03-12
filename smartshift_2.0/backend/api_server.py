@@ -202,6 +202,56 @@ def parse_datetime_param(date_str: Optional[str], time_str: Optional[str]) -> da
     return now
 
 
+def _get_heat_risk_level_for_location(lat: float, lon: float, dt: datetime) -> str:
+    """
+    Get heat risk label from the heat_risk_model for a location and time.
+    Returns "low" | "medium" | "high". Falls back to "low" if model unavailable.
+    """
+    if not ML_MODELS_AVAILABLE or not WEATHER_API_AVAILABLE:
+        return "low"
+    try:
+        forecast = fetch_7day_forecast(lat, lon)
+        target_date_str = dt.strftime("%Y-%m-%d")
+        hour = dt.hour
+        weather_data_from_api = None
+        for hourly in forecast["hourly"]:
+            if hourly["date"] == target_date_str and hourly["hour"] == hour:
+                weather_data_from_api = hourly
+                break
+        if weather_data_from_api:
+            temperature = weather_data_from_api["temperature"]
+            humidity = weather_data_from_api["humidity"]
+            wind_speed = weather_data_from_api["wind_speed"]
+            uv_index = weather_data_from_api["uv_index"]
+            cloud_cover = weather_data_from_api.get("cloud_cover", 0)
+        else:
+            temperature, humidity, wind_speed, uv_index, cloud_cover = 32.0, 50.0, 10.0, 5.0, 20
+        sun_pos = solar_calculator.get_sun_position(dt)
+        sun_intensity = min(1.0, sun_pos.altitude / 60) if sun_pos.altitude > 0 else 0.0
+        weather = WeatherData(
+            temperature=temperature, humidity=humidity, wind_speed=wind_speed,
+            uv_index=uv_index, cloud_cover=cloud_cover
+        )
+        location = LocationContext(latitude=lat, longitude=lon, surface_type="mixed", urban_density=0.7)
+        sun_exposure = SunExposure(
+            is_in_shadow=False,
+            current_sun_altitude=max(0, sun_pos.altitude),
+            current_sun_azimuth=sun_pos.azimuth,
+            minutes_in_sun_last_hour=30.0,
+            direct_sun_intensity=sun_intensity,
+        )
+        model = get_heat_risk_model()
+        prediction = model.predict(weather, location, sun_exposure, dt)
+        level = int(prediction.risk_level)
+        if level == 0:
+            return "low"
+        if level == 1:
+            return "medium"
+        return "high"
+    except Exception:
+        return "low"
+
+
 def sun_position_to_dict(pos: SunPosition) -> Dict[str, Any]:
     """
     Convert SunPosition object to JSON-serializable dictionary.
@@ -1567,6 +1617,107 @@ def get_route_segment_shadows():
         )
 
         return jsonify({"success": True, **result})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/v2/routes-shade-score', methods=['POST'])
+def get_routes_shade_score():
+    """
+    Compute shade percentage for each of several routes (e.g. Google/Mapbox alternatives).
+    Samples each route every 5m and tests points against building shadow polygons.
+
+    POST body:
+        routes: [{ "coordinates": [[lon, lat], ...] }, ...]
+        date: "YYYY-MM-DD"
+        current_minutes: 0–1439
+        mode: "walking" | "running" | "cycling"
+        buildings: optional client buildings (same shape as shadow-route)
+
+    Returns:
+        { "route_scores": [ { "route_index", "shade_pct" }, ... ] }
+    """
+    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
+        return jsonify({
+            "success": False,
+            "error": "ShadeRouter not available.",
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+        routes = data.get("routes", [])
+        date_str = data.get("date")
+        current_minutes = data.get("current_minutes")
+        mode = data.get("mode", "walking")
+        if mode not in ("walking", "running", "cycling"):
+            mode = "walking"
+        client_buildings = data.get("buildings")
+
+        if not routes:
+            return jsonify({"success": False, "error": "routes required"}), 400
+        if date_str is None or current_minutes is None:
+            return jsonify({"success": False, "error": "date and current_minutes required"}), 400
+
+        try:
+            dep_date = datetime.strptime(str(date_str), "%Y-%m-%d")
+            mins = int(current_minutes)
+            departure_time = dep_date.replace(
+                hour=mins // 60,
+                minute=mins % 60,
+                second=0,
+                microsecond=0,
+            )
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": "Invalid date or current_minutes"}), 400
+
+        # Use actual mode so run uses run speed for time-along-route (different sun at each segment than walk).
+        router = ShadeRouter(segment_length=5.0)
+
+        route_scores = []
+        for idx, r in enumerate(routes):
+            coords = r.get("coordinates") or r.get("geometry", {}).get("coordinates", [])
+            if not coords or len(coords) < 2:
+                route_scores.append({"route_index": idx, "shade_pct": 0, "score": 0, "sun_exposure_minutes": 0, "heat_risk": "low"})
+                continue
+            result = router.get_route_segment_shadows(
+                route_coordinates=coords,
+                departure_time=departure_time,
+                mode=mode,
+                client_buildings=client_buildings,
+            )
+            segments = result.get("segments", [])
+            if not segments:
+                route_scores.append({"route_index": idx, "shade_pct": 0, "score": 0, "sun_exposure_minutes": 0, "heat_risk": "low"})
+                continue
+            total_route = result.get("total_route_time_seconds") or 0
+            total_shade = result.get("total_shade_time_seconds") or 0
+            weighted = result.get("weighted_shade_fraction")
+            if weighted is None and total_route > 0:
+                weighted = total_shade / total_route
+            elif weighted is None:
+                weighted = 0.0
+            shade_pct = round(weighted * 100, 1)
+            sun_exposure_minutes = round((total_route - total_shade) / 60.0, 1)
+            score = min(100, max(0, round(weighted * 100)))
+            # Heat risk from heat_risk_model (location + departure time)
+            mid_lat = sum(c[1] for c in coords) / len(coords)
+            mid_lon = sum(c[0] for c in coords) / len(coords)
+            heat_risk = _get_heat_risk_level_for_location(mid_lat, mid_lon, departure_time)
+            route_scores.append({
+                "route_index": idx,
+                "shade_pct": shade_pct,
+                "score": score,
+                "sun_exposure_minutes": sun_exposure_minutes,
+                "heat_risk": heat_risk,
+            })
+
+        return jsonify({
+            "success": True,
+            "route_scores": route_scores,
+        })
 
     except Exception as e:
         import traceback

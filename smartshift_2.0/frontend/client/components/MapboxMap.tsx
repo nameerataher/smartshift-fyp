@@ -169,6 +169,8 @@ export interface MapboxMapProps {
   routeToDraw?: RouteToDraw | null;
   altRoutes?: AltRouteToDraw[] | null;
   altRoutesKey?: number;
+  /** When set, draw Shadow vs Google route overlay for comparison */
+  compareRoutes?: { shadow: [number, number][]; google: [number, number][] } | null;
   clearRouteKey?: number;
   selectingPoint?: "from" | "to" | null;
   onPointSelected?: (lat: number, lng: number, which: "from" | "to") => void;
@@ -312,6 +314,7 @@ export default function MapboxMap({
   routeToDraw,
   altRoutes,
   altRoutesKey,
+  compareRoutes,
   clearRouteKey,
   selectingPoint,
   onPointSelected,
@@ -658,6 +661,118 @@ export default function MapboxMap({
     });
   }, [altRoutes, altRoutesKey]);
 
+  // ── Draw compare overlay (Shadow vs Google) ─────────────────────────────
+  useEffect(() => {
+    if (!compareRoutes || !mapRef.current) return;
+    const map = mapRef.current;
+    const hasShadow = compareRoutes.shadow.length >= 2;
+    const hasGoogle = compareRoutes.google.length >= 2;
+
+    try {
+      if (map.getSource("compare-route-shadow")) {
+        map.removeLayer("compare-route-shadow-line");
+        map.removeSource("compare-route-shadow");
+      }
+      if (map.getSource("compare-route-google")) {
+        map.removeLayer("compare-route-google-line");
+        map.removeSource("compare-route-google");
+      }
+    } catch {}
+
+    if (hasShadow) {
+      map.addSource("compare-route-shadow", {
+        type: "geojson",
+        data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: compareRoutes.shadow } },
+      });
+      map.addLayer({
+        id: "compare-route-shadow-line",
+        type: "line",
+        source: "compare-route-shadow",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#2563eb",
+          "line-width": 6,
+          "line-opacity": 0.9,
+        },
+      });
+    }
+    if (hasGoogle) {
+      map.addSource("compare-route-google", {
+        type: "geojson",
+        data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: compareRoutes.google } },
+      });
+      map.addLayer({
+        id: "compare-route-google-line",
+        type: "line",
+        source: "compare-route-google",
+        layout: { "line-join": "round", "line-cap": "round" },
+        paint: {
+          "line-color": "#ea580c",
+          "line-width": 5,
+          "line-opacity": 0.85,
+          "line-dasharray": [2, 1],
+        },
+      });
+    }
+
+    if (hasShadow || hasGoogle) {
+      // Only use coordinates that look like [lng, lat] (Mapbox/GeoJSON) so invalid or swapped data doesn't blow bounds to globe
+      const valid = (c: [number, number]) =>
+        Number.isFinite(c[0]) && Number.isFinite(c[1]) && c[0] >= -180 && c[0] <= 180 && c[1] >= -90 && c[1] <= 90;
+      const shadowSafe = hasShadow ? compareRoutes.shadow.filter(valid) : [];
+      const googleSafe = hasGoogle ? compareRoutes.google.filter(valid) : [];
+      const all = [...shadowSafe, ...googleSafe];
+      if (all.length >= 2) {
+        const bounds = all.reduce(
+          (b, c) => b.extend(c),
+          new mapboxgl.LngLatBounds(all[0], all[0])
+        );
+        const ne = bounds.getNorthEast();
+        const sw = bounds.getSouthWest();
+        const spanLng = Math.abs(ne.lng - sw.lng);
+        const spanLat = Math.abs(ne.lat - sw.lat);
+        // If bounds are too large (e.g. wrong coords), fit only to shadow so we don't zoom to globe
+        if (spanLng > 50 || spanLat > 50) {
+          const use = shadowSafe.length >= 2 ? shadowSafe : googleSafe;
+          if (use.length >= 2) {
+            const b = use.reduce(
+              (b, c) => b.extend(c),
+              new mapboxgl.LngLatBounds(use[0], use[0])
+            );
+            map.fitBounds(b, { padding: 80, maxZoom: 14 });
+          }
+        } else {
+          map.fitBounds(bounds, { padding: 80, maxZoom: 14 });
+        }
+      } else if (shadowSafe.length >= 2) {
+        const b = shadowSafe.reduce(
+          (b, c) => b.extend(c),
+          new mapboxgl.LngLatBounds(shadowSafe[0], shadowSafe[0])
+        );
+        map.fitBounds(b, { padding: 80, maxZoom: 14 });
+      } else if (googleSafe.length >= 2) {
+        const b = googleSafe.reduce(
+          (b, c) => b.extend(c),
+          new mapboxgl.LngLatBounds(googleSafe[0], googleSafe[0])
+        );
+        map.fitBounds(b, { padding: 80, maxZoom: 14 });
+      }
+    }
+
+    return () => {
+      try {
+        if (map.getSource("compare-route-shadow")) {
+          map.removeLayer("compare-route-shadow-line");
+          map.removeSource("compare-route-shadow");
+        }
+        if (map.getSource("compare-route-google")) {
+          map.removeLayer("compare-route-google-line");
+          map.removeSource("compare-route-google");
+        }
+      } catch {}
+    };
+  }, [compareRoutes]);
+
   // ── Clear route ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (clearRouteKey === undefined || clearRouteKey === prevClearKeyRef.current) return;
@@ -678,6 +793,16 @@ export default function MapboxMap({
         }
       } catch {}
     }
+    try {
+      if (map.getSource("compare-route-shadow")) {
+        map.removeLayer("compare-route-shadow-line");
+        map.removeSource("compare-route-shadow");
+      }
+      if (map.getSource("compare-route-google")) {
+        map.removeLayer("compare-route-google-line");
+        map.removeSource("compare-route-google");
+      }
+    } catch {}
   }, [clearRouteKey]);
 
   // ── From marker ──────────────────────────────────────────────────────────

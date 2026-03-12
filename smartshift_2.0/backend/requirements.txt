@@ -76,7 +76,7 @@ networkx>=3.2                   # A* and Yen's K-shortest-paths algorithms
 # building data (for shadow calculations):
 #   - openstreetmap: building footprints and heights
 #     tag: building=*, height=*
-#   
+#
 #   - mapbox: 3d buildings in mapbox gl js
 #
 # =============================================================================

@@ -37,7 +37,7 @@ BUILDING_FETCH_RADIUS = 300
 DEFAULT_BUILDING_HEIGHT = 30.0
 ROAD_TILEQUERY_RADIUS = 350
 ROAD_SAMPLE_SPACING = 150
-GRAPH_SEGMENT_LENGTH = 15
+GRAPH_SEGMENT_LENGTH = 5
 NODE_MERGE_DIST = 8
 SHADOW_SAMPLE_SPACING = 5
 MAX_TILEQUERY_CALLS = 60
@@ -60,6 +60,7 @@ class ShadeRouter:
 
     TZ = 4.0
     WALK_SPEED = 1.4
+    RUN_SPEED = 2.6   # m/s; used for time-along-route when mode is "running"
     CYCLE_SPEED = 4.0
 
     def __init__(self, alpha: float = 2.0, segment_length: float = GRAPH_SEGMENT_LENGTH):
@@ -89,7 +90,7 @@ class ShadeRouter:
             parse_client_buildings(client_buildings)
             if client_buildings else None
         )
-        allowed = WALK_ALLOWED if mode == "walking" else CYCLE_ALLOWED
+        allowed = WALK_ALLOWED if mode in ("walking", "running") else CYCLE_ALLOWED
 
         # Use realistic Directions routes to seed graph connectivity.
         candidates = self._fetch_directions(
@@ -185,7 +186,12 @@ class ShadeRouter:
             )
         paths = self._deduplicate_paths(G, paths, max(k * 4, 12))
 
-        speed = self.WALK_SPEED if mode == "walking" else self.CYCLE_SPEED
+        if mode == "walking":
+            speed = self.WALK_SPEED
+        elif mode == "running":
+            speed = self.RUN_SPEED
+        else:
+            speed = self.CYCLE_SPEED
         shadow_cache: Dict[str, Dict[str, list]] = {}
         routes = [
             self._path_to_route(
@@ -262,7 +268,7 @@ class ShadeRouter:
     # ── realistic base routes ─────────────────────────────────────────
 
     def _fetch_directions(self, s_lon, s_lat, e_lon, e_lat, mode):
-        profile = "walking" if mode == "walking" else "cycling"
+        profile = "walking" if mode in ("walking", "running") else "cycling"
         base = f"https://api.mapbox.com/directions/v5/mapbox/{profile}"
         common = {
             "geometries": "geojson",
@@ -872,7 +878,7 @@ class ShadeRouter:
             mid_lon = (ux + vx) / 2
             mid_lat = (uy + vy) / 2
 
-            edge_time = dep + timedelta(seconds=elapsed_seconds + seg_d / max(speed * 2, 0.1))
+            edge_time = departure_time + timedelta(seconds=elapsed_seconds + seg_d / max(speed, 0.1))
             sun = self._sun(edge_time, mid_lat, mid_lon)
             shadow_polys = self._shadow_polys_for_bucket(
                 buildings, sun, edge_time, shadow_cache,
@@ -1075,6 +1081,94 @@ class ShadeRouter:
                     buildings.append(building)
 
         return buildings
+
+    def get_route_segment_shadows(
+        self,
+        route_coordinates: List[List[float]],
+        departure_time: datetime,
+        mode: str = "walking",
+        client_buildings: Optional[List[Dict]] = None,
+    ) -> Dict:
+        """
+        Debug/validation: return per-segment shadow fraction for a route.
+
+        Args:
+            route_coordinates: List of [lon, lat] points
+            departure_time: When the route starts
+            mode: "walking" or "cycling"
+            client_buildings: Optional pre-fetched buildings
+
+        Returns:
+            {"segments": [{"lon", "lat", "shadow_fraction", "segment_index"}, ...], ...}
+        """
+        parsed = parse_client_buildings(client_buildings) if client_buildings else []
+        buildings = self._gather_route_buildings(route_coordinates, parsed)
+        bldg_idx = self._spatial_index(buildings)
+        if mode == "walking":
+            speed = self.WALK_SPEED
+        elif mode == "running":
+            speed = self.RUN_SPEED
+        else:
+            speed = self.CYCLE_SPEED
+
+        sampled = self._sample_polyline(route_coordinates, self.seg_len)
+        if len(sampled) < 2:
+            return {"segments": [], "buildings_used": len(buildings)}
+
+        segments_out: List[Dict] = []
+        elapsed_seconds = 0.0
+        total_time = 0.0
+        total_shade_time = 0.0
+        spd = max(speed, 0.1)
+
+        for idx in range(len(sampled) - 1):
+            lon1, lat1 = sampled[idx]
+            lon2, lat2 = sampled[idx + 1]
+            seg_d = _haversine(lat1, lon1, lat2, lon2)
+            mid_lon = (lon1 + lon2) / 2
+            mid_lat = (lat1 + lat2) / 2
+            segment_time = seg_d / spd  # seconds in this segment
+            total_time += segment_time
+
+            edge_time = departure_time + timedelta(
+              seconds=elapsed_seconds + segment_time)
+
+            sun = self._sun(edge_time, mid_lat, mid_lon)
+            shadow_polys: Dict[str, list] = {}
+            if sun.is_daylight and sun.altitude > 0:
+                for b in buildings:
+                    poly = self._sc.calculate_shadow_polygon(b, sun)
+                    if poly:
+                        shadow_polys[b.id] = poly
+
+            shadow_fraction = 0.0
+            if sun.is_daylight and sun.altitude > 0:
+                for b in buildings:
+                    poly = shadow_polys.get(b.id)
+                    if poly and _point_in_polygon(mid_lon, mid_lat, poly):
+                        shadow_fraction = 1.0
+                        break
+            else:
+                shadow_fraction = 1.0
+
+            total_shade_time += shadow_fraction * segment_time
+            segments_out.append({
+                "lon": round(mid_lon, 6),
+                "lat": round(mid_lat, 6),
+                "shadow_fraction": round(shadow_fraction, 3),
+                "segment_index": idx,
+            })
+            elapsed_seconds += segment_time
+
+        weighted_shade_fraction = total_shade_time / total_time if total_time > 0 else 0.0
+        return {
+            "segments": segments_out,
+            "buildings_used": len(buildings),
+            "departure_time": departure_time.isoformat(),
+            "weighted_shade_fraction": round(weighted_shade_fraction, 4),
+            "total_route_time_seconds": round(total_time, 1),
+            "total_shade_time_seconds": round(total_shade_time, 1),
+        }
 
     def _estimate_remaining_shade_pct(self, remaining, now, rem_dur, buildings):
         if len(remaining) < 2:
