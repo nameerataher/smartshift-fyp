@@ -157,3 +157,18 @@ Action items:
    * Add scheduling features for tasks: allow selecting building face (N/E/S/W), task duration, time window, and compute optimal times for facade work.
    * Implement area-mode: polygon selection for batch tasks and an averaged shadow-density map (bird's-eye view heatmap showing percent shade across an area).
    * Close off complex features by next meeting.
+
+-----------------------------------------------------------------
+
+March 11, 2026 | Progress Meeting #12 for PerformByAI
+
+Meeting Notes:
+   * Went over the main features and updated interface
+   * Must improve the complex features & navigation routes
+   * Use an API for navigation instead of complicated graphs and heuristics
+
+Action items:
+   * Optimize the scheduling algorithm further, focus on facade first, followed by work zone area
+   * Rework the navigation graphs (A* and Yen)
+   * Heatmap to be consistently shaded, improve grid pattern
+   * Complete the validation tests
