@@ -18,7 +18,7 @@ import {
   getUVCategory,
 } from "@/lib/sunCalculations";
 
-const API_BASE = "http://localhost:8002";
+const API_BASE = "http://localhost:8080";
 const MAPBOX_TOKEN = "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
 
 interface HeatRisk {

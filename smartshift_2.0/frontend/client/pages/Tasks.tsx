@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const API_BASE = "http://localhost:8002";
+const API_BASE = "http://localhost:8080";
 
 interface Task {
   task_id: string;
