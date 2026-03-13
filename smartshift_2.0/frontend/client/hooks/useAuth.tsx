@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode, useCallback } from "react";
 
-const API_BASE = "http://localhost:8080";
+const API_BASE = "http://localhost:8002";
 
 export interface AuthUser {
   user_id: string;

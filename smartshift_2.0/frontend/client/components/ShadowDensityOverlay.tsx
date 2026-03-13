@@ -14,7 +14,7 @@ import mapboxgl from "mapbox-gl";
 import { Loader2, GripVertical, Eye } from "lucide-react";
 import { queryBuildingsFromMap, ClientBuilding } from "./MapboxMap";
 
-const API_BASE = "http://localhost:8080";
+const API_BASE = "http://localhost:8002";
 
 // blue → cyan → green → yellow → orange → red
 const GRADIENT_STOPS: [number, number, number, number][] = [
