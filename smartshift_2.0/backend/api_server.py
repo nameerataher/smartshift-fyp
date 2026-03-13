@@ -1,6 +1,15 @@
+"""
+Flask API Server for Dubai Sun-Shadow Simulation
+==================================================
+
+This module provides a REST API for the sun-shadow simulation system.
+
+"""
+
 import os
 from pathlib import Path
 
+# Load .env from backend directory so GOOGLE_DIRECTIONS_API_KEY is available
 _env_path = Path(__file__).resolve().parent / ".env"
 if _env_path.exists():
     try:
@@ -8,23 +17,29 @@ if _env_path.exists():
         load_dotenv(_env_path)
     except ImportError:
         pass
+# Log so you can confirm Compare (Google) has a key when starting the server
+if os.environ.get("GOOGLE_DIRECTIONS_API_KEY", "").strip():
+    print("[api_server] GOOGLE_DIRECTIONS_API_KEY is set (Compare will use Google)")
+else:
+    print("[api_server] GOOGLE_DIRECTIONS_API_KEY not set — Compare will show Mapbox only")
 
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import pandas as pd
 
+# Import our custom modules
 from solar_position import SolarPositionCalculator, SunPosition
-from shadow_calculator import ShadowCalculator, Shadow
+from shadow_calculator import ShadowCalculator, Building, Shadow
 from config import (
     DUBAI, API, SHADOW,
-    LANDMARK_LOCATIONS,
+    LANDMARK_LOCATIONS, SAMPLE_BUILDINGS,
     get_location_config, get_all_location_keys
 )
 
-# import ml models for heat risk
+# import ml models for heat risk; navigator for shaded routes
 try:
     from heat_risk_model import (
         HeatRiskModel, WeatherData, LocationContext, SunExposure,
@@ -36,12 +51,18 @@ except ImportError as e:
     print(f"Warning: ML models not available. Install dependencies: {e}")
 
 try:
-    from shadow_scheduler import ShadowScheduler, parse_client_buildings, _point_in_polygon
+    from schedule_optimizer import ShadeNavigator
+    NAVIGATOR_AVAILABLE = True
+except ImportError:
+    ShadeNavigator = None
+    NAVIGATOR_AVAILABLE = False
+    print("Warning: ShadeNavigator not available (schedule_optimizer)")
+
+try:
+    from shadow_scheduler import ShadowScheduler
     SHADOW_SCHEDULER_AVAILABLE = True
 except ImportError:
     ShadowScheduler = None
-    parse_client_buildings = None
-    _point_in_polygon = None
     SHADOW_SCHEDULER_AVAILABLE = False
     print("Warning: ShadowScheduler not available")
 
@@ -88,15 +109,27 @@ from database import (
     UserTask, AcceptedRecommendation, User, SavedPlace
 )
 
+# legacy sqlite path for backward compatibility
 DB_PATH = os.path.join(os.path.dirname(__file__), "smartshift.db")
 
 def init_db():
+    """initialize database tables - now using new database module."""
     init_database()
     seed_dummy_data()
 
+
 # flask app initialization
+
 app = Flask(__name__, static_folder='.')
 CORS(app, origins=API.CORS_ORIGINS)
+
+# register v2 api blueprint (new unified architecture)
+try:
+    from api_v2 import api_v2
+    app.register_blueprint(api_v2)
+    print("[OK] registered v2 api blueprint with unified architecture")
+except ImportError as e:
+    print(f"warning: could not register v2 api: {e}")
 
 # Initialize calculators
 solar_calculator = SolarPositionCalculator(
@@ -119,6 +152,7 @@ heat_risk_model = None
 shade_navigator = None
 
 def get_heat_risk_model():
+    """lazy load and train heat risk model on first use."""
     global heat_risk_model
     if heat_risk_model is None and ML_MODELS_AVAILABLE:
         print("initializing heat risk model...")
@@ -128,6 +162,7 @@ def get_heat_risk_model():
     return heat_risk_model
 
 def get_shade_navigator():
+    """lazy load shade navigator on first use."""
     global shade_navigator
     if shade_navigator is None and NAVIGATOR_AVAILABLE and ShadeNavigator:
         print("initializing shade navigator...")
@@ -136,24 +171,42 @@ def get_shade_navigator():
 
 
 # helper functions
+
 def parse_datetime_param(date_str: Optional[str], time_str: Optional[str]) -> datetime:
+    """
+    Parse date and time from request parameters.
+
+    Args:
+        date_str: Date in YYYY-MM-DD format (optional)
+        time_str: Time in HH:MM format (optional)
+
+    Returns:
+        Datetime object (defaults to current time if not provided)
+    """
     now = datetime.now()
+
     if date_str:
         try:
             year, month, day = map(int, date_str.split('-'))
             now = now.replace(year=year, month=month, day=day)
         except (ValueError, AttributeError):
             pass  # Use current date
+
     if time_str:
         try:
             hour, minute = map(int, time_str.split(':'))
             now = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         except (ValueError, AttributeError):
             pass  # Use current time
+
     return now
 
 
 def _get_heat_risk_level_for_location(lat: float, lon: float, dt: datetime) -> str:
+    """
+    Get heat risk label from the heat_risk_model for a location and time.
+    Returns "low" | "medium" | "high". Falls back to "low" if model unavailable.
+    """
     if not ML_MODELS_AVAILABLE or not WEATHER_API_AVAILABLE:
         return "low"
     try:
@@ -200,7 +253,15 @@ def _get_heat_risk_level_for_location(lat: float, lon: float, dt: datetime) -> s
 
 
 def sun_position_to_dict(pos: SunPosition) -> Dict[str, Any]:
-    # convert SunPosition object to JSON-serializable dictionary.
+    """
+    Convert SunPosition object to JSON-serializable dictionary.
+
+    Args:
+        pos: SunPosition object
+
+    Returns:
+        Dictionary with sun position data
+    """
     return {
         "azimuth": round(pos.azimuth, 2),
         "altitude": round(pos.altitude, 2),
@@ -212,8 +273,73 @@ def sun_position_to_dict(pos: SunPosition) -> Dict[str, Any]:
     }
 
 
+def load_buildings() -> List[Building]:
+    """
+    Load building data from configuration.
+
+    Returns:
+        List of Building objects
+    """
+    buildings = []
+    for bldg_data in SAMPLE_BUILDINGS:
+        building = Building(
+            id=bldg_data["id"],
+            name=bldg_data.get("name"),
+            height=bldg_data["height"],
+            footprint=[(pt[0], pt[1]) for pt in bldg_data["footprint"]]
+        )
+        buildings.append(building)
+    return buildings
+
+
+# =============================================================================
+# API ENDPOINTS
+# =============================================================================
+
+@app.route('/')
+def index():
+    """
+    Serve the main HTML page.
+
+    Redirects to the shadow simulation viewer.
+    """
+    return send_from_directory('.', 'dubai_shadow_simulation.html')
+
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint.
+
+    Returns:
+        JSON with server status and version
+    """
+    return jsonify({
+        "status": "healthy",
+        "version": API.VERSION,
+        "timestamp": datetime.now().isoformat(),
+        "location": {
+            "city": "Dubai",
+            "latitude": DUBAI.LATITUDE,
+            "longitude": DUBAI.LONGITUDE,
+            "timezone": f"UTC+{DUBAI.TIMEZONE_OFFSET}"
+        }
+    })
+
+
 @app.route('/api/sun-position', methods=['GET'])
 def get_sun_position():
+    """
+    Get current or specified sun position.
+
+    Query Parameters:
+        date: Date in YYYY-MM-DD format (optional)
+        time: Time in HH:MM format (optional)
+
+    Returns:
+        JSON with sun position data including azimuth, altitude,
+        sunrise, sunset, and solar noon times
+    """
     # Parse request parameters
     date_str = request.args.get('date')
     time_str = request.args.get('time')
@@ -229,8 +355,177 @@ def get_sun_position():
         "light_preset": _get_light_preset(position)
     })
 
+
+@app.route('/api/shadows', methods=['GET'])
+def get_shadows():
+    """
+    Get shadow data for all buildings at current or specified time.
+
+    Query Parameters:
+        date: Date in YYYY-MM-DD format (optional)
+        time: Time in HH:MM format (optional)
+
+    Returns:
+        JSON with GeoJSON shadow polygons and sun position data
+    """
+    # Parse request parameters
+    date_str = request.args.get('date')
+    time_str = request.args.get('time')
+    dt = parse_datetime_param(date_str, time_str)
+
+    # Load buildings and calculate shadows
+    buildings = load_buildings()
+    analysis = shadow_calculator.calculate_shadows_for_buildings(buildings, dt)
+
+    # Convert to response format
+    shadows_geojson = shadow_calculator.shadows_to_geojson(analysis.shadows)
+
+    return jsonify({
+        "success": True,
+        "timestamp": dt.isoformat(),
+        "sun": sun_position_to_dict(analysis.sun_position),
+        "shadows": shadows_geojson,
+        "summary": {
+            "building_count": len(buildings),
+            "shadow_count": len(analysis.shadows),
+            "light_preset": _get_light_preset(analysis.sun_position)
+        }
+    })
+
+
+@app.route('/api/animation', methods=['GET'])
+def get_animation_frames():
+    """
+    Get shadow animation frames for an entire day.
+
+    Query Parameters:
+        date: Date in YYYY-MM-DD format (optional, defaults to today)
+        start_hour: Starting hour 0-23 (optional, default 6)
+        end_hour: Ending hour 0-23 (optional, default 20)
+        interval: Minutes between frames (optional, default 30)
+
+    Returns:
+        JSON with array of shadow frames for animation
+    """
+    # Parse request parameters
+    date_str = request.args.get('date')
+    dt = parse_datetime_param(date_str, None)
+
+    start_hour = int(request.args.get('start_hour', SHADOW.DEFAULT_ANIMATION_START_HOUR))
+    end_hour = int(request.args.get('end_hour', SHADOW.DEFAULT_ANIMATION_END_HOUR))
+    interval = int(request.args.get('interval', SHADOW.DEFAULT_ANIMATION_INTERVAL_MINUTES))
+
+    # Validate parameters
+    start_hour = max(0, min(23, start_hour))
+    end_hour = max(start_hour + 1, min(24, end_hour))
+    interval = max(5, min(120, interval))
+
+    # Load buildings and calculate animation frames
+    buildings = load_buildings()
+    frames = shadow_calculator.calculate_shadow_animation_frames(
+        buildings=buildings,
+        date=dt,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        interval_minutes=interval
+    )
+
+    # Convert frames to response format
+    animation_data = []
+    for frame in frames:
+        animation_data.append({
+            "time": frame.timestamp.strftime("%H:%M"),
+            "timestamp": frame.timestamp.isoformat(),
+            "sun": sun_position_to_dict(frame.sun_position),
+            "shadows": shadow_calculator.shadows_to_geojson(frame.shadows),
+            "light_preset": _get_light_preset(frame.sun_position)
+        })
+
+    return jsonify({
+        "success": True,
+        "date": dt.strftime("%Y-%m-%d"),
+        "frame_count": len(animation_data),
+        "interval_minutes": interval,
+        "frames": animation_data
+    })
+
+
+@app.route('/api/sun-path', methods=['GET'])
+def get_sun_path():
+    """
+    Get sun path data for visualization (arc across the sky).
+
+    Query Parameters:
+        date: Date in YYYY-MM-DD format (optional)
+        interval: Minutes between points (optional, default 15)
+
+    Returns:
+        JSON with sun positions throughout the day for path visualization
+    """
+    # Parse request parameters
+    date_str = request.args.get('date')
+    dt = parse_datetime_param(date_str, None)
+    interval = int(request.args.get('interval', 15))
+
+    # Calculate sun positions for daylight hours
+    positions = solar_calculator.get_positions_for_day(dt, interval_minutes=interval)
+
+    # Filter to daylight hours and format
+    sun_path = []
+    for time_key, pos in sorted(positions.items()):
+        if pos.is_daylight:
+            sun_path.append({
+                "time": time_key,
+                "azimuth": round(pos.azimuth, 2),
+                "altitude": round(pos.altitude, 2)
+            })
+
+    # Get sunrise/sunset for reference
+    first_pos = list(positions.values())[0] if positions else None
+
+    return jsonify({
+        "success": True,
+        "date": dt.strftime("%Y-%m-%d"),
+        "sunrise": first_pos.sunrise.strftime("%H:%M") if first_pos and first_pos.sunrise else None,
+        "sunset": first_pos.sunset.strftime("%H:%M") if first_pos and first_pos.sunset else None,
+        "solar_noon": first_pos.solar_noon.strftime("%H:%M") if first_pos and first_pos.solar_noon else None,
+        "path": sun_path
+    })
+
+
+@app.route('/api/buildings', methods=['GET'])
+def get_buildings():
+    """
+    Get list of available buildings with their data.
+
+    Returns:
+        JSON with building list including heights and footprints
+    """
+    buildings = []
+    for bldg in SAMPLE_BUILDINGS:
+        buildings.append({
+            "id": bldg["id"],
+            "name": bldg.get("name", bldg["id"]),
+            "height": bldg["height"],
+            "footprint": bldg["footprint"],
+            "centroid": _calculate_centroid(bldg["footprint"])
+        })
+
+    return jsonify({
+        "success": True,
+        "count": len(buildings),
+        "buildings": buildings
+    })
+
+
 @app.route('/api/locations', methods=['GET'])
 def get_locations():
+    """
+    Get list of available landmark locations for map navigation.
+
+    Returns:
+        JSON with landmark locations and camera configurations
+    """
     locations = []
     for key, loc in LANDMARK_LOCATIONS.items():
         locations.append({
@@ -252,7 +547,18 @@ def get_locations():
 
 @app.route('/api/shadow-at-point', methods=['GET'])
 def get_shadow_at_point():
-    # Check if a specific point is in shadow at a given time.
+    """
+    Check if a specific point is in shadow at a given time.
+
+    Query Parameters:
+        lat: Latitude of the point
+        lon: Longitude of the point
+        date: Date in YYYY-MM-DD format (optional)
+        time: Time in HH:MM format (optional)
+
+    Returns:
+        JSON with shadow status for the specified point
+    """
     # Parse required parameters
     try:
         lat = float(request.args.get('lat'))
@@ -284,8 +590,19 @@ def get_shadow_at_point():
 
 @app.route('/api/shadow-density', methods=['POST'])
 def get_shadow_density():
-    # Compute a grid-based shadow density map for a bounding box.
+    """
+    Compute a grid-based shadow density map for a bounding box.
 
+    POST body:
+        bbox: { min_lat, max_lat, min_lon, max_lon }
+        grid_size_meters: float (default 20)
+        date: YYYY-MM-DD (optional)
+        time: HH:MM (optional)
+        buildings: [ { id, footprint, height, name } ] (optional)
+
+    Returns:
+        GeoJSON FeatureCollection of rectangular cells with shadow_pct property.
+    """
     try:
         from shadow_density import ShadowDensityCalculator
         from shadow_scheduler import parse_client_buildings
@@ -342,6 +659,10 @@ weather_forecast_cache = {
 }
 
 def fetch_7day_forecast(lat, lon):
+    """
+    fetch 7-day hourly forecast from open-meteo.
+    caches the result to avoid repeated api calls.
+    """
     global weather_forecast_cache
 
     # check if we have cached data for this location (cache for 30 minutes)
@@ -461,9 +782,21 @@ def fetch_7day_forecast(lat, lon):
     return forecast_data
 
 
-# -----------------------------------------------------------------------------
 @app.route('/api/weather/forecast', methods=['GET'])
 def get_weather_forecast():
+    """
+    get 7-day hourly weather forecast from open-meteo.
+
+    this endpoint returns comprehensive hourly data for the next 7 days,
+    which the frontend caches and uses to update weather as the time slider moves.
+
+    query parameters:
+        lat: latitude (optional, defaults to dubai)
+        lon: longitude (optional, defaults to dubai)
+
+    returns:
+        json with hourly and daily forecast data for 7 days
+    """
     if not WEATHER_API_AVAILABLE:
         return jsonify({
             "success": False,
@@ -494,6 +827,21 @@ def get_weather_forecast():
 
 @app.route('/api/weather', methods=['GET'])
 def get_weather():
+    """
+    get weather data for a specific date and hour using 7-day forecast.
+
+    uses cached 7-day forecast data to return weather for any hour
+    within the next 7 days.
+
+    query parameters:
+        date: date in yyyy-mm-dd format (optional, defaults to today)
+        hour: hour 0-23 (optional, defaults to current hour)
+        lat: latitude (optional, defaults to dubai)
+        lon: longitude (optional, defaults to dubai)
+
+    returns:
+        json with weather data for the specified time
+    """
     if not WEATHER_API_AVAILABLE:
         return jsonify({
             "success": False,
@@ -570,8 +918,35 @@ def get_weather():
             "error": str(e)
         }), 500
 
+
+# =============================================================================
+# ML-POWERED ENDPOINTS (HEAT RISK & SCHEDULE OPTIMIZATION)
+# =============================================================================
+
 @app.route('/api/heat-risk', methods=['GET', 'POST'])
 def get_heat_risk():
+    """
+    predict heat risk for a specific location and time.
+
+    answers the question: "is it safe to be outside right now?"
+
+    target users:
+    - community workers (facade cleaners, construction, road maintenance)
+    - joggers, cyclists, pedestrians seeking low-heat routes
+
+    automatically fetches real weather data from open-meteo for accurate predictions.
+
+    query parameters (get) or json body (post):
+        lat: latitude
+        lon: longitude
+        date: date in yyyy-mm-dd format (optional, defaults to today)
+        time: time in hh:mm format (optional, defaults to now)
+        surface_type: 'asphalt', 'concrete', 'grass', etc. (optional)
+        in_shadow: whether currently in shadow (optional, boolean)
+
+    returns:
+        json with heat risk prediction, weather data, and safety recommendations
+    """
     if not ML_MODELS_AVAILABLE:
                 return jsonify({
             "success": False,
@@ -715,6 +1090,440 @@ def get_heat_risk():
                 "success": False,
             "error": str(e)
         }), 400
+
+
+@app.route('/api/schedule', methods=['GET', 'POST'])
+def get_optimal_task_schedule():
+    """
+    find the optimal time to schedule an outdoor task.
+
+    answers: "given today's conditions, what's the best time to schedule this task?"
+
+    uses sun position analysis to determine the best start time for outdoor work,
+    maximizing shadow coverage at the given building/area.
+
+    target users:
+    - municipality planners (scheduling outdoor maintenance)
+    - construction supervisors (planning work shifts)
+    - facade cleaning companies (booking building cleaning slots)
+    - joggers, cyclists (planning exercise times)
+
+    query parameters (get) or json body (post):
+        task_name: name/description of the task
+        duration: duration in minutes (e.g., 60, 120)
+        lat: latitude of task location
+        lon: longitude of task location
+        date: date in yyyy-mm-dd format
+        start_hour: earliest allowed start hour (default 6)
+        end_hour: latest allowed end hour (default 18)
+        requires_shade: whether task must be in shade (default false)
+        surface_type: ground surface type (default 'mixed')
+
+    returns:
+        json with optimal schedule recommendation, ranked alternatives,
+        and shadow coverage breakdown for each time slot
+    """
+    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
+        return jsonify({
+            "success": False,
+            "error": "shadow scheduler not available."
+        }), 503
+
+    try:
+        # parse parameters from request
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            data = request.args.to_dict()
+
+        # task parameters
+        task_name = data.get('task_name', 'outdoor task')
+        duration = int(data.get('duration', 60))
+        lat = float(data.get('lat', DUBAI.LATITUDE))
+        lon = float(data.get('lon', DUBAI.LONGITUDE))
+
+        # date selection
+        date_str = data.get('date')
+        if date_str:
+            year, month, day = map(int, date_str.split('-'))
+            date = datetime(year, month, day)
+        else:
+            date = datetime.now()
+
+        # time bounds
+        earliest_start = int(data.get('start_hour', data.get('earliest_start', 6)))
+        latest_end = int(data.get('end_hour', data.get('latest_end', 18)))
+        requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
+        building_face = data.get('building_face')
+
+        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
+        recommendation = scheduler.find_optimal_schedule(
+            task_name=task_name,
+            lat=lat,
+            lon=lon,
+            location_name=task_name,
+            task_duration_minutes=duration,
+            date=date,
+            start_hour=earliest_start,
+            end_hour=latest_end,
+            building_face=building_face,
+            recommendation_count=5
+        )
+
+        best = recommendation.best_slot
+
+        # store schedule request in sqlite for learning from user feedback
+        request_id = str(uuid.uuid4())
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO schedule_requests (
+                    id, task_name, lat, lon, date, start_hour, end_hour,
+                    duration_minutes, recommended_start, recommended_end,
+                    heat_risk_score, shade_percentage, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                request_id,
+                task_name,
+                lat,
+                lon,
+                date.strftime('%Y-%m-%d'),
+                earliest_start,
+                latest_end,
+                duration,
+                best.start.strftime('%H:%M'),
+                best.end.strftime('%H:%M'),
+                0.0,  # unused legacy column
+                float(best.shadow_percentage),
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            print(f"warning: could not store schedule request: {db_err}")
+
+        return jsonify({
+            "success": True,
+            "request_id": request_id,
+            "task": task_name,
+            "date": date.strftime('%Y-%m-%d'),
+            "constraints": {
+                "duration_minutes": duration,
+                "earliest_start": earliest_start,
+                "latest_end": latest_end,
+                "requires_shade": requires_shade
+            },
+            "recommendation": {
+                "best_start_time": best.start.strftime('%H:%M'),
+                "end_time": best.end.strftime('%H:%M'),
+                "quality_score": round(best.shadow_percentage, 1),
+                "shade_percentage": round(best.shadow_percentage, 1),
+                "is_feasible": True,
+                "location": f"{lat:.4f}, {lon:.4f}"
+            },
+            "alternatives": [
+                {
+                    "start_time": slot.start.strftime('%H:%M'),
+                    "end_time": slot.end.strftime('%H:%M'),
+                    "quality_score": round(slot.shadow_percentage, 1),
+                    "shade_percentage": round(slot.shadow_percentage, 1)
+                }
+                for slot in recommendation.alternatives
+            ],
+            "summary": recommendation.recommendation_reason,
+            "analysis": recommendation.recommendation_reason
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
+
+
+@app.route('/api/schedule/feedback', methods=['POST'])
+def save_schedule_feedback():
+    """
+    store user feedback for schedule recommendations.
+
+    this data is used to learn user preferences over time.
+    """
+    try:
+        data = request.get_json() or {}
+        request_id = data.get('request_id')
+        action = data.get('action')  # accept or reject
+        chosen_start = data.get('chosen_start')
+        chosen_end = data.get('chosen_end')
+        note = data.get('note', '')
+
+        if not request_id or action not in ['accept', 'reject']:
+            return jsonify({"success": False, "error": "invalid request_id or action"}), 400
+
+        feedback_id = str(uuid.uuid4())
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO schedule_feedback (
+                id, request_id, action, chosen_start, chosen_end, note, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            feedback_id,
+            request_id,
+            action,
+            chosen_start,
+            chosen_end,
+            note,
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+
+        return jsonify({"success": True, "feedback_id": feedback_id})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/schedule/history', methods=['GET'])
+def get_schedule_history():
+    """
+    return recent schedule requests and feedback.
+
+    this can be used to analyze user preferences and improve recommendations.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, task_name, lat, lon, date, start_hour, end_hour,
+                   duration_minutes, recommended_start, recommended_end,
+                   heat_risk_score, shade_percentage, created_at
+            FROM schedule_requests
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+        requests_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT id, request_id, action, chosen_start, chosen_end, note, created_at
+            FROM schedule_feedback
+            ORDER BY created_at DESC
+            LIMIT 50
+        """)
+        feedback_rows = cur.fetchall()
+
+        conn.close()
+
+        return jsonify({
+            "success": True,
+            "requests": [
+                {
+                    "id": r[0], "task_name": r[1], "lat": r[2], "lon": r[3],
+                    "date": r[4], "start_hour": r[5], "end_hour": r[6],
+                    "duration_minutes": r[7], "recommended_start": r[8],
+                    "recommended_end": r[9],
+                    "shade_percentage": r[11], "created_at": r[12]
+                } for r in requests_rows
+            ],
+            "feedback": [
+                {
+                    "id": f[0], "request_id": f[1], "action": f[2],
+                    "chosen_start": f[3], "chosen_end": f[4], "note": f[5],
+                    "created_at": f[6]
+                } for f in feedback_rows
+            ]
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/shaded-route', methods=['GET', 'POST'])
+def get_shaded_navigation_route():
+    """
+    find a shade-optimized route between two points.
+
+    uses mapbox directions api for realistic pedestrian/cycling routes that:
+    - follow actual roads and paths (not straight lines)
+    - avoid highways for pedestrians and cyclists
+    - consider bridges, water bodies, and safe crossings
+    - provide turn-by-turn navigation geometry
+
+    this endpoint is for community users (cyclists, joggers, pedestrians)
+    who want to minimize sun exposure during their journey.
+
+    query parameters (get) or json body (post):
+        start_lat: starting point latitude
+        start_lon: starting point longitude
+        end_lat: destination latitude
+        end_lon: destination longitude
+        mode: 'walking', 'cycling', or 'driving' (default 'walking')
+        departure_time: departure time in hh:mm format (optional)
+        departure_date: departure date in yyyy-mm-dd format (optional)
+        mapbox_token: mapbox access token for directions api (optional)
+
+    returns:
+        json with shade-optimized route, segments, and geometry
+    """
+    if not NAVIGATOR_AVAILABLE:
+        return jsonify({
+            "success": False,
+            "error": "shade navigator not available (schedule_optimizer module)."
+        }), 503
+
+    try:
+        # parse parameters
+        if request.method == 'POST':
+            data = request.get_json() or {}
+        else:
+            data = request.args.to_dict()
+
+        # coordinates
+        start_lat = float(data.get('start_lat', DUBAI.LATITUDE))
+        start_lon = float(data.get('start_lon', DUBAI.LONGITUDE))
+        end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
+
+        # mode (walking/cycling are safe for pedestrians, driving for vehicles)
+        mode = data.get('mode', 'walking')
+        if mode not in ['walking', 'cycling', 'driving']:
+            mode = 'walking'
+
+        # mapbox token for realistic routing
+        mapbox_token = data.get('mapbox_token')
+
+        # departure time
+        date_str = data.get('departure_date')
+        time_str = data.get('departure_time')
+        departure_time = parse_datetime_param(date_str, time_str)
+
+        # get shade navigator and find route
+        navigator = get_shade_navigator()
+        route = navigator.find_shaded_route(
+            start=(start_lat, start_lon),
+            end=(end_lat, end_lon),
+            mode=mode,
+            departure_time=departure_time,
+            mapbox_token=mapbox_token
+        )
+
+        # store route in database for learning and history
+        route_id = str(uuid.uuid4())
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO route_history (id, start_lat, start_lon, end_lat, end_lon,
+                    start_name, end_name, travel_mode, distance_km, duration_min,
+                    shade_coverage, heat_risk_score, route_geometry, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                route_id,
+                start_lat, start_lon,
+                end_lat, end_lon,
+                data.get('start_name', ''),
+                data.get('end_name', ''),
+                mode,
+                round(route.total_distance, 2),
+                round(route.total_duration, 1),
+                round(route.average_shade_coverage, 2),
+                round(route.average_heat_risk, 2),
+                json.dumps(route.route_geometry) if route.route_geometry else '',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as db_err:
+            print(f"warning: could not store route in database: {db_err}")
+
+        # build response with route geometry for map display
+        result = {
+            "success": True,
+            "route_id": route_id,
+            "mode": mode,
+            "departure_time": departure_time.isoformat(),
+            "total_distance": round(route.total_distance, 1),
+            "total_duration": round(route.total_duration, 1),
+            "average_shade_coverage": round(route.average_shade_coverage * 100, 1),
+            "average_heat_risk": round(route.average_heat_risk * 100, 1),
+            "sun_exposure_minutes": round(route.sun_exposure_minutes, 1),
+            "shade_score": round(route.shade_score, 1),
+            "comparison": route.comparison_to_fastest,
+            "geometry": route.route_geometry,  # actual route path from mapbox
+            "segments": [
+                {
+                    "start": [seg.start_lat, seg.start_lon],
+                    "end": [seg.end_lat, seg.end_lon],
+                    "distance": round(seg.distance_meters, 1),
+                    "duration": round(seg.duration_seconds, 1),
+                    "shade_coverage": round(seg.shade_coverage * 100, 1),
+                    "heat_risk": round(seg.heat_risk * 100, 1)
+                }
+                for seg in route.segments[:50]  # limit to 50 segments for response size
+            ]
+        }
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
+
+
+@app.route('/api/v2/shadow-route', methods=['POST'])
+def get_shadow_optimized_route():
+    """
+    Shadow-optimised routing: up to 3 recommendations.
+
+    Uses ShadeRouter: road graph from Mapbox Tilequery + direction candidates
+    from Mapbox Directions; pathfinding is A* and Yen's k-shortest on that
+    graph (no Mapbox API used for the final route choice).
+    """
+    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
+        return jsonify({
+            "success": False,
+            "error": ("ShadeRouter not available. "
+                      "Install: pip install networkx")
+        }), 503
+
+    try:
+        data = request.get_json() or {}
+
+        start_lat = float(data.get('start_lat', DUBAI.LATITUDE))
+        start_lon = float(data.get('start_lon', DUBAI.LONGITUDE))
+        end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
+        end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
+
+        mode = data.get('mode', 'walking')
+        if mode not in ['walking', 'cycling']:
+            mode = 'walking'
+
+        date_str = data.get('date')
+        current_minutes = data.get('current_minutes')
+        client_buildings = data.get('buildings')
+
+        router = ShadeRouter()
+        result = router.find_routes(
+            start_lat=start_lat,
+            start_lon=start_lon,
+            end_lat=end_lat,
+            end_lon=end_lon,
+            mode=mode,
+            k=3,
+            client_buildings=client_buildings,
+            date_str=date_str,
+            current_minutes=(int(current_minutes)
+                             if current_minutes is not None else None),
+        )
+
+        return jsonify(result)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route('/api/v2/shadow-route/update', methods=['POST'])
@@ -915,200 +1724,6 @@ def get_routes_shade_score():
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 400
 
-@app.route('/api/v2/schedule/area', methods=['POST'])
-def v2_schedule_area():
-    """
-    Find optimal work schedule for a drawn area (polygon). Uses shadow-only
-    scheduler; buildings can come from client map tiles or Tilequery API.
-    """
-    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler or not parse_client_buildings:
-        return jsonify({"success": False, "error": "shadow scheduler not available"}), 500
-    try:
-        data = request.get_json()
-        task_name = data.get('task_name', 'area task')
-        polygon_points = data.get('polygon_points', [])
-        if not polygon_points or len(polygon_points) < 3:
-            return jsonify({"success": False, "error": "polygon_points requires at least 3 vertices"}), 400
-        location_name = data.get('location_name', task_name)
-        task_duration = int(data.get('task_duration_minutes', 60))
-        date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
-        date = datetime.strptime(date_str, '%Y-%m-%d')
-        start_hour = int(data.get('start_hour', 5))
-        end_hour = int(data.get('end_hour', 20))
-        recommendation_count = int(data.get('recommendation_count', 5))
-        polygon_tuples = [(float(p[0]), float(p[1])) for p in polygon_points]
-        raw_buildings = data.get('buildings')
-        client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
-        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
-        recommendation = scheduler.find_optimal_schedule_for_area(
-            task_name=task_name,
-            polygon_points=polygon_tuples,
-            location_name=location_name,
-            task_duration_minutes=task_duration,
-            date=date,
-            start_hour=start_hour,
-            end_hour=end_hour,
-            recommendation_count=recommendation_count,
-            client_buildings=client_buildings,
-        )
-        grid_pts = scheduler._sample_polygon_grid(polygon_tuples)
-        return jsonify({
-            "success": True,
-            "mode": "area_grid",
-            "building_source": "client_map_tiles" if client_buildings else "tilequery_api",
-            "buildings_used": recommendation.buildings_used,
-            "grid_samples": len(grid_pts),
-            "recommendation": recommendation.to_dict(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 400
-
-
-@app.route('/api/v2/shadow-schedule', methods=['POST'])
-def v2_shadow_schedule():
-    """
-    Find optimal time windows for an outdoor task by shadow only (no heat risk).
-    Used by Map page for site analysis.
-    """
-    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler or not parse_client_buildings:
-        return jsonify({"success": False, "error": "shadow scheduler not available"}), 500
-    try:
-        data = request.get_json()
-        task_name = data.get('task_name', 'outdoor task')
-        lat = float(data.get('lat', 25.2048))
-        lon = float(data.get('lon', 55.2708))
-        location_name = data.get('location_name', 'Dubai')
-        duration_minutes = int(data.get('duration_minutes', 60))
-        date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
-        date = datetime.strptime(date_str, '%Y-%m-%d')
-        start_hour = int(data.get('start_hour', 5))
-        end_hour = int(data.get('end_hour', 20))
-        building_face = data.get('building_face')
-        recommendation_count = int(data.get('recommendation_count', 5))
-        raw_buildings = data.get('buildings')
-        client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
-        scheduler = ShadowScheduler(temporal_resolution_minutes=30)
-        recommendation = scheduler.find_optimal_schedule(
-            task_name=task_name,
-            lat=lat,
-            lon=lon,
-            location_name=location_name,
-            task_duration_minutes=duration_minutes,
-            date=date,
-            start_hour=start_hour,
-            end_hour=end_hour,
-            building_face=building_face,
-            recommendation_count=recommendation_count,
-            client_buildings=client_buildings,
-        )
-        return jsonify({
-            "success": True,
-            "mode": "shadow_only",
-            "building_source": "client_map_tiles" if client_buildings else "tilequery_api",
-            "buildings_used": recommendation.buildings_used,
-            "recommendation": recommendation.to_dict(),
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 400
-
-
-@app.route('/api/v2/debug/shadow-polygons', methods=['POST'])
-def v2_debug_shadow_polygons():
-    """
-    Return shadow polygons as GeoJSON for the map overlay. Uses client-provided
-    buildings and optional sun azimuth/altitude so shadows match Mapbox view.
-    """
-    if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler or _point_in_polygon is None:
-        return jsonify({"success": False, "error": "shadow scheduler not available"}), 500
-    try:
-        data = request.get_json() or {}
-        lat = float(data.get('lat', 25.2048))
-        lon = float(data.get('lon', 55.2708))
-        time_str = data.get('time')
-        if time_str:
-            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
-        else:
-            dt = datetime.now()
-        raw_buildings = data.get('buildings')
-        scheduler = ShadowScheduler()
-        if raw_buildings:
-            buildings = parse_client_buildings(raw_buildings)
-            building_source = "client_map_tiles"
-        else:
-            buildings = scheduler._fetch_nearby_buildings(lat, lon)
-            building_source = "tilequery_api"
-        client_az = data.get('sun_azimuth')
-        client_alt = data.get('sun_altitude')
-        if client_az is not None and client_alt is not None:
-            sun = SunPosition(
-                azimuth=float(client_az),
-                altitude=float(client_alt),
-                zenith=90.0 - float(client_alt),
-                is_daylight=float(client_alt) > 0,
-            )
-        else:
-            sun = scheduler._get_sun_position(dt, lat, lon)
-        shadow_features = []
-        footprint_features = []
-        shadow_length_m = shadow_calculator.calculate_shadow_length(30.0, sun.altitude) if sun.altitude > 0 else 0
-        shadow_dir = shadow_calculator.calculate_shadow_direction(sun.azimuth) if sun.altitude > 0 else 0
-        for b in buildings:
-            fp_ring = [[p[0], p[1]] for p in b.footprint]
-            if fp_ring and fp_ring[0] != fp_ring[-1]:
-                fp_ring.append(fp_ring[0])
-            footprint_features.append({
-                "type": "Feature",
-                "properties": {"building_id": b.id, "height": b.height, "name": b.name or "unknown", "layer": "footprint"},
-                "geometry": {"type": "Polygon", "coordinates": [fp_ring]},
-            })
-            polygon = shadow_calculator.calculate_shadow_polygon(b, sun)
-            if polygon:
-                ring = [[p[0], p[1]] for p in polygon]
-                if ring[0] != ring[-1]:
-                    ring.append(ring[0])
-                shadow_features.append({
-                    "type": "Feature",
-                    "properties": {"building_id": b.id, "height": b.height, "name": b.name or "unknown", "layer": "shadow"},
-                    "geometry": {"type": "Polygon", "coordinates": [ring]},
-                })
-        target_in_shadow = any(
-            shadow_calculator.calculate_shadow_polygon(b, sun)
-            and _point_in_polygon(lon, lat, shadow_calculator.calculate_shadow_polygon(b, sun))
-            for b in buildings
-        )
-        heights = [b.height for b in buildings]
-        height_stats = {
-            "min": round(min(heights), 1) if heights else 0,
-            "max": round(max(heights), 1) if heights else 0,
-            "avg": round(sum(heights) / len(heights), 1) if heights else 0,
-        }
-        return jsonify({
-            "success": True,
-            "time": dt.isoformat(),
-            "building_source": building_source,
-            "sun": {
-                "azimuth": round(sun.azimuth, 2),
-                "altitude": round(sun.altitude, 2),
-                "is_daylight": sun.is_daylight,
-                "shadow_length_30m": round(shadow_length_m, 1),
-                "shadow_direction": round(shadow_dir, 1),
-            },
-            "target": {"lat": lat, "lon": lon, "in_shadow": target_in_shadow},
-            "buildings_found": len(buildings),
-            "height_stats": height_stats,
-            "shadow_polygons_count": len(shadow_features),
-            "shadow_geojson": {"type": "FeatureCollection", "features": shadow_features},
-            "footprint_geojson": {"type": "FeatureCollection", "features": footprint_features},
-        })
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"success": False, "error": str(e)}), 400
-
 
 try:
     from mapbox_directions import get_directions as mapbox_get_directions
@@ -1116,6 +1731,7 @@ try:
 except ImportError:
     mapbox_get_directions = None
     MAPBOX_DIRECTIONS_AVAILABLE = False
+
 
 try:
     from google_directions import get_directions as google_get_directions
@@ -1242,6 +1858,43 @@ def get_route_history():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+@app.route('/api/ml-status', methods=['GET'])
+def get_ml_status():
+    """
+    check status of ml models.
+
+    returns information about which ml models are loaded and trained.
+    """
+    global heat_risk_model, shade_navigator
+
+    return jsonify({
+        "success": True,
+        "ml_available": ML_MODELS_AVAILABLE,
+        "models": {
+            "heat_risk_model": {
+                "loaded": heat_risk_model is not None,
+                "trained": heat_risk_model.is_trained if heat_risk_model else False
+            },
+            "shadow_scheduler": {
+                "loaded": SHADOW_SCHEDULER_AVAILABLE
+            },
+            "shade_navigator": {
+                "loaded": shade_navigator is not None
+            }
+        },
+        "endpoints": [
+            "/api/heat-risk",
+            "/api/schedule",
+            "/api/shaded-route"
+        ]
+    })
+
+
+# =============================================================================
+# AUTH API ENDPOINTS
+# =============================================================================
+
 @app.route('/api/auth/login', methods=['POST'])
 def api_login():
     """Authenticate user and return user data."""
@@ -1345,6 +1998,11 @@ def api_update_user():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+# =============================================================================
+# SAVED PLACES API ENDPOINTS
+# =============================================================================
+
 @app.route('/api/saved-places', methods=['GET'])
 def api_get_saved_places():
     user_id = request.headers.get('X-User-Id', request.args.get('user_id', ''))
@@ -1382,6 +2040,11 @@ def api_delete_saved_place(place_id):
         return jsonify({"success": True})
     return jsonify({"success": False, "error": "Place not found"}), 404
 
+
+# =============================================================================
+# TASK MANAGEMENT API ENDPOINTS
+# =============================================================================
+
 @app.route('/api/tasks', methods=['GET'])
 def api_get_tasks():
     """Get all tasks, optionally filtered by date, status, or user."""
@@ -1394,6 +2057,7 @@ def api_get_tasks():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
 @app.route('/api/tasks/today', methods=['GET'])
 def api_get_today_tasks():
     """Get tasks for today."""
@@ -1403,6 +2067,7 @@ def api_get_today_tasks():
         return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
 
 @app.route('/api/tasks', methods=['POST'])
 def api_create_task():
@@ -1513,6 +2178,11 @@ def api_accept_recommendation(task_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
+
+# =============================================================================
+# ANALYTICS API ENDPOINTS
+# =============================================================================
+
 @app.route('/api/dashboard', methods=['GET'])
 def api_get_dashboard():
     """Get dashboard summary data."""
@@ -1559,6 +2229,11 @@ def api_refresh_analytics():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+# =============================================================================
+# HELPER FUNCTIONS FOR API
+# =============================================================================
+
 def _get_light_preset(sun_position: SunPosition) -> str:
     """
     Determine appropriate Mapbox light preset based on sun position.
@@ -1590,6 +2265,34 @@ def _get_light_preset(sun_position: SunPosition) -> str:
     else:
         return "day"
 
+
+def _calculate_centroid(footprint: List[List[float]]) -> Dict[str, float]:
+    """
+    Calculate centroid of a building footprint.
+
+    Args:
+        footprint: List of [lon, lat] coordinates
+
+    Returns:
+        Dictionary with lon and lat of centroid
+    """
+    if not footprint:
+        return {"lon": 0, "lat": 0}
+
+    sum_lon = sum(pt[0] for pt in footprint)
+    sum_lat = sum(pt[1] for pt in footprint)
+    n = len(footprint)
+
+    return {
+        "lon": round(sum_lon / n, 6),
+        "lat": round(sum_lat / n, 6)
+    }
+
+
+# =============================================================================
+# ERROR HANDLERS
+# =============================================================================
+
 @app.errorhandler(404)
 def not_found(e):
     """Handle 404 errors."""
@@ -1599,7 +2302,10 @@ def not_found(e):
         "available_endpoints": [
             "/api/health",
             "/api/sun-position",
+            "/api/shadows",
+            "/api/animation",
             "/api/sun-path",
+            "/api/buildings",
             "/api/locations",
             "/api/shadow-at-point",
             "/api/weather",
@@ -1610,6 +2316,7 @@ def not_found(e):
         ]
     }), 404
 
+
 @app.errorhandler(500)
 def server_error(e):
     """Handle 500 errors."""
@@ -1619,7 +2326,38 @@ def server_error(e):
         "message": str(e)
     }), 500
 
+
+# =============================================================================
+# MAIN ENTRY POINT
+# =============================================================================
+
 if __name__ == "__main__":
+    print("=" * 60)
+    print("SmartShift Sun-Shadow Simulation API Server")
+    print("=" * 60)
+    print(f"Location: Dubai ({DUBAI.LATITUDE}°N, {DUBAI.LONGITUDE}°E)")
+    print(f"Timezone: UTC+{DUBAI.TIMEZONE_OFFSET}")
+    print(f"Server:   http://{API.HOST}:{API.PORT}")
+    print(f"ML Models: {'Available' if ML_MODELS_AVAILABLE else 'Not Available'}")
+    print(f"Weather API: Open-Meteo [OK] (Free, No API Key)")
+    print("-" * 60)
+    print("Shadow & Sun Endpoints:")
+    print("  GET /api/health       - Server status")
+    print("  GET /api/sun-position - Current sun position")
+    print("  GET /api/shadows      - Current shadow data")
+    print("  GET /api/animation    - Day animation frames")
+    print("  GET /api/sun-path     - Sun path across sky")
+    print("  GET /api/buildings    - Building list")
+    print("  GET /api/locations    - Landmark locations")
+    print("  GET /api/weather      - Weather data (Open-Meteo)")
+    print("-" * 60)
+    print("ML-Powered Endpoints:")
+    print("  GET/POST /api/heat-risk    - Heat risk prediction (dashboard)")
+    print("  GET/POST /api/schedule     - Shadow-based task scheduling")
+    print("  GET/POST /api/shaded-route - Shade-optimized navigation")
+    print("  GET /api/ml-status         - ML models status")
+    print("=" * 60)
+
     app.run(
         host=API.HOST,
         port=API.PORT,
