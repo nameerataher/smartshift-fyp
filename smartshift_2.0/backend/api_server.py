@@ -46,7 +46,7 @@ except ImportError:
     print("Warning: ShadowScheduler not available")
 
 try:
-    from routing.shade_router import ShadeRouter
+    from shade_router import ShadeRouter
     SHADE_ROUTER_AVAILABLE = True
 except ImportError as _e:
     ShadeRouter = None
@@ -1111,14 +1111,14 @@ def v2_debug_shadow_polygons():
 
 
 try:
-    from routing.mapbox_directions import get_directions as mapbox_get_directions
+    from mapbox_directions import get_directions as mapbox_get_directions
     MAPBOX_DIRECTIONS_AVAILABLE = True
 except ImportError:
     mapbox_get_directions = None
     MAPBOX_DIRECTIONS_AVAILABLE = False
 
 try:
-    from routing.google_directions import get_directions as google_get_directions
+    from google_directions import get_directions as google_get_directions
     GOOGLE_DIRECTIONS_AVAILABLE = True
 except ImportError:
     google_get_directions = None
