@@ -1,20 +1,3 @@
-"""
-shade_router.py — realistic shade-aware routing
-
-Pipeline
---------
-1. Mapbox Directions API provides realistic, connected candidate routes
-2. Mapbox Tilequery road features enrich the nearby road graph
-3. Both sources are merged into one directed graph
-4. Buildings are fetched along the actual route corridor
-5. Each edge is sampled at multiple points for time-specific shadow exposure
-6. A* optimizes for shade-weighted travel cost
-7. Yen's K-shortest returns a few realistic alternatives
-
-This hybrid approach keeps routes connected and road-realistic while still
-allowing the router to strongly prefer streets with better building shade.
-"""
-
 import hashlib
 import itertools
 import math

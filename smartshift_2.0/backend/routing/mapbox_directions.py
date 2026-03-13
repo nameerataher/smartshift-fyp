@@ -1,14 +1,3 @@
-"""
-mapbox_directions.py — Mapbox Directions API integration
-
-Uses Mapbox Directions v5 for navigation with:
-- Best route + alternative routes
-- Turn-by-turn instructions (steps)
-- Route geometry (GeoJSON)
-
-Modes: walking, running (uses walking profile), cycling
-"""
-
 import requests as http_req
 from typing import Dict, List, Optional, Any
 
@@ -17,10 +6,7 @@ MAPBOX_TOKEN = (
     ".WI13BJqDyOu6G38-YP6hog"
 )
 
-# Mapbox profile: walking, cycling. Running uses walking profile.
 PROFILES = {
-    "walking": "mapbox/walking",
-    "running": "mapbox/walking",
     "cycling": "mapbox/cycling",
 }
 
@@ -30,41 +16,13 @@ def get_directions(
     start_lat: float,
     end_lon: float,
     end_lat: float,
-    mode: str = "walking",
+    mode: str = "cycling",
     alternatives: bool = True,
     steps: bool = True,
     access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Call Mapbox Directions API and return normalized routes.
-
-    Args:
-        start_lon, start_lat: Origin (longitude, latitude)
-        end_lon, end_lat: Destination (longitude, latitude)
-        mode: "walking", "running", or "cycling"
-        alternatives: Request alternative routes
-        steps: Include turn-by-turn steps
-        access_token: Mapbox token (default from module)
-
-    Returns:
-        {
-            "success": True,
-            "routes": [
-                {
-                    "distance_meters": float,
-                    "duration_seconds": float,
-                    "distance_km": float,
-                    "duration_minutes": int,
-                    "geometry": {"type": "LineString", "coordinates": [[lon, lat], ...]},
-                    "legs": [{"steps": [{"instruction": str, "name": str, "distance": float, "duration": float}, ...]}],
-                },
-                ...
-            ],
-            "waypoints": [{"name": str, "location": [lon, lat]}, ...]
-        }
-    """
     token = access_token or MAPBOX_TOKEN
-    profile = PROFILES.get(mode.lower(), PROFILES["walking"])
+    profile = PROFILES.get(mode.lower(), PROFILES["cycling"])
     coords = f"{start_lon},{start_lat};{end_lon},{end_lat}"
     url = f"https://api.mapbox.com/directions/v5/{profile}/{coords}"
 
