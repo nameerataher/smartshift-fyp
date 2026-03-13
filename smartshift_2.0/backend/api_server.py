@@ -19,9 +19,8 @@ import pandas as pd
 from solar_position import SolarPositionCalculator, SunPosition
 from shadow_calculator import ShadowCalculator, Shadow
 from config import (
-    DUBAI, API, SHADOW,
+    DUBAI, API,
     LANDMARK_LOCATIONS,
-    get_location_config, get_all_location_keys
 )
 
 # import ml models for heat risk
