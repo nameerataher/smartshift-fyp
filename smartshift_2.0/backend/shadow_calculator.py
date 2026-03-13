@@ -1,10 +1,6 @@
 """
-Shadow Projection Calculator for Dubai Sun-Shadow Simulation
-=============================================================
-
-This module calculates shadow projections from 3D buildings based on
-the sun's position. It computes shadow lengths, directions, and
-generates shadow polygons that can be rendered on the map.
+calculates shadow projections from 3D buildings based on
+the sun's position.
 
 Key Concepts:
 - Shadow Length: Depends on sun altitude
@@ -22,30 +18,14 @@ from typing import List, Tuple, Dict, Optional, Any
 from dataclasses import dataclass, field
 from solar_position import SolarPositionCalculator, SunPosition
 
-
 @dataclass
 class Building:
-    """
-    Represents a building for shadow calculation.
-
-    Attributes:
-        id: Unique identifier for the building
-        footprint: List of (lon, lat) coordinates forming the building footprint
-        height: Building height in meters
-        name: Optional building name for reference
-    """
     id: str
     footprint: List[Tuple[float, float]]  # [(lon, lat), ...]
     height: float  # meters
     name: Optional[str] = None
 
     def get_centroid(self) -> Tuple[float, float]:
-        """
-        Calculate the centroid of the building footprint.
-
-        Returns:
-            (longitude, latitude) of the centroid
-        """
         if not self.footprint:
             return (0.0, 0.0)
 
@@ -58,19 +38,6 @@ class Building:
 
 @dataclass
 class Shadow:
-    """
-    Represents a calculated shadow.
-
-    Attributes:
-        building_id: ID of the building casting the shadow
-        polygon: List of (lon, lat) coordinates forming the shadow polygon
-        length: Shadow length in meters
-        direction: Shadow direction in degrees from North
-        sun_altitude: Sun altitude when shadow was calculated
-        sun_azimuth: Sun azimuth when shadow was calculated
-        timestamp: Time of calculation
-        opacity: Suggested shadow opacity (0.0 - 1.0)
-    """
     building_id: str
     polygon: List[Tuple[float, float]]
     length: float
@@ -83,16 +50,6 @@ class Shadow:
 
 @dataclass
 class ShadowAnalysis:
-    """
-    Complete shadow analysis for a specific time.
-
-    Attributes:
-        timestamp: Analysis time
-        sun_position: Sun position data
-        shadows: List of calculated shadows
-        total_shadow_area: Estimated total shadow area in square meters
-        coverage_percentage: Estimated percentage of area in shadow
-    """
     timestamp: datetime
     sun_position: SunPosition
     shadows: List[Shadow]
@@ -101,19 +58,6 @@ class ShadowAnalysis:
 
 
 class ShadowCalculator:
-    """
-    Calculates building shadows based on sun position.
-
-    This calculator uses geometric projection to determine how
-    buildings cast shadows on the ground plane. The shadows are
-    calculated as 2D polygons that can be rendered on a map.
-
-    Note on coordinate systems:
-    - Geographic coordinates (lon, lat) are used for input/output
-    - Internal calculations convert to local meters for accuracy
-    - Dubai's latitude (~25°N) is used for the conversion factor
-    """
-
     # Conversion factors for Dubai's latitude
     # 1 degree latitude ≈ 111,320 meters
     # 1 degree longitude ≈ 111,320 * cos(25°) ≈ 100,856 meters at Dubai's latitude
@@ -122,14 +66,7 @@ class ShadowCalculator:
 
     def __init__(self, latitude: float = 25.2048, longitude: float = 55.2708,
                  timezone_offset: float = 4.0):
-        """
-        Initialize the shadow calculator.
 
-        Args:
-            latitude: Reference latitude (default: Dubai)
-            longitude: Reference longitude (default: Dubai)
-            timezone_offset: Hours offset from UTC (default: Dubai +4)
-        """
         self.latitude = latitude
         self.longitude = longitude
         self.timezone_offset = timezone_offset
@@ -145,37 +82,11 @@ class ShadowCalculator:
         self.meters_per_degree_lon = self.METERS_PER_DEGREE_LAT * math.cos(math.radians(latitude))
 
     def _meters_to_degrees_offset(self, dx_meters: float, dy_meters: float) -> Tuple[float, float]:
-        """
-        Convert meter offsets to degree offsets.
-
-        Args:
-            dx_meters: East-West offset in meters (positive = East)
-            dy_meters: North-South offset in meters (positive = North)
-
-        Returns:
-            (dlon, dlat) offset in degrees
-        """
         dlon = dx_meters / self.meters_per_degree_lon
         dlat = dy_meters / self.METERS_PER_DEGREE_LAT
         return (dlon, dlat)
 
     def calculate_shadow_length(self, building_height: float, sun_altitude: float) -> float:
-        """
-        Calculate the shadow length for a given building height and sun altitude.
-
-        The shadow length is calculated using basic trigonometry:
-        shadow_length = height / tan(altitude)
-
-        When the sun is low, shadows are long. When the sun is high, shadows are short.
-        At solar noon in summer, shadows may be very short or even non-existent.
-
-        Args:
-            building_height: Height of the building in meters
-            sun_altitude: Sun altitude angle in degrees (0-90)
-
-        Returns:
-            Shadow length in meters (0 if sun is at/below horizon)
-        """
         # No shadow when sun is at or below horizon
         if sun_altitude <= 0:
             return 0.0
@@ -193,34 +104,11 @@ class ShadowCalculator:
         return min(shadow_length, max_shadow)
 
     def calculate_shadow_direction(self, sun_azimuth: float) -> float:
-        """
-        Calculate the direction in which the shadow falls.
-
-        The shadow falls in the opposite direction of the sun's azimuth.
-
-        Args:
-            sun_azimuth: Sun azimuth in degrees (0 = North, clockwise)
-
-        Returns:
-            Shadow direction in degrees (0 = North, clockwise)
-        """
         # Shadow is opposite to sun direction
         shadow_direction = (sun_azimuth + 180.0) % 360.0
         return shadow_direction
 
     def calculate_shadow_offset(self, shadow_length: float, shadow_direction: float) -> Tuple[float, float]:
-        """
-        Calculate the (x, y) offset for shadow projection in meters.
-
-        Args:
-            shadow_length: Length of shadow in meters
-            shadow_direction: Direction of shadow in degrees from North
-
-        Returns:
-            (dx, dy) offset in meters where:
-            - dx is East-West offset (positive = East)
-            - dy is North-South offset (positive = North)
-        """
         # Convert direction to radians (measured from North, clockwise)
         direction_rad = math.radians(shadow_direction)
 
@@ -233,22 +121,6 @@ class ShadowCalculator:
         return (dx, dy)
 
     def calculate_shadow_polygon(self, building: Building, sun_position: SunPosition) -> Optional[List[Tuple[float, float]]]:
-        """
-        Calculate the shadow polygon for a building.
-
-        The shadow polygon is created by projecting each vertex of the
-        building footprint in the shadow direction by the shadow length.
-        The resulting polygon connects the original footprint with the
-        projected vertices.
-
-        Args:
-            building: Building object with footprint and height
-            sun_position: Current sun position
-
-        Returns:
-            List of (lon, lat) coordinates forming the shadow polygon,
-            or None if no shadow (sun below horizon or directly overhead)
-        """
         # No shadow if sun is below horizon
         if not sun_position.is_daylight or sun_position.altitude <= 0:
             return None
@@ -288,16 +160,6 @@ class ShadowCalculator:
         return shadow_polygon
 
     def calculate_shadow(self, building: Building, dt: datetime) -> Optional[Shadow]:
-        """
-        Calculate the complete shadow for a building at a specific time.
-
-        Args:
-            building: Building object
-            dt: Datetime for shadow calculation
-
-        Returns:
-            Shadow object or None if no shadow
-        """
         # Get sun position
         sun_position = self.solar_calculator.get_sun_position(dt)
 
@@ -328,18 +190,6 @@ class ShadowCalculator:
         )
 
     def _calculate_shadow_opacity(self, sun_altitude: float) -> float:
-        """
-        Calculate shadow opacity based on sun altitude.
-
-        Shadows are more defined (higher contrast) when the sun is higher.
-        At low sun angles, atmospheric scattering softens shadows.
-
-        Args:
-            sun_altitude: Sun altitude in degrees
-
-        Returns:
-            Opacity value between 0.1 and 0.7
-        """
         if sun_altitude <= 0:
             return 0.0
 
@@ -357,16 +207,6 @@ class ShadowCalculator:
 
     def calculate_shadows_for_buildings(self, buildings: List[Building],
                                          dt: datetime) -> ShadowAnalysis:
-        """
-        Calculate shadows for multiple buildings at a specific time.
-
-        Args:
-            buildings: List of Building objects
-            dt: Datetime for shadow calculation
-
-        Returns:
-            ShadowAnalysis object with all calculated shadows
-        """
         sun_position = self.solar_calculator.get_sun_position(dt)
         shadows = []
 
@@ -386,22 +226,7 @@ class ShadowCalculator:
                                           start_hour: int = 6,
                                           end_hour: int = 20,
                                           interval_minutes: int = 30) -> List[ShadowAnalysis]:
-        """
-        Calculate shadow positions throughout a day for animation.
 
-        This generates a series of shadow calculations at regular intervals,
-        suitable for creating animated shadow visualizations.
-
-        Args:
-            buildings: List of Building objects
-            date: Date for the animation
-            start_hour: Starting hour (default 6 AM)
-            end_hour: Ending hour (default 8 PM)
-            interval_minutes: Time between frames (default 30 min)
-
-        Returns:
-            List of ShadowAnalysis objects for each time frame
-        """
         frames = []
 
         current_time = date.replace(hour=start_hour, minute=0, second=0, microsecond=0)
@@ -424,15 +249,6 @@ class ShadowCalculator:
         return frames
 
     def shadow_to_geojson(self, shadow: Shadow) -> Dict[str, Any]:
-        """
-        Convert a shadow to GeoJSON format for map rendering.
-
-        Args:
-            shadow: Shadow object
-
-        Returns:
-            GeoJSON Feature dictionary
-        """
         # Close the polygon by adding the first point at the end
         coordinates = [list(shadow.polygon)]
         if coordinates[0] and coordinates[0][0] != coordinates[0][-1]:
@@ -456,15 +272,6 @@ class ShadowCalculator:
         }
 
     def shadows_to_geojson(self, shadows: List[Shadow]) -> Dict[str, Any]:
-        """
-        Convert multiple shadows to a GeoJSON FeatureCollection.
-
-        Args:
-            shadows: List of Shadow objects
-
-        Returns:
-            GeoJSON FeatureCollection dictionary
-        """
         features = [self.shadow_to_geojson(s) for s in shadows]
 
         return {
@@ -473,15 +280,6 @@ class ShadowCalculator:
         }
 
     def analysis_to_json(self, analysis: ShadowAnalysis) -> Dict[str, Any]:
-        """
-        Convert a complete shadow analysis to JSON-serializable format.
-
-        Args:
-            analysis: ShadowAnalysis object
-
-        Returns:
-            Dictionary with complete analysis data
-        """
         return {
             "timestamp": analysis.timestamp.isoformat(),
             "sun": {
@@ -501,15 +299,6 @@ class ShadowCalculator:
 
 
 def create_sample_dubai_buildings() -> List[Building]:
-    """
-    Create sample building data for Dubai landmarks.
-
-    These are approximate footprints for demonstration purposes.
-    In production, real building data would come from OpenStreetMap or similar.
-
-    Returns:
-        List of Building objects for major Dubai landmarks
-    """
     buildings = [
         # Burj Khalifa - Approximate triangular footprint
         Building(
@@ -594,12 +383,7 @@ if __name__ == "__main__":
 
     # Calculate shadows for current time
     now = datetime.now()
-
-    print("=" * 70)
-    print("Dubai Shadow Calculator - Test Results")
-    print("=" * 70)
     print(f"Date/Time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("-" * 70)
 
     # Calculate shadows
     analysis = calculator.calculate_shadows_for_buildings(buildings, now)
@@ -608,7 +392,6 @@ if __name__ == "__main__":
     print(f"  Azimuth:  {analysis.sun_position.azimuth:.2f}°")
     print(f"  Altitude: {analysis.sun_position.altitude:.2f}°")
     print(f"  Daylight: {analysis.sun_position.is_daylight}")
-    print("-" * 70)
 
     print(f"Shadows Calculated: {len(analysis.shadows)}")
     print()
@@ -626,9 +409,6 @@ if __name__ == "__main__":
         import json
         geojson = calculator.shadow_to_geojson(analysis.shadows[0])
         print(json.dumps(geojson, indent=2)[:500] + "...")
-
-    print("=" * 70)
-
 
 
 
