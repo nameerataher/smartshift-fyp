@@ -372,9 +372,8 @@ export default function MapboxMap({
 
     // Polar angle: 0° = overhead, 90° = horizon. Clamp to [5, 70] for shadow updates (Mapbox limit ~75°)
     const polarAngle = Math.min(70, Math.max(5, 90 - sp.altitude));
-    // Mapbox direction = direction light rays travel (from sun to ground). Sun at 270° (west)
-    // means rays go east (90°), so we add 180° so shadows fall opposite the sun (east at 5 PM).
-    const azimuth = (sp.azimuth + 180) % 360;
+    // Mapbox direction = position of the light source (where the sun is). 270° = sun in west → shadows east.
+    const azimuth = sp.azimuth;
 
     const mapAny = map as any;
     if (typeof mapAny.setLights !== "function") return;

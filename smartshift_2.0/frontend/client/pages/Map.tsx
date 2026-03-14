@@ -291,6 +291,7 @@ export default function MapPage() {
   }, [isPlaying]);
 
   const shadowRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shadowOverlayActiveRef = useRef(false);
 
   const [flyToTarget, setFlyToTarget] = useState<FlyToTarget | null>(null);
   const flyToKeyRef = useRef(0);
@@ -337,7 +338,7 @@ export default function MapPage() {
   const [savedRecIds, setSavedRecIds] = useState<Set<string>>(new Set());
   const [siteDraft, setSiteDraft] = useState<SiteDraft>({
     taskName: "", locationLabel: "", locationName: "",
-    durationMinutes: 60, startHour: 9, endHour: 17,
+    durationMinutes: 60, startHour: 5, endHour: 20,
   });
   const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
@@ -959,6 +960,8 @@ export default function MapPage() {
     const timeStr = `${dateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
     const buildings = getClientBuildings(lat, lng);
     const sp = calculateSunPosition(dateStr ? new Date(dateStr) : new Date(), h, m);
+    // Same direction we pass to Mapbox setLights so overlay matches map shadows
+    const mapboxLightDirection = (sp.azimuth + 180) % 360;
 
     try {
       const res = await fetch(`${API_BASE}/api/v2/debug/shadow-polygons`, {
@@ -968,6 +971,7 @@ export default function MapPage() {
           lat, lon: lng, time: timeStr,
           sun_azimuth: sp.azimuth,
           sun_altitude: sp.altitude,
+          mapbox_light_direction: mapboxLightDirection,
           buildings: buildings.map((b) => ({
             id: b.id, footprint: b.footprint, height: b.height, name: b.name,
           })),
@@ -975,6 +979,7 @@ export default function MapPage() {
       });
       const data = await res.json();
       if (data.success) {
+        shadowOverlayActiveRef.current = true;
         setDebugShadowGeoJSON({
           shadows: data.shadow_geojson,
           footprints: data.footprint_geojson,
@@ -995,16 +1000,17 @@ export default function MapPage() {
     }
   }, [commercialSite, currentMinutes, dateStr, getClientBuildings]);
 
-  // When time/date change and shadow overlay is active, re-fetch silently after a short debounce
+  // When time/date change and shadow overlay is active, re-fetch silently after a short debounce.
+  // Do NOT depend on debugShadowGeoJSON: that would retrigger after every setState and cause a refresh loop.
   useEffect(() => {
-    if (!debugShadowGeoJSON) return;
+    if (!shadowOverlayActiveRef.current) return;
     if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current);
     shadowRefetchRef.current = setTimeout(() => {
       shadowRefetchRef.current = null;
       fetchDebugShadows(true);
     }, 400);
     return () => { if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current); };
-  }, [currentMinutes, dateStr, fetchDebugShadows, debugShadowGeoJSON]);
+  }, [currentMinutes, dateStr, fetchDebugShadows]);
 
   const uv = calculateUV(dateStr ? new Date(dateStr) : new Date(), currentMinutes);
   const uvCat = getUVCategory(uv);
@@ -1557,7 +1563,7 @@ export default function MapPage() {
                 Show Computed Shadows
               </button>
               {debugShadowGeoJSON && (
-                <button onClick={() => { setDebugShadowGeoJSON(null); setDebugShadowInfo(null); }}
+                <button onClick={() => { shadowOverlayActiveRef.current = false; setDebugShadowGeoJSON(null); setDebugShadowInfo(null); }}
                   className="py-1.5 px-2 rounded-lg border border-border/60 text-[10px] font-medium hover:bg-muted">
                   Clear
                 </button>

@@ -19,7 +19,7 @@ from enum import Enum
 import math
 import requests as http_client
 
-from shadow_calculator import ShadowCalculator, Building
+from shadow_calculator import ShadowCalculator, Building, SHAPELY_AVAILABLE
 from solar_position import SolarPositionCalculator, SunPosition
 from config import DUBAI, SAMPLE_BUILDINGS
 
@@ -146,6 +146,8 @@ class ShadowScheduler:
     """
 
     TIMEZONE_OFFSET = 4  # UTC+4 (Dubai)
+    # Sample every 1 min within a slot so short periods of full coverage aren't missed
+    SLOT_SAMPLE_INTERVAL_MINUTES = 1
 
     def __init__(
         self,
@@ -213,9 +215,10 @@ class ShadowScheduler:
             )
 
         slots.sort(key=lambda s: s.shadow_percentage, reverse=True)
-
         best = slots[0]
-        alternatives = slots[1:recommendation_count]
+        alternatives = self._pick_diversified_alternatives(
+            slots, best, recommendation_count - 1
+        )
 
         reason = self._generate_reason(best, location_name, building_face, len(buildings))
 
@@ -261,15 +264,19 @@ class ShadowScheduler:
         buildings = client_buildings if client_buildings else self._fetch_nearby_buildings(centroid_lat, centroid_lon)
 
         heights = [b.height for b in buildings]
+        use_merged = SHAPELY_AVAILABLE and len(polygon_points) >= 3
+        mode_str = "merged full-shadow area" if use_merged else f"{len(grid)} grid points"
         print(
-            f"[area-schedule] {len(grid)} grid points, {len(buildings)} buildings "
-            f"(heights: {min(heights):.0f}-{max(heights):.0f}m avg {sum(heights)/len(heights):.0f}m)"
-            if heights else f"[area-schedule] {len(grid)} grid points, 0 buildings"
+            f"[area-schedule] {mode_str}, {len(buildings)} buildings "
+            + (f"(heights: {min(heights):.0f}-{max(heights):.0f}m avg {sum(heights)/len(heights):.0f}m)" if heights else "")
         )
 
+        # Use merged full-shadow area coverage when Shapely available (not just footprint)
+        target_polygon_lonlat = [(p[1], p[0]) for p in polygon_points]  # (lon, lat) for Shapely
         slots = self._generate_area_time_slots(
             date, start_hour, end_hour, task_duration_minutes,
-            grid, buildings
+            grid, buildings,
+            target_polygon_lonlat=target_polygon_lonlat,
         )
 
         if not slots:
@@ -280,7 +287,9 @@ class ShadowScheduler:
 
         slots.sort(key=lambda s: s.shadow_percentage, reverse=True)
         best = slots[0]
-        alternatives = slots[1:recommendation_count]
+        alternatives = self._pick_diversified_alternatives(
+            slots, best, recommendation_count - 1
+        )
         reason = self._generate_reason(best, location_name, None, len(buildings))
 
         return ScheduleRecommendation(
@@ -294,6 +303,59 @@ class ShadowScheduler:
             recommendation_reason=reason,
             buildings_used=len(buildings)
         )
+
+    def _pick_diversified_alternatives(
+        self,
+        slots: List[TimeSlot],
+        best: TimeSlot,
+        count: int,
+    ) -> List[TimeSlot]:
+        """
+        Pick up to `count` alternative slots spread across the day so recommendations
+        aren't all clustered in 9–10 and 3–5. Uses time-of-day buckets and takes the
+        best slot per bucket, then fills with next best by shadow % if needed.
+        """
+        if count <= 0:
+            return []
+        rest = [s for s in slots if (s.start, s.end) != (best.start, best.end)]
+        if not rest:
+            return []
+
+        # Time-of-day buckets (hour of slot start): early AM, late AM, early PM, late PM
+        def bucket(slot: TimeSlot) -> int:
+            h = slot.start.hour + slot.start.minute / 60.0
+            if h < 8:
+                return 0
+            if h < 12:
+                return 1
+            if h < 15:
+                return 2
+            return 3
+
+        # Best slot per bucket (by shadow %)
+        by_bucket: Dict[int, TimeSlot] = {}
+        for s in rest:
+            b = bucket(s)
+            if b not in by_bucket or s.shadow_percentage > by_bucket[b].shadow_percentage:
+                by_bucket[b] = s
+
+        # Take one per bucket in order, then fill with next best by shadow %
+        chosen: List[TimeSlot] = []
+        for b in range(4):
+            if len(chosen) >= count:
+                break
+            if b in by_bucket and by_bucket[b] not in chosen:
+                chosen.append(by_bucket[b])
+
+        # Fill remaining with highest shadow % not yet chosen
+        by_pct = sorted(rest, key=lambda s: s.shadow_percentage, reverse=True)
+        for s in by_pct:
+            if len(chosen) >= count:
+                break
+            if s not in chosen:
+                chosen.append(s)
+
+        return chosen[:count]
 
     # ─── Polygon grid sampling ─────────────────────────────────────
 
@@ -340,6 +402,61 @@ class ShadowScheduler:
 
         return grid
 
+    def _calculate_slot_shadow_merged_area(
+        self,
+        start: datetime,
+        end: datetime,
+        target_polygon_lonlat: List[Tuple[float, float]],
+        buildings: List[Building],
+    ) -> Tuple[float, float, float]:
+        """
+        Compute shadow coverage for a slot using merged full shadow polygons over
+        the target area: (merged_shadow ∩ target).area / target.area * 100.
+        Samples every SLOT_SAMPLE_INTERVAL_MINUTES (e.g. 1 min); reports max coverage
+        over the period so short full-coverage windows aren't missed.
+        """
+        if not SHAPELY_AVAILABLE or not target_polygon_lonlat or len(target_polygon_lonlat) < 3:
+            return 0.0, 0.0, 0.0
+        centroid_lon = sum(p[0] for p in target_polygon_lonlat) / len(target_polygon_lonlat)
+        centroid_lat = sum(p[1] for p in target_polygon_lonlat) / len(target_polygon_lonlat)
+        # Footprints are sun-invariant; include them so area on buildings counts as shaded (matches visual)
+        merged_footprints = self._shadow_calc.get_merged_footprint_geometry(buildings)
+        coverages: List[float] = []
+        altitudes: List[float] = []
+        azimuths: List[float] = []
+        t = start
+        interval = timedelta(minutes=self.SLOT_SAMPLE_INTERVAL_MINUTES)
+        while t <= end:
+            sun = self._get_sun_position(t, centroid_lat, centroid_lon)
+            altitudes.append(sun.altitude)
+            azimuths.append(sun.azimuth)
+            if sun.is_daylight and sun.altitude > 0:
+                merged_cast = self._shadow_calc.get_merged_cast_shadow_geometry(
+                    buildings, sun, shadow_direction_override=None
+                )
+                if merged_cast is not None and merged_cast.is_valid and not merged_cast.is_empty:
+                    cov = self._shadow_calc.shadow_coverage_over_area(
+                        merged_cast, target_polygon_lonlat, merged_footprint_geom=merged_footprints
+                    )
+                    coverages.append(cov)
+                else:
+                    # Cast is empty (e.g. no shadow) but footprint overlap still counts
+                    cov = self._shadow_calc.shadow_coverage_over_area(
+                        None, target_polygon_lonlat, merged_footprint_geom=merged_footprints
+                    ) if merged_footprints else 0.0
+                    coverages.append(cov)
+            else:
+                coverages.append(100.0)  # night = fully shaded
+            t += interval
+        n = len(coverages)
+        if n == 0:
+            return 0.0, 0.0, 0.0
+        # Max so short periods of full coverage aren't missed; avg_alt/avg_az over slot
+        max_shadow = max(coverages)
+        avg_alt = sum(altitudes) / n
+        avg_az = sum(azimuths) / n
+        return max_shadow, avg_alt, avg_az
+
     def _generate_area_time_slots(
         self,
         date: datetime,
@@ -347,31 +464,44 @@ class ShadowScheduler:
         end_hour: int,
         duration_minutes: int,
         grid_points: List[Tuple[float, float]],
-        buildings: List[Building]
+        buildings: List[Building],
+        target_polygon_lonlat: Optional[List[Tuple[float, float]]] = None,
     ) -> List[TimeSlot]:
-        """Generate time slots with shadow averaged across all grid points."""
+        """
+        Generate time slots. When target_polygon_lonlat is provided and Shapely
+        is available, use merged full-shadow area coverage over the polygon;
+        otherwise average shadow over grid points (point-in-polygon).
+        """
         slots: List[TimeSlot] = []
         current = datetime(date.year, date.month, date.day, start_hour, 0, 0)
         end_limit = datetime(date.year, date.month, date.day, end_hour, 0, 0)
+        use_merged_area = (
+            SHAPELY_AVAILABLE
+            and target_polygon_lonlat is not None
+            and len(target_polygon_lonlat) >= 3
+        )
 
         while current + timedelta(minutes=duration_minutes) <= end_limit:
             slot_end = current + timedelta(minutes=duration_minutes)
 
-            point_shadows: List[float] = []
-            all_alts: List[float] = []
-            all_azs: List[float] = []
-
-            for lat, lon in grid_points:
-                pct, alt, az = self._calculate_slot_shadow(
-                    current, slot_end, lat, lon, buildings
+            if use_merged_area:
+                avg_shadow, avg_alt, avg_az = self._calculate_slot_shadow_merged_area(
+                    current, slot_end, target_polygon_lonlat, buildings
                 )
-                point_shadows.append(pct)
-                all_alts.append(alt)
-                all_azs.append(az)
-
-            avg_shadow = sum(point_shadows) / len(point_shadows)
-            avg_alt = sum(all_alts) / len(all_alts)
-            avg_az = sum(all_azs) / len(all_azs)
+            else:
+                point_shadows: List[float] = []
+                all_alts: List[float] = []
+                all_azs: List[float] = []
+                for lat, lon in grid_points:
+                    pct, alt, az = self._calculate_slot_shadow(
+                        current, slot_end, lat, lon, buildings
+                    )
+                    point_shadows.append(pct)
+                    all_alts.append(alt)
+                    all_azs.append(az)
+                avg_shadow = sum(point_shadows) / len(point_shadows)
+                avg_alt = sum(all_alts) / len(all_alts)
+                avg_az = sum(all_azs) / len(all_azs)
 
             slots.append(TimeSlot(
                 start=current,
@@ -521,18 +651,16 @@ class ShadowScheduler:
         building_face: Optional[str] = None
     ) -> Tuple[float, float, float]:
         """
-        Calculate average shadow coverage for a time slot.
+        Calculate shadow coverage for a time slot. Samples every
+        SLOT_SAMPLE_INTERVAL_MINUTES (e.g. 1 min); reports max coverage over
+        the period so short full-coverage windows aren't missed.
 
         For AREA/POINT mode: uses ground-plane shadow polygons and PIP tests.
-        For FACADE mode: uses 3D elevation-aware analysis:
-          1. Self-shading: sun behind the face => fully shaded
-          2. External shading: a nearby building tall enough and positioned
-             in the sun's direction blocks sunlight at face elevation
+        For FACADE mode: uses 3D elevation-aware analysis.
 
         Returns: (shadow_percentage 0-100, avg_sun_altitude, avg_sun_azimuth)
         """
-        in_shadow_count = 0
-        total_samples = 0
+        per_sample_pct: List[float] = []
         altitudes: List[float] = []
         azimuths: List[float] = []
 
@@ -553,49 +681,46 @@ class ShadowScheduler:
         self_shaded = 0
         ext_blocked = 0
         sun_hit = 0
+        interval = timedelta(minutes=self.SLOT_SAMPLE_INTERVAL_MINUTES)
 
         current = start
         while current <= end:
             sun = self._get_sun_position(current, lat, lon)
             altitudes.append(sun.altitude)
             azimuths.append(sun.azimuth)
-            total_samples += 1
 
             if not sun.is_daylight or sun.altitude <= 0:
-                in_shadow_count += 1
-                current += timedelta(minutes=5)
+                per_sample_pct.append(100.0)
+                current += interval
                 continue
 
+            in_shadow = False
             if building_face and face_enum:
                 # ── Facade mode ──
-                # Step 2: compare sun azimuth with face direction
-                # |sun_azimuth - facade_direction| < 90 => sun hits facade
                 angle_diff = abs(((sun.azimuth - face_enum.azimuth + 180) % 360) - 180)
-
                 if angle_diff >= 90:
-                    # Sun is behind the building => face is self-shaded
-                    in_shadow_count += 1
+                    in_shadow = True
                     self_shaded += 1
                 else:
-                    # Sun hits this face. Step 3: check if a nearby
-                    # building blocks the sun at the facade mid-height.
-                    do_verbose = (total_samples <= 2)
+                    do_verbose = len(per_sample_pct) < 2
                     if self._is_face_blocked(
                         lat, lon, facade_height, buildings, sun,
                         verbose=do_verbose,
                     ):
-                        in_shadow_count += 1
+                        in_shadow = True
                         ext_blocked += 1
                     else:
                         sun_hit += 1
             else:
                 # ── Area / point mode: ground-plane shadow PIP ──
-                if self._is_point_in_any_shadow(lat, lon, buildings, sun):
-                    in_shadow_count += 1
+                in_shadow = self._is_point_in_any_shadow(lat, lon, buildings, sun)
 
-            current += timedelta(minutes=5)
+            per_sample_pct.append(100.0 if in_shadow else 0.0)
+            current += interval
 
-        shadow_pct = (in_shadow_count / total_samples * 100) if total_samples > 0 else 0
+        total_samples = len(per_sample_pct)
+        # Max so short periods of full coverage aren't missed
+        shadow_pct = max(per_sample_pct) if total_samples > 0 else 0.0
         avg_alt = sum(altitudes) / len(altitudes) if altitudes else 0
         avg_az = sum(azimuths) / len(azimuths) if azimuths else 0
 

@@ -14,9 +14,16 @@ Dependencies:
 
 import math
 from datetime import datetime
-from typing import List, Tuple, Dict, Optional, Any
+from typing import List, Tuple, Dict, Optional, Any, Union
 from dataclasses import dataclass, field
 from solar_position import SolarPositionCalculator, SunPosition
+
+try:
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.ops import unary_union
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    SHAPELY_AVAILABLE = False
 
 @dataclass
 class Building:
@@ -120,7 +127,12 @@ class ShadowCalculator:
 
         return (dx, dy)
 
-    def calculate_shadow_polygon(self, building: Building, sun_position: SunPosition) -> Optional[List[Tuple[float, float]]]:
+    def calculate_shadow_polygon(
+        self,
+        building: Building,
+        sun_position: SunPosition,
+        shadow_direction_override: Optional[float] = None,
+    ) -> Optional[List[Tuple[float, float]]]:
         # No shadow if sun is below horizon
         if not sun_position.is_daylight or sun_position.altitude <= 0:
             return None
@@ -132,7 +144,11 @@ class ShadowCalculator:
         if shadow_length < 0.5:
             return None
 
-        shadow_direction = self.calculate_shadow_direction(sun_position.azimuth)
+        # Use override when provided (e.g. Mapbox light direction so overlay matches map lighting)
+        if shadow_direction_override is not None:
+            shadow_direction = shadow_direction_override % 360.0
+        else:
+            shadow_direction = self.calculate_shadow_direction(sun_position.azimuth)
         dx_meters, dy_meters = self.calculate_shadow_offset(shadow_length, shadow_direction)
         dlon, dlat = self._meters_to_degrees_offset(dx_meters, dy_meters)
 
@@ -158,6 +174,142 @@ class ShadowCalculator:
         shadow_polygon.extend(reversed(footprint))
 
         return shadow_polygon
+
+    def get_merged_shadow_geometry(
+        self,
+        buildings: List[Building],
+        sun_position: SunPosition,
+        shadow_direction_override: Optional[float] = None,
+    ) -> Optional[Any]:
+        """
+        Merge all building shadow polygons (full elongated shadows, not just footprints)
+        using Shapely unary_union. Returns a Shapely geometry (Polygon or MultiPolygon)
+        or None if no shadows or Shapely unavailable.
+
+        Use this for area-based coverage: coverage = intersection(merged_shadow, target).area / target.area
+        """
+        if not SHAPELY_AVAILABLE or not sun_position.is_daylight or sun_position.altitude <= 0:
+            return None
+        polys: List[Any] = []
+        for b in buildings:
+            if b.height <= 0:
+                continue
+            poly = self.calculate_shadow_polygon(b, sun_position, shadow_direction_override)
+            if poly and len(poly) >= 3:
+                try:
+                    # Polygon is list of (lon, lat) -> Shapely (x, y) = (lon, lat)
+                    if poly[0] != poly[-1]:
+                        poly = list(poly) + [poly[0]]
+                    polys.append(ShapelyPolygon(poly))
+                except Exception:
+                    continue
+        if not polys:
+            return None
+        return unary_union(polys)
+
+    def get_merged_cast_shadow_geometry(
+        self,
+        buildings: List[Building],
+        sun_position: SunPosition,
+        shadow_direction_override: Optional[float] = None,
+    ) -> Optional[Any]:
+        """
+        Merge only the cast (ground) shadow polygons, excluding building footprints.
+        Builds the cast as the band between footprint edge and shadow edge for each
+        building, so we count only ground that is in shadow, not the building itself.
+        """
+        if not SHAPELY_AVAILABLE or not sun_position.is_daylight or sun_position.altitude <= 0:
+            return None
+        cast_polys: List[Any] = []
+        for b in buildings:
+            if b.height <= 0:
+                continue
+            full_poly = self.calculate_shadow_polygon(b, sun_position, shadow_direction_override)
+            if not full_poly or len(full_poly) < 3:
+                continue
+            footprint = b.footprint
+            n = len(footprint)
+            shadow_vertices = full_poly[:n]  # first n points are the far shadow edge
+            try:
+                # Cast-only = band quads: (fp[i], fp[i+1], shadow[i+1], shadow[i])
+                for i in range(n):
+                    j = (i + 1) % n
+                    quad = [
+                        footprint[i],
+                        footprint[j],
+                        shadow_vertices[j],
+                        shadow_vertices[i],
+                        footprint[i],
+                    ]
+                    poly = ShapelyPolygon(quad)
+                    if poly.is_valid and not poly.is_empty and poly.area > 1e-14:
+                        cast_polys.append(poly)
+            except Exception:
+                continue
+        if not cast_polys:
+            return None
+        return unary_union(cast_polys)
+
+    def get_merged_footprint_geometry(self, buildings: List[Building]) -> Optional[Any]:
+        """Merge all building footprints so we can count polygon area that is on buildings as shaded."""
+        if not SHAPELY_AVAILABLE or not buildings:
+            return None
+        polys: List[Any] = []
+        for b in buildings:
+            if not b.footprint or len(b.footprint) < 3:
+                continue
+            try:
+                fp = list(b.footprint)
+                if fp[0] != fp[-1]:
+                    fp.append(fp[0])
+                polys.append(ShapelyPolygon(fp))
+            except Exception:
+                continue
+        if not polys:
+            return None
+        return unary_union(polys)
+
+    # Below this coverage we report 0% so "no shade" areas don't show small noise (e.g. 12%)
+    MIN_COVERAGE_PERCENT = 15.0
+
+    def shadow_coverage_over_area(
+        self,
+        merged_shadow_geom: Any,
+        target_polygon: List[Tuple[float, float]],
+        merged_footprint_geom: Optional[Any] = None,
+    ) -> float:
+        """
+        Compute coverage percentage: (shaded area ∩ target) / target area * 100.
+        Shaded = cast ground shadow + building footprints (so area on buildings counts as shaded).
+        target_polygon: list of (lon, lat) vertices.
+        Returns 0-100. Values below MIN_COVERAGE_PERCENT are returned as 0.
+        """
+        if not SHAPELY_AVAILABLE or len(target_polygon) < 3:
+            return 0.0
+        try:
+            if target_polygon[0] != target_polygon[-1]:
+                target_polygon = list(target_polygon) + [target_polygon[0]]
+            target = ShapelyPolygon(target_polygon)
+            if not target.is_valid or target.is_empty:
+                return 0.0
+            target_area = target.area
+            if target_area <= 0:
+                return 0.0
+            inter = None
+            if merged_shadow_geom is not None and merged_shadow_geom.is_valid and not merged_shadow_geom.is_empty:
+                inter = merged_shadow_geom.intersection(target)
+            if merged_footprint_geom is not None and merged_footprint_geom.is_valid and not merged_footprint_geom.is_empty:
+                inter_fp = merged_footprint_geom.intersection(target)
+                if not inter_fp.is_empty:
+                    inter = inter_fp if inter is None or inter.is_empty else inter.union(inter_fp)
+            if inter is None or inter.is_empty:
+                return 0.0
+            pct = (inter.area / target_area) * 100.0
+            if pct < self.MIN_COVERAGE_PERCENT:
+                return 0.0
+            return min(100.0, pct)
+        except Exception:
+            return 0.0
 
     def calculate_shadow(self, building: Building, dt: datetime) -> Optional[Shadow]:
         # Get sun position
@@ -205,8 +357,18 @@ class ShadowCalculator:
 
         return max(0.1, min(0.7, opacity))
 
-    def calculate_shadows_for_buildings(self, buildings: List[Building],
-                                         dt: datetime) -> ShadowAnalysis:
+    def calculate_shadows_for_buildings(
+        self,
+        buildings: List[Building],
+        dt: datetime,
+        target_area_polygon: Optional[List[Tuple[float, float]]] = None,
+        shadow_direction_override: Optional[float] = None,
+    ) -> ShadowAnalysis:
+        """
+        Build shadow list and optionally set total_shadow_area / coverage_percentage
+        from merged full shadow polygons (not footprint area).
+        target_area_polygon: optional list of (lon, lat) for coverage_percentage.
+        """
         sun_position = self.solar_calculator.get_sun_position(dt)
         shadows = []
 
@@ -215,10 +377,25 @@ class ShadowCalculator:
             if shadow:
                 shadows.append(shadow)
 
+        total_shadow_area = 0.0
+        coverage_percentage = 0.0
+        if SHAPELY_AVAILABLE and shadows and sun_position.is_daylight and sun_position.altitude > 0:
+            merged = self.get_merged_shadow_geometry(
+                buildings, sun_position, shadow_direction_override
+            )
+            if merged is not None and merged.is_valid and not merged.is_empty:
+                total_shadow_area = merged.area  # in degree² units
+                if target_area_polygon and len(target_area_polygon) >= 3:
+                    coverage_percentage = self.shadow_coverage_over_area(
+                        merged, target_area_polygon
+                    )
+
         return ShadowAnalysis(
             timestamp=dt,
             sun_position=sun_position,
-            shadows=shadows
+            shadows=shadows,
+            total_shadow_area=total_shadow_area,
+            coverage_percentage=coverage_percentage,
         )
 
     def calculate_shadow_animation_frames(self, buildings: List[Building],

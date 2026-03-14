@@ -32,6 +32,7 @@ psycopg2-binary>=2.9.0          # postgresql driver (use psycopg2 in production)
 # navigation & mapping (shade-optimized routing)
 # =============================================================================
 networkx>=3.2                   # A* and Yen's K-shortest-paths algorithms
+shapely>=2.0.0                  # merge shadow polygons, area-based coverage
 # osmnx>=2.0.0                  # optional – only if using full OSM graph mode
 
 # =============================================================================

@@ -760,6 +760,10 @@ def debug_shadow_polygons():
         else:
             sun = scheduler._get_sun_position(dt, lat, lon)
 
+        # Use same direction as Mapbox setLights so overlay shadows match map lighting
+        mapbox_light_dir = data.get('mapbox_light_direction')
+        shadow_direction_override = float(mapbox_light_dir) if mapbox_light_dir is not None else None
+
         from shadow_calculator import ShadowCalculator
         from config import DUBAI
         calc = ShadowCalculator(
@@ -771,7 +775,8 @@ def debug_shadow_polygons():
         shadow_features = []
         footprint_features = []
         shadow_length_m = calc.calculate_shadow_length(30.0, sun.altitude) if sun.altitude > 0 else 0
-        shadow_dir = calc.calculate_shadow_direction(sun.azimuth) if sun.altitude > 0 else 0
+        shadow_dir = (shadow_direction_override if shadow_direction_override is not None
+                      else calc.calculate_shadow_direction(sun.azimuth)) if sun.altitude > 0 else 0
 
         for b in buildings:
             # Building footprint (for visualization)
@@ -789,8 +794,8 @@ def debug_shadow_polygons():
                 "geometry": {"type": "Polygon", "coordinates": [fp_ring]}
             })
 
-            # Shadow polygon
-            polygon = calc.calculate_shadow_polygon(b, sun)
+            # Shadow polygon (use Mapbox light direction when provided so overlay matches map)
+            polygon = calc.calculate_shadow_polygon(b, sun, shadow_direction_override)
             if polygon:
                 ring = [[p[0], p[1]] for p in polygon]
                 if ring[0] != ring[-1]:
@@ -808,8 +813,8 @@ def debug_shadow_polygons():
 
         from shadow_scheduler import _point_in_polygon
         target_in_shadow = any(
-            calc.calculate_shadow_polygon(b, sun) and
-            _point_in_polygon(lon, lat, calc.calculate_shadow_polygon(b, sun))
+            calc.calculate_shadow_polygon(b, sun, shadow_direction_override) and
+            _point_in_polygon(lon, lat, calc.calculate_shadow_polygon(b, sun, shadow_direction_override))
             for b in buildings
         )
 
