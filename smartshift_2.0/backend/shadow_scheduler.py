@@ -10,11 +10,13 @@ Uses REAL 3D building data and shadow projection to determine shadow coverage:
 3. Uses ray-casting point-in-polygon tests to determine if the target location
    falls inside any shadow at each sampled time
 4. Reports the fraction of time the location is in shadow during each candidate slot
+
+Performance: see scheduler_optimizations.py (adaptive sampling for long durations).
 """
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 from enum import Enum
 import math
 import requests as http_client
@@ -22,6 +24,11 @@ import requests as http_client
 from shadow_calculator import ShadowCalculator, Building, SHAPELY_AVAILABLE
 from solar_position import SolarPositionCalculator, SunPosition
 from config import DUBAI, SAMPLE_BUILDINGS
+from scheduler_optimizations import (
+    get_adaptive_sample_interval_minutes,
+    get_sun_bucket,
+    get_slot_step_for_long_duration,
+)
 
 def parse_client_buildings(raw_list: list) -> List[Building]:
     """Parse building dicts sent from the frontend into Building objects."""
@@ -421,26 +428,32 @@ class ShadowScheduler:
         centroid_lat = sum(p[1] for p in target_polygon_lonlat) / len(target_polygon_lonlat)
         # Footprints are sun-invariant; include them so area on buildings counts as shaded (matches visual)
         merged_footprints = self._shadow_calc.get_merged_footprint_geometry(buildings)
+        slot_minutes = int((end - start).total_seconds() / 60)
+        step_min = get_adaptive_sample_interval_minutes(slot_minutes)
         coverages: List[float] = []
         altitudes: List[float] = []
         azimuths: List[float] = []
+        # Cache merged cast by sun bucket so we don't recompute Shapely for every minute
+        cast_cache: Dict[tuple, Any] = {}
         t = start
-        interval = timedelta(minutes=self.SLOT_SAMPLE_INTERVAL_MINUTES)
+        interval = timedelta(minutes=step_min)
         while t <= end:
             sun = self._get_sun_position(t, centroid_lat, centroid_lon)
             altitudes.append(sun.altitude)
             azimuths.append(sun.azimuth)
             if sun.is_daylight and sun.altitude > 0:
-                merged_cast = self._shadow_calc.get_merged_cast_shadow_geometry(
-                    buildings, sun, shadow_direction_override=None
-                )
+                bucket = get_sun_bucket(sun.azimuth, sun.altitude)
+                if bucket not in cast_cache:
+                    cast_cache[bucket] = self._shadow_calc.get_merged_cast_shadow_geometry(
+                        buildings, sun, shadow_direction_override=None
+                    )
+                merged_cast = cast_cache[bucket]
                 if merged_cast is not None and merged_cast.is_valid and not merged_cast.is_empty:
                     cov = self._shadow_calc.shadow_coverage_over_area(
                         merged_cast, target_polygon_lonlat, merged_footprint_geom=merged_footprints
                     )
                     coverages.append(cov)
                 else:
-                    # Cast is empty (e.g. no shadow) but footprint overlap still counts
                     cov = self._shadow_calc.shadow_coverage_over_area(
                         None, target_polygon_lonlat, merged_footprint_geom=merged_footprints
                     ) if merged_footprints else 0.0
@@ -480,6 +493,8 @@ class ShadowScheduler:
             and target_polygon_lonlat is not None
             and len(target_polygon_lonlat) >= 3
         )
+        # Fewer slots when duration is long (e.g. 45 min step for 120 min duration)
+        slot_step = get_slot_step_for_long_duration(duration_minutes, self.resolution)
 
         while current + timedelta(minutes=duration_minutes) <= end_limit:
             slot_end = current + timedelta(minutes=duration_minutes)
@@ -511,7 +526,7 @@ class ShadowScheduler:
                 sun_azimuth=avg_az
             ))
 
-            current += timedelta(minutes=self.resolution)
+            current += timedelta(minutes=slot_step)
 
         return slots
 
@@ -618,6 +633,7 @@ class ShadowScheduler:
     ) -> List[TimeSlot]:
         """Generate all candidate time slots with real shadow percentages."""
         slots: List[TimeSlot] = []
+        slot_step = get_slot_step_for_long_duration(duration_minutes, self.resolution)
 
         current = datetime(date.year, date.month, date.day, start_hour, 0, 0)
         end_limit = datetime(date.year, date.month, date.day, end_hour, 0, 0)
@@ -637,7 +653,7 @@ class ShadowScheduler:
                 sun_azimuth=avg_az
             ))
 
-            current += timedelta(minutes=self.resolution)
+            current += timedelta(minutes=slot_step)
 
         return slots
 
@@ -681,7 +697,9 @@ class ShadowScheduler:
         self_shaded = 0
         ext_blocked = 0
         sun_hit = 0
-        interval = timedelta(minutes=self.SLOT_SAMPLE_INTERVAL_MINUTES)
+        slot_minutes = int((end - start).total_seconds() / 60)
+        step_min = get_adaptive_sample_interval_minutes(slot_minutes)
+        interval = timedelta(minutes=step_min)
 
         current = start
         while current <= end:
