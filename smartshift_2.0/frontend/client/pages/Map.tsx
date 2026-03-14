@@ -7,7 +7,7 @@ import {
   Plus, Clock, Zap, Search, Loader2, LayoutDashboard, Locate,
   Bookmark, Trash2, Activity,
 } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import MapboxMap, {
   LOCATIONS, FlyToTarget, RouteToDraw, AltRouteToDraw, queryBuildingsFromMap, ClientBuilding,
   SelectedBuilding, BuildingFace as MapBuildingFace, classifyFaces, closestFace,

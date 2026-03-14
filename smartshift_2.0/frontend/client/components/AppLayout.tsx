@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom";
 import { Sun, Map, CheckSquare, Settings, Briefcase, Navigation, LayoutDashboard, LogOut, User } from "lucide-react";
-import { cn } from "../lib/utils";
+import { cn } from "@/lib/utils";
 import { useLocation } from "react-router-dom";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
