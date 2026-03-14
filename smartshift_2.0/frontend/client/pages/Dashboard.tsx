@@ -16,6 +16,7 @@ import {
   formatTime,
   calculateUV,
   getUVCategory,
+  fetchSunriseSunsetDubai,
 } from "@/lib/sunCalculations";
 
 const API_BASE = "http://localhost:8002";
@@ -107,6 +108,7 @@ export default function Dashboard() {
   const [heatRiskLocationName, setHeatRiskLocationName] = useState("Detecting...");
   const [heatRiskSearch, setHeatRiskSearch] = useState("");
   const [heatRiskSuggestions, setHeatRiskSuggestions] = useState<Array<{mapbox_id: string; name: string; full_address?: string; place_formatted?: string}>>([]);
+  const [sunriseSunset, setSunriseSunset] = useState<{ sunrise: string; sunset: string }>({ sunrise: "--", sunset: "--" });
 
   // Personal mode location
   const [personalLat, setPersonalLat] = useState(25.2048);
@@ -229,6 +231,14 @@ export default function Dashboard() {
       })
       .catch(() => {});
   }, [personalLat, personalLon]);
+
+  useEffect(() => {
+    const d = dateStr || new Date().toISOString().slice(0, 10);
+    setSunriseSunset({ sunrise: "--", sunset: "--" });
+    fetchSunriseSunsetDubai(d)
+      .then(setSunriseSunset)
+      .catch(() => setSunriseSunset({ sunrise: "--", sunset: "--" }));
+  }, [dateStr]);
 
   const searchHeatRiskLocation = async (val: string) => {
     setHeatRiskSearch(val);
@@ -746,7 +756,7 @@ export default function Dashboard() {
             <div>
               <h1 className="text-3xl sm:text-4xl font-bold text-foreground">Route Navigator</h1>
               <p className="text-muted-foreground mt-1">
-                Live sun tracking for {personalLocationName} - {period} · Sunrise {sunPos.sunrise ?? "--"} · Sunset {sunPos.sunset ?? "--"}
+                Live sun tracking for {personalLocationName} - {period} · Sunrise {sunriseSunset.sunrise} · Sunset {sunriseSunset.sunset}
               </p>
             </div>
           </div>

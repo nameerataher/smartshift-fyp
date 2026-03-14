@@ -25,6 +25,7 @@ import {
   calculateUV,
   getUVCategory,
   calculateShadowCoverage,
+  fetchSunriseSunsetDubai,
   SunPosition,
 } from "@/lib/sunCalculations";
 
@@ -118,6 +119,16 @@ function qualityTag(quality: WindowRec["quality"]): { label: string; color: stri
   }
 }
 
+function getUVCategoryStyle(uv: number): { level: string; color: string } {
+  const level = getUVCategory(uv);
+  const color =
+    level === "Low" ? "text-green-600" :
+    level === "Moderate" ? "text-yellow-600" :
+    level === "High" ? "text-orange-600" :
+    level === "Very High" ? "text-red-600" : "text-purple-600";
+  return { level, color };
+}
+
 async function fetchScheduleFromBackend(
   taskName: string, lat: number, lon: number, locationName: string,
   dateStr: string, durationMinutes: number, startHour: number, endHour: number,
@@ -192,7 +203,7 @@ async function fetchScheduleFromBackend(
         title: `${formatTime(startMin)} – ${formatTime(endMin)}`,
         start: startMin, end: endMin,
         timeLabel: slot.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
-        uv, uvCat: getUVCategory(uv), shadePct, quality,
+        uv, uvCat: getUVCategoryStyle(uv), shadePct, quality,
         reason: isBest ? rec.recommendation_reason : undefined,
       };
     };
@@ -220,7 +231,7 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
     const mid = Math.floor((s + e) / 2);
     const sp = calculateSunPosition(date, Math.floor(mid / 60), mid % 60);
     const uv = calculateUV(date, mid);
-    const uvCat = getUVCategory(uv);
+    const uvCat = getUVCategoryStyle(uv);
     const shadePct = calculateShadowCoverage(sp.altitude);
     const quality = recQuality(shadePct);
     results.push({
@@ -279,23 +290,7 @@ export default function MapPage() {
     return () => clearInterval(id);
   }, [isPlaying]);
 
-  // When time/date change and shadows overlay is visible, refetch shadows after debounce so they update live
-  const [shadowRefetchTrigger, setShadowRefetchTrigger] = useState(0);
   const shadowRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (!debugShadowGeoJSON) return;
-    if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current);
-    shadowRefetchRef.current = setTimeout(() => {
-      shadowRefetchRef.current = null;
-      setShadowRefetchTrigger((t) => t + 1);
-    }, 800);
-    return () => { if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current); };
-  }, [currentMinutes, dateStr]);
-
-  useEffect(() => {
-    if (shadowRefetchTrigger === 0 || !debugShadowGeoJSON) return;
-    fetchDebugShadows();
-  }, [shadowRefetchTrigger]);
 
   const [flyToTarget, setFlyToTarget] = useState<FlyToTarget | null>(null);
   const flyToKeyRef = useRef(0);
@@ -953,7 +948,7 @@ export default function MapPage() {
     setIsPlaying(false);
   };
 
-  const fetchDebugShadows = async () => {
+  const fetchDebugShadows = useCallback(async (silent = false) => {
     // Prefer selected site; fall back to current map center so we always
     // query buildings that are actually visible on screen
     const mapCenter = mapInstanceRef.current?.getCenter();
@@ -964,7 +959,6 @@ export default function MapPage() {
     const timeStr = `${dateStr}T${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:00`;
     const buildings = getClientBuildings(lat, lng);
     const sp = calculateSunPosition(dateStr ? new Date(dateStr) : new Date(), h, m);
-    console.log(`[fetchDebugShadows] lat=${lat}, lng=${lng}, buildings=${buildings.length}, sun az=${sp.azimuth.toFixed(1)} alt=${sp.altitude.toFixed(1)}`);
 
     try {
       const res = await fetch(`${API_BASE}/api/v2/debug/shadow-polygons`, {
@@ -992,19 +986,39 @@ export default function MapPage() {
           `${data.shadow_polygons_count} shadows | ` +
           `Shadow len@30m: ${data.sun.shadow_length_30m}m dir ${data.sun.shadow_direction}°`;
         setDebugShadowInfo(info);
-        toast.success(`${data.shadow_polygons_count} shadow polygons from ${data.buildings_found} buildings`);
+        if (!silent) toast.success(`${data.shadow_polygons_count} shadow polygons from ${data.buildings_found} buildings`);
       } else {
-        toast.error(data.error || "Debug fetch failed");
+        if (!silent) toast.error(data.error || "Debug fetch failed");
       }
     } catch {
-      toast.error("Could not fetch debug shadow polygons");
+      if (!silent) toast.error("Could not fetch debug shadow polygons");
     }
-  };
+  }, [commercialSite, currentMinutes, dateStr, getClientBuildings]);
+
+  // When time/date change and shadow overlay is active, re-fetch silently after a short debounce
+  useEffect(() => {
+    if (!debugShadowGeoJSON) return;
+    if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current);
+    shadowRefetchRef.current = setTimeout(() => {
+      shadowRefetchRef.current = null;
+      fetchDebugShadows(true);
+    }, 400);
+    return () => { if (shadowRefetchRef.current) clearTimeout(shadowRefetchRef.current); };
+  }, [currentMinutes, dateStr, fetchDebugShadows, debugShadowGeoJSON]);
 
   const uv = calculateUV(dateStr ? new Date(dateStr) : new Date(), currentMinutes);
   const uvCat = getUVCategory(uv);
   const period = sunPos ? getTimePeriod(sunPos.altitude, sunPos.azimuth) : "—";
   const timeOptions = Array.from({ length: 49 }, (_, i) => i * 30);
+
+  const [sunriseSunset, setSunriseSunset] = useState({ sunrise: "--", sunset: "--" });
+  useEffect(() => {
+    const d = dateStr || new Date().toISOString().slice(0, 10);
+    setSunriseSunset({ sunrise: "--", sunset: "--" });
+    fetchSunriseSunsetDubai(d)
+      .then(setSunriseSunset)
+      .catch(() => setSunriseSunset({ sunrise: "--", sunset: "--" }));
+  }, [dateStr]);
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -1515,8 +1529,8 @@ export default function MapPage() {
               {[
                 { label: "Azimuth", value: sunPos ? `${sunPos.azimuth.toFixed(1)}°` : "--", color: "text-amber-500" },
                 { label: "Altitude", value: sunPos ? `${sunPos.altitude.toFixed(1)}°` : "--", color: "text-orange-500" },
-                { label: "Sunrise", value: sunPos?.sunrise ?? "--", color: "text-rose-400" },
-                { label: "Sunset", value: sunPos?.sunset ?? "--", color: "text-violet-500" },
+                { label: "Sunrise", value: sunriseSunset.sunrise, color: "text-rose-400" },
+                { label: "Sunset", value: sunriseSunset.sunset, color: "text-violet-500" },
               ].map((x) => (
                 <div key={x.label} className="rounded-xl border border-border/60 bg-background/55 p-2">
                   <div className="text-[10px] text-muted-foreground">{x.label}</div>
@@ -1538,7 +1552,7 @@ export default function MapPage() {
               ))}
             </div>
             <div className="flex gap-1.5 mt-1.5">
-              <button onClick={fetchDebugShadows}
+              <button onClick={() => fetchDebugShadows()}
                 className="flex-1 py-1.5 rounded-lg border border-violet-400/40 bg-violet-500/10 text-[10px] font-medium text-violet-600 hover:bg-violet-500/20">
                 Show Computed Shadows
               </button>

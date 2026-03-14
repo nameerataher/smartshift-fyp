@@ -11,7 +11,6 @@ import MapboxDraw from "@mapbox/mapbox-gl-draw";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import { calculateSunPosition, SunPosition } from "@/lib/sunCalculations";
 import {
-  getLightPreset,
   getTimeOfDayColor,
   getAmbientColor,
   getAmbientIntensity,
@@ -199,7 +198,7 @@ export interface ClientBuilding {
   name: string;
 }
 
-function isBuilding(f: mapboxgl.MapGeoJSONFeature): boolean {
+function isBuilding(f: mapboxgl.GeoJSONFeature): boolean {
   if (f.sourceLayer === "building") return true;
 
   const layerId = (f.layer?.id ?? "").toLowerCase();
@@ -242,7 +241,7 @@ export function queryBuildingsFromMap(
   ];
 
   // Strategy 1: try querying with explicit layer name (not all styles have this)
-  let features: mapboxgl.MapGeoJSONFeature[] = [];
+  let features: mapboxgl.GeoJSONFeature[] = [];
   try {
     features = map.queryRenderedFeatures(bbox, { layers: ["building"] });
   } catch {
@@ -366,23 +365,26 @@ export default function MapboxMap({
   const prevClearKeyRef = useRef<number | undefined>(undefined);
   const prevAltRoutesKeyRef = useRef<number | undefined>(undefined);
 
-  // ── Lighting helper ──────────────────────────────────────────────────────
+  // ── Lighting: Use ONLY setLights (do not set lightPreset — it overrides setLights in Standard style) ──
   const applyLighting = useCallback((sp: SunPosition) => {
     const map = mapRef.current;
     if (!map) return;
+
+    // Polar angle: 0° = overhead, 90° = horizon. Clamp to [5, 70] for shadow updates (Mapbox limit ~75°)
+    const polarAngle = Math.min(70, Math.max(5, 90 - sp.altitude));
+    const azimuth = sp.azimuth;
+
+    const mapAny = map as any;
+    if (typeof mapAny.setLights !== "function") return;
+
     try {
-      try { map.setConfigProperty("basemap", "lightPreset", getLightPreset(sp.altitude, sp.azimuth)); } catch {}
-      
-      // Polar angle: 0° = directly above, 90° = horizon, 180° = below
-      const polarAngle = 90 - sp.altitude;
-      
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (map as any).setLights([
+      // Do NOT call setConfigProperty("lightPreset") — it overrides setLights and locks shadows to 4 presets
+      mapAny.setLights([
         {
-          id: "sun-directional",
+          id: "sun-light",
           type: "directional",
           properties: {
-            direction: [sp.azimuth, polarAngle],
+            direction: [azimuth, polarAngle],
             color: getTimeOfDayColor(sp.altitude, sp.azimuth),
             intensity: getSunIntensity(sp.altitude),
             "cast-shadows": sp.altitude > 0,
@@ -390,7 +392,7 @@ export default function MapboxMap({
           },
         },
         {
-          id: "ambient",
+          id: "ambient-light",
           type: "ambient",
           properties: {
             color: getAmbientColor(sp.altitude),
@@ -398,9 +400,10 @@ export default function MapboxMap({
           },
         },
       ]);
-      
-      console.log(`Lighting: alt=${sp.altitude.toFixed(1)}°, az=${sp.azimuth.toFixed(1)}°, polar=${polarAngle.toFixed(1)}°`);
-    } catch (e) { console.warn("Lighting error:", e); }
+      map.triggerRepaint();
+    } catch (e) {
+      console.warn("Lighting error:", e);
+    }
   }, []);
 
   // ── Init map ─────────────────────────────────────────────────────────────
@@ -427,13 +430,12 @@ export default function MapboxMap({
       const h = Math.floor(currentMinutes / 60);
       const m = currentMinutes % 60;
       const sp = calculateSunPosition(date, h, m);
-      try { map.setConfigProperty("basemap", "lightPreset", getLightPreset(sp.altitude, sp.azimuth)); } catch {}
+      // Apply our lights only (no lightPreset — so shadows update with slider)
       setTimeout(() => {
         applyLighting(sp);
         mapReadyRef.current = true;
         onMapReady?.();
-      }, 800);
-      // Emit initial bearing once map is ready
+      }, 300);
       try {
         const bearing = map.getBearing();
         onBearingChangeRef.current?.(bearing);
