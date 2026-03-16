@@ -103,7 +103,7 @@ export function calculateSunPosition(
   const az = toDeg(Math.atan2(
     -Math.cos(decR) * Math.cos(latR) * Math.sin(lhaR),
     Math.sin(decR) - Math.sin(latR) * sinAlt
-  )) + 180;
+  ));
   const azimuth = norm360(az);
 
   return { altitude, azimuth };

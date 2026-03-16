@@ -9,10 +9,11 @@ function lerp(a: number, b: number, t: number) { return a + (b - a) * clamp(t, 0
 /**
  * Mapbox Standard lightPreset: "dawn" | "day" | "dusk" | "night".
  * altitude: degrees above horizon (positive = day, negative = below horizon).
- * azimuth: 0=N, 90=E, 180=S, 270=W (morning sun ~90°, evening ~270°).
+ * azimuth: 0=N, 90=E, 180=S, 270=W (morning sun ~90-120°, evening ~240-270°).
+ * Afternoon = sun has passed solar south (azimuth > 180°).
  */
 export function getLightPreset(altitude: number, azimuth: number): string {
-  const isAfternoon = azimuth >= 90 && azimuth < 270;
+  const isAfternoon = azimuth > 180;
   if (altitude < -6) return "night";
   if (altitude < 0) return isAfternoon ? "dusk" : "dawn";
   if (altitude < 10) return isAfternoon ? "dusk" : "dawn";
