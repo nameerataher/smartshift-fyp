@@ -88,6 +88,7 @@ class ScheduleRecommendation:
     total_evaluated: int = 0
     recommendation_reason: str = ""
     buildings_used: int = 0
+    buildings_footprints_geojson: Optional[Dict] = None  # For visual overlay of buildings considered
 
     def to_dict(self) -> Dict:
         """Convert to API response format."""
@@ -118,7 +119,8 @@ class ScheduleRecommendation:
             ],
             "recommendation_reason": self.recommendation_reason,
             "total_evaluated": self.total_evaluated,
-            "buildings_analyzed": self.buildings_used
+            "buildings_analyzed": self.buildings_used,
+            "buildings_footprints_geojson": self.buildings_footprints_geojson,
         }
 
 
@@ -299,6 +301,23 @@ class ShadowScheduler:
         )
         reason = self._generate_reason(best, location_name, None, len(buildings))
 
+        # Build footprint GeoJSON for frontend overlay ("buildings considered for this polygon")
+        footprint_features = []
+        for b in buildings:
+            fp_ring = [[p[0], p[1]] for p in b.footprint]
+            if len(fp_ring) >= 3:
+                if fp_ring[0] != fp_ring[-1]:
+                    fp_ring.append(fp_ring[0])
+                footprint_features.append({
+                    "type": "Feature",
+                    "properties": {"building_id": b.id, "height": b.height, "name": b.name or "building"},
+                    "geometry": {"type": "Polygon", "coordinates": [fp_ring]},
+                })
+        buildings_footprints_geojson = (
+            {"type": "FeatureCollection", "features": footprint_features}
+            if footprint_features else None
+        )
+
         return ScheduleRecommendation(
             task_name=task_name,
             location_name=location_name,
@@ -308,7 +327,8 @@ class ShadowScheduler:
             alternatives=alternatives,
             total_evaluated=len(slots),
             recommendation_reason=reason,
-            buildings_used=len(buildings)
+            buildings_used=len(buildings),
+            buildings_footprints_geojson=buildings_footprints_geojson,
         )
 
     def _pick_diversified_alternatives(

@@ -129,13 +129,18 @@ function getUVCategoryStyle(uv: number): { level: string; color: string } {
   return { level, color };
 }
 
+export interface ScheduleAreaResult {
+  recs: WindowRec[];
+  buildingsFootprintsGeoJSON?: { type: "FeatureCollection"; features: unknown[] } | null;
+}
+
 async function fetchScheduleFromBackend(
   taskName: string, lat: number, lon: number, locationName: string,
   dateStr: string, durationMinutes: number, startHour: number, endHour: number,
   buildingFace?: string,
   polygonPoints?: [number, number][],
   clientBuildings?: ClientBuilding[]
-): Promise<WindowRec[]> {
+): Promise<ScheduleAreaResult> {
   try {
     let res: Response;
     const buildingsPayload = clientBuildings?.length
@@ -214,9 +219,11 @@ async function fetchScheduleFromBackend(
       const r = makeRec(alt, false);
       if (r) results.push(r);
     }
-    return results;
+    const buildingsFootprintsGeoJSON = rec.buildings_footprints_geojson ?? null;
+    return { recs: results, buildingsFootprintsGeoJSON };
   } catch {
-    return computeWindowsFallback(dateStr, durationMinutes, startHour, endHour);
+    const fallback = computeWindowsFallback(dateStr, durationMinutes, startHour, endHour);
+    return { recs: fallback };
   }
 }
 
@@ -250,6 +257,29 @@ export default function MapPage() {
   const { user } = useAuth();
   const { minutes: initMinutes, dateStr: initDate } = getDubaiNow();
 
+  const [currentMinutes, setCurrentMinutes] = useState(() => {
+    try {
+      const s = sessionStorage.getItem("mapPage_time_minutes");
+      if (s != null) {
+        const m = Number(s);
+        if (Number.isFinite(m) && m >= 0 && m < 1440) return m;
+      }
+    } catch {}
+    return initMinutes;
+  });
+  const [dateStr, setDateStr] = useState(() => {
+    try {
+      const s = sessionStorage.getItem("mapPage_date_str");
+      if (s != null && s.length >= 10) return s;
+    } catch {}
+    return initDate;
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("mapPage_time_minutes", String(currentMinutes));
+    sessionStorage.setItem("mapPage_date_str", dateStr);
+  }, [currentMinutes, dateStr]);
+
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { path: "/map", label: isPersonalUser || mode === "personal" ? "Route Map" : "Task Map", icon: Map },
@@ -257,8 +287,6 @@ export default function MapPage() {
     { path: "/settings", label: "Settings", icon: Settings },
   ];
 
-  const [currentMinutes, setCurrentMinutes] = useState(initMinutes);
-  const [dateStr, setDateStr] = useState(initDate);
   const [isPlaying, setIsPlaying] = useState(false);
   const [animSpeed, setAnimSpeed] = useState(500);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -277,18 +305,6 @@ export default function MapPage() {
     }
     return () => { if (animRef.current) clearInterval(animRef.current); };
   }, [isPlaying, animSpeed]);
-
-  // Live clock: when not playing, sync time every minute so sun metrics and time display update
-  useEffect(() => {
-    if (isPlaying) return;
-    const tick = () => {
-      const { dateStr: d, minutes: m } = getDubaiNow();
-      setDateStr(d);
-      setCurrentMinutes(m);
-    };
-    const id = setInterval(tick, 60_000);
-    return () => clearInterval(id);
-  }, [isPlaying]);
 
   const shadowRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shadowOverlayActiveRef = useRef(false);
@@ -331,7 +347,17 @@ export default function MapPage() {
   // Commercial site flow
   type AnalysisMode = "workzone" | "facade";
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("workzone");
-  const [drawnPolygon, setDrawnPolygon] = useState<[number, number][] | null>(null);
+  const [drawnPolygon, setDrawnPolygon] = useState<[number, number][] | null>(() => {
+    try {
+      const s = sessionStorage.getItem("mapPage_drawn_polygon");
+      if (!s) return null;
+      const parsed = JSON.parse(s) as unknown;
+      if (Array.isArray(parsed) && parsed.length >= 3 && parsed.every((p) => Array.isArray(p) && p.length >= 2 && typeof p[0] === "number" && typeof p[1] === "number")) {
+        return parsed as [number, number][];
+      }
+    } catch {}
+    return null;
+  });
   const [isSitePopupOpen, setIsSitePopupOpen] = useState(false);
   const [isSelectingSite, setIsSelectingSite] = useState(false);
   const [commercialSite, setCommercialSite] = useState<{ lat: number; lng: number } | null>(null);
@@ -349,6 +375,8 @@ export default function MapPage() {
   const [mapBearing, setMapBearing] = useState<number>(0);
   const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
   const [debugShadowInfo, setDebugShadowInfo] = useState<string | null>(null);
+  const [siteAnalysisBuildingsGeoJSON, setSiteAnalysisBuildingsGeoJSON] = useState<{ type: "FeatureCollection"; features: unknown[] } | null>(null);
+  const [showBuildingsOverlay, setShowBuildingsOverlay] = useState(false);
   const [showDensityOverlay, setShowDensityOverlay] = useState(false);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
 
@@ -821,7 +849,7 @@ export default function MapPage() {
     setIsSitePopupOpen(true);
     setAnalysisConfirmed(false);
     setSiteRecommendations([]);
-    setDrawnPolygon(null);
+    setShowBuildingsOverlay(false);
   };
 
   const submitSiteAnalysis = async () => {
@@ -842,7 +870,7 @@ export default function MapPage() {
       setScheduleLoading(true);
       setIsSitePopupOpen(false);
       try {
-        const recs = await fetchScheduleFromBackend(
+        const result = await fetchScheduleFromBackend(
           siteDraft.taskName, centroidLat, centroidLng,
           siteDraft.locationName || siteDraft.locationLabel || "Work Zone",
           dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
@@ -850,13 +878,15 @@ export default function MapPage() {
           drawnPolygon,
           buildings
         );
-        setSiteRecommendations(recs);
+        setSiteRecommendations(result.recs);
+        setSiteAnalysisBuildingsGeoJSON(result.buildingsFootprintsGeoJSON ?? null);
         setAnalysisConfirmed(true);
-        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows (${buildings.length} buildings).`);
+        if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
       } catch {
         toast.error("Failed to fetch recommendations.");
         const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
         setSiteRecommendations(fallback);
+        setSiteAnalysisBuildingsGeoJSON(null);
         setAnalysisConfirmed(true);
       }
       setScheduleLoading(false);
@@ -888,7 +918,7 @@ export default function MapPage() {
       setScheduleLoading(true);
       setIsSitePopupOpen(false);
       try {
-        const recs = await fetchScheduleFromBackend(
+        const result = await fetchScheduleFromBackend(
           siteDraft.taskName, lat, lng,
           siteDraft.locationName || siteDraft.locationLabel || "Dubai",
           dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
@@ -896,13 +926,15 @@ export default function MapPage() {
           undefined,
           buildings
         );
-        setSiteRecommendations(recs);
+        setSiteRecommendations(result.recs);
+        setSiteAnalysisBuildingsGeoJSON(null);
         setAnalysisConfirmed(true);
-        if (recs.length > 0) toast.success(`Found ${recs.length} optimal time windows (${buildings.length} buildings).`);
+        if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
       } catch {
         toast.error("Failed to fetch recommendations.");
         const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
         setSiteRecommendations(fallback);
+        setSiteAnalysisBuildingsGeoJSON(null);
         setAnalysisConfirmed(true);
       }
       setScheduleLoading(false);
@@ -1079,12 +1111,19 @@ export default function MapPage() {
             drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && isSelectingSite}
             onPolygonDrawn={(pts) => {
               setDrawnPolygon(pts);
+              try {
+                sessionStorage.setItem("mapPage_drawn_polygon", JSON.stringify(pts));
+              } catch {}
               setIsSelectingSite(false);
               setSiteDraft((prev) => ({ ...prev, locationLabel: `Polygon (${pts.length - 1} vertices)` }));
               setIsSitePopupOpen(true);
             }}
             drawnPolygon={drawnPolygon}
-            debugShadowGeoJSON={debugShadowGeoJSON}
+            debugShadowGeoJSON={
+              showBuildingsOverlay && siteAnalysisBuildingsGeoJSON
+                ? { shadows: null, footprints: siteAnalysisBuildingsGeoJSON }
+                : debugShadowGeoJSON
+            }
             mapInstanceRef={mapInstanceRef}
             facadeSelectMode={mode === "commercial" && analysisMode === "facade" && isSelectingSite}
             onBuildingSelected={(bldg) => {
@@ -1288,6 +1327,28 @@ export default function MapPage() {
                       {siteDraft.durationMinutes} min · {siteDraft.startHour}:00–{siteDraft.endHour}:00
                     </div>
                   </div>
+
+                  {analysisMode === "workzone" && siteAnalysisBuildingsGeoJSON && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowBuildingsOverlay((v) => !v)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-colors",
+                          showBuildingsOverlay
+                            ? "bg-amber-500/20 border-amber-500/50 text-amber-700 dark:text-amber-400"
+                            : "border-border/60 bg-muted/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                        )}
+                        title="Show which nearby buildings were used for shadow analysis"
+                      >
+                        <MapPin className="w-3.5 h-3.5" />
+                        {showBuildingsOverlay ? "Hide buildings overlay" : "Show buildings considered"}
+                      </button>
+                      <span className="text-[10px] text-muted-foreground">
+                        {siteAnalysisBuildingsGeoJSON.features.length} buildings
+                      </span>
+                    </div>
+                  )}
 
                   {siteRecommendations.map((rec) => {
                     const recId = `${siteDraft.taskName}-${rec.id}`;
@@ -1660,7 +1721,10 @@ export default function MapPage() {
                   </button>
                 </div>
                 {analysisMode === "workzone" && drawnPolygon && (
-                  <p className="text-xs text-green-600 mt-1">Polygon drawn ({drawnPolygon.length - 1} vertices)</p>
+                  <p className="text-xs text-green-600 mt-1 flex items-center gap-2">
+                    Polygon drawn ({drawnPolygon.length - 1} vertices)
+                    <button type="button" onClick={() => { setDrawnPolygon(null); try { sessionStorage.removeItem("mapPage_drawn_polygon"); } catch {} }} className="text-muted-foreground hover:text-destructive underline">Clear</button>
+                  </p>
                 )}
                 {analysisMode === "facade" && selectedBuilding && (
                   <p className="text-xs text-green-600 mt-1">

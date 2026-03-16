@@ -282,7 +282,7 @@ class ShadowCalculator:
         Compute coverage percentage: (shaded area ∩ target) / target area * 100.
         Shaded = cast ground shadow + building footprints (so area on buildings counts as shaded).
         target_polygon: list of (lon, lat) vertices.
-        Returns 0-100. Values below MIN_COVERAGE_PERCENT are returned as 0.
+        Returns 0-100 (actual coverage so partial shade on plain land is visible).
         """
         if not SHAPELY_AVAILABLE or len(target_polygon) < 3:
             return 0.0
@@ -305,8 +305,7 @@ class ShadowCalculator:
             if inter is None or inter.is_empty:
                 return 0.0
             pct = (inter.area / target_area) * 100.0
-            if pct < self.MIN_COVERAGE_PERCENT:
-                return 0.0
+            # Return actual percentage so partial shade on plain land is visible (e.g. 8% instead of 0%)
             return min(100.0, pct)
         except Exception:
             return 0.0
