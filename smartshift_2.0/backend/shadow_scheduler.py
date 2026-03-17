@@ -439,8 +439,8 @@ class ShadowScheduler:
         """
         Compute shadow coverage for a slot using merged full shadow polygons over
         the target area: (merged_shadow ∩ target).area / target.area * 100.
-        Samples every SLOT_SAMPLE_INTERVAL_MINUTES (e.g. 1 min); reports max coverage
-        over the period so short full-coverage windows aren't missed.
+        Samples at adaptive intervals over the slot; returns the average coverage
+        so the reported shade % reflects typical conditions as the sun moves.
         """
         if not SHAPELY_AVAILABLE or not target_polygon_lonlat or len(target_polygon_lonlat) < 3:
             return 0.0, 0.0, 0.0
@@ -484,11 +484,11 @@ class ShadowScheduler:
         n = len(coverages)
         if n == 0:
             return 0.0, 0.0, 0.0
-        # Max so short periods of full coverage aren't missed; avg_alt/avg_az over slot
-        max_shadow = max(coverages)
+        # Average coverage over the slot so shade % reflects typical conditions as sun moves
+        avg_shadow = sum(coverages) / n
         avg_alt = sum(altitudes) / n
         avg_az = sum(azimuths) / n
-        return max_shadow, avg_alt, avg_az
+        return avg_shadow, avg_alt, avg_az
 
     def _generate_area_time_slots(
         self,
@@ -687,9 +687,9 @@ class ShadowScheduler:
         building_face: Optional[str] = None
     ) -> Tuple[float, float, float]:
         """
-        Calculate shadow coverage for a time slot. Samples every
-        SLOT_SAMPLE_INTERVAL_MINUTES (e.g. 1 min); reports max coverage over
-        the period so short full-coverage windows aren't missed.
+        Calculate shadow coverage for a time slot. Samples at adaptive intervals
+        over the slot; returns the average coverage so the reported shade %
+        reflects typical conditions as the sun moves.
 
         For AREA/POINT mode: uses ground-plane shadow polygons and PIP tests.
         For FACADE mode: uses 3D elevation-aware analysis.
@@ -757,8 +757,8 @@ class ShadowScheduler:
             current += interval
 
         total_samples = len(per_sample_pct)
-        # Max so short periods of full coverage aren't missed
-        shadow_pct = max(per_sample_pct) if total_samples > 0 else 0.0
+        # Average coverage over the slot so shade % reflects typical conditions as sun moves
+        shadow_pct = (sum(per_sample_pct) / total_samples) if total_samples > 0 else 0.0
         avg_alt = sum(altitudes) / len(altitudes) if altitudes else 0
         avg_az = sum(azimuths) / len(azimuths) if azimuths else 0
 
