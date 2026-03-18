@@ -1358,7 +1358,9 @@ export default function MapPage() {
                     </div>
                   )}
 
-                  {siteRecommendations.map((rec, index) => {
+                  {[...siteRecommendations]
+                    .sort((a, b) => b.shadePct - a.shadePct)
+                    .map((rec, index) => {
                     const recId = `${siteDraft.taskName}-${rec.id}`;
                     const saved = savedRecIds.has(recId);
                     const tag = qualityTag(rec.quality);
