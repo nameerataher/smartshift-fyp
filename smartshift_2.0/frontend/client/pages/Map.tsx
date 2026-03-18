@@ -94,6 +94,14 @@ interface WindowRec {
   shadePct: number;
   quality: "excellent" | "good" | "fair" | "low" | "poor";
   reason?: string;
+  debug?: {
+    face_angle?: number;
+    total_samples?: number;
+    self_shaded?: number;
+    ext_blocked?: number;
+    sun_hit?: number;
+    is_always_self_shaded?: boolean;
+  };
 }
 
 interface SavedPlaceItem {
@@ -141,6 +149,7 @@ async function fetchScheduleFromBackend(
   taskName: string, lat: number, lon: number, locationName: string,
   dateStr: string, durationMinutes: number, startHour: number, endHour: number,
   buildingFace?: string,
+  faceAngle?: number,
   polygonPoints?: [number, number][],
   clientBuildings?: ClientBuilding[]
 ): Promise<ScheduleAreaResult> {
@@ -177,6 +186,7 @@ async function fetchScheduleFromBackend(
         duration_minutes: durationMinutes, date: dateStr,
         start_hour: startHour, end_hour: endHour,
         recommendation_count: 5, building_face: buildingFace || undefined,
+        face_angle: faceAngle != null ? faceAngle : undefined,
         buildings: buildingsPayload,
       };
       res = await fetch(`${API_BASE}/api/v2/shadow-schedule`, {
@@ -214,6 +224,7 @@ async function fetchScheduleFromBackend(
         timeLabel: slot.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
         uv, uvCat: getUVCategoryStyle(uv), shadePct, quality,
         reason: reason || undefined,
+        debug: slot.debug || undefined,
       };
     };
 
@@ -374,6 +385,7 @@ export default function MapPage() {
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [buildingFace, setBuildingFace] = useState<string>("N");
+  const [selectedFaceAngle, setSelectedFaceAngle] = useState<number | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [hoveredRecId, setHoveredRecId] = useState<string | null>(null);
   const [expandedRecIds, setExpandedRecIds] = useState<Set<string>>(new Set());
@@ -881,6 +893,7 @@ export default function MapPage() {
           siteDraft.locationName || siteDraft.locationLabel || "Work Zone",
           dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
           undefined,
+          undefined,
           drawnPolygon,
           buildings
         );
@@ -930,6 +943,7 @@ export default function MapPage() {
           siteDraft.locationName || siteDraft.locationLabel || "Dubai",
           dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
           buildingFace,
+          selectedFaceAngle ?? undefined,
           undefined,
           buildings
         );
@@ -1148,9 +1162,10 @@ export default function MapPage() {
             }}
             onFaceClicked={(face) => {
               setBuildingFace(face.direction);
+              setSelectedFaceAngle(face.bearing);
               setIsSelectingSite(false);
               setIsSitePopupOpen(true);
-              toast.success(`${face.direction} face selected (bearing ${face.bearing.toFixed(0)}°)`);
+              toast.success(`${face.direction} face selected (${face.bearing.toFixed(0)}°)`);
             }}
             selectedBuildingFootprint={selectedBuilding?.footprint ?? null}
             selectedFaceDirection={analysisMode === "facade" ? buildingFace as "N" | "E" | "S" | "W" : null}
@@ -1196,12 +1211,16 @@ export default function MapPage() {
             </div>
           </div>
 
-          {/* Floating compass for building orientation */}
+          {/* Floating compass: entire rose rotates with map so cardinals match view */}
           <div className="absolute top-4 right-4 z-20 flex flex-col items-center gap-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
               Facade Compass
             </div>
-            <div className="relative w-16 h-16 rounded-full border border-border/70 bg-background/70 backdrop-blur-xl shadow-lg flex items-center justify-center">
+            <div
+              className="relative w-16 h-16 rounded-full border border-border/70 bg-background/70 backdrop-blur-xl shadow-lg flex items-center justify-center"
+              style={{ transform: `rotate(${-mapBearing}deg)`, transition: "transform 150ms ease-out" }}
+              title="Cardinals match map: N = geographic north. Shadows point away from sun (e.g. morning = shadows W, sun E)."
+            >
               <span className="absolute top-1.5 left-1/2 -translate-x-1/2 text-[10px] font-semibold text-foreground">
                 N
               </span>
@@ -1214,15 +1233,15 @@ export default function MapPage() {
               <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] font-semibold text-muted-foreground">
                 E
               </span>
-              {/* Compass needle (rotates with map bearing) */}
-              <div
-                className="relative flex items-center justify-center"
-                style={{ transform: `rotate(${-mapBearing}deg)`, transition: "transform 150ms ease-out" }}
-              >
+              {/* Needle points to N (no extra rotation; rose already rotated) */}
+              <div className="relative flex items-center justify-center pointer-events-none">
                 <div className="w-1 h-6 bg-gradient-to-b from-red-500 to-red-700 rounded-full shadow-sm -mt-3" />
                 <div className="absolute w-1.5 h-1.5 rounded-full bg-background border border-red-700" />
               </div>
             </div>
+            <p className="text-[9px] text-muted-foreground text-center max-w-[90px] leading-tight">
+              Shadows point away from sun
+            </p>
           </div>
         </div>
 
@@ -1396,8 +1415,13 @@ export default function MapPage() {
                               <span className="text-sm font-semibold text-foreground">{rec.title}</span>
                               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0", tag.color)}>{tag.label}</span>
                             </div>
-                            <div className="text-[11px] mt-1 flex items-center gap-2">
+                            <div className="text-[11px] mt-1 flex items-center gap-2 flex-wrap">
                               <span className="text-green-600 font-medium">{rec.shadePct}% shade</span>
+                              {rec.debug?.is_always_self_shaded && (
+                                <span className="text-[9px] px-1 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                  self-shaded
+                                </span>
+                              )}
                               {!isFirst && rec.reason && (
                                 <span className="text-[10px] text-muted-foreground">
                                   {expandedRecIds.has(rec.id) ? "Click to collapse" : "Hover or click for details"}
@@ -1406,6 +1430,12 @@ export default function MapPage() {
                             </div>
                             {rec.reason && showReason && (
                               <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">{rec.reason}</p>
+                            )}
+                            {rec.debug && showReason && (
+                              <div className="text-[9px] text-muted-foreground/70 mt-1 font-mono bg-muted/30 rounded px-1.5 py-1">
+                                samples={rec.debug.total_samples} self={rec.debug.self_shaded} ext={rec.debug.ext_blocked} sun={rec.debug.sun_hit}
+                                {rec.debug.face_angle != null && ` face=${rec.debug.face_angle.toFixed(0)}°`}
+                              </div>
                             )}
                           </div>
                           <button onClick={(e) => { e.stopPropagation(); saveRecommendation(rec); }}
@@ -1747,7 +1777,7 @@ export default function MapPage() {
                   <button onClick={() => {
                     setIsSelectingSite(true);
                     setIsSitePopupOpen(false);
-                    if (analysisMode === "facade") { setSelectedBuilding(null); setBuildingFace("N"); }
+                    if (analysisMode === "facade") { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }
                   }}
                     className="px-3 py-2 rounded-lg border border-primary/25 bg-primary/10 text-primary text-sm font-medium whitespace-nowrap">
                     {analysisMode === "workzone" ? "Draw on Map" : "Select Building"}
@@ -1808,7 +1838,7 @@ export default function MapPage() {
                             {selectedBuilding.faces.length} faces detected. Click a face on the map or select below.
                           </p>
                         </div>
-                        <button onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); }}
+                        <button onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }}
                           className="text-indigo-400 hover:text-indigo-600 p-1"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </div>
@@ -1824,8 +1854,9 @@ export default function MapPage() {
                           W: "bg-amber-500 border-amber-500 text-white",
                         };
                         const labels: Record<string, string> = { N: "North", E: "East", S: "South", W: "West" };
+                        const faceAngles: Record<string, number> = { N: 0, E: 90, S: 180, W: 270 };
                         return (
-                          <button key={face} type="button" onClick={() => setBuildingFace(face)}
+                          <button key={face} type="button" onClick={() => { setBuildingFace(face); setSelectedFaceAngle(faceAngles[face]); }}
                             className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
                               buildingFace === face ? colors[face] : "border-border bg-background hover:bg-muted")}>
                             <span className="block text-xs">{labels[face]}</span>
