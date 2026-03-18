@@ -87,11 +87,13 @@ class ScheduleRecommendation:
 
     total_evaluated: int = 0
     recommendation_reason: str = ""
+    alternative_reasons: Optional[List[str]] = None  # One reason per alternative slot
     buildings_used: int = 0
     buildings_footprints_geojson: Optional[Dict] = None  # For visual overlay of buildings considered
 
     def to_dict(self) -> Dict:
         """Convert to API response format."""
+        alt_reasons = self.alternative_reasons or []
         return {
             "task_name": self.task_name,
             "location": {
@@ -105,7 +107,8 @@ class ScheduleRecommendation:
                 "shadow_percentage": round(self.best_slot.shadow_percentage, 1),
                 "sun_altitude": round(self.best_slot.sun_altitude, 1),
                 "sun_azimuth": round(self.best_slot.sun_azimuth, 1),
-                "time_label": self.best_slot.time_label
+                "time_label": self.best_slot.time_label,
+                "recommendation_reason": self.recommendation_reason,
             },
             "alternatives": [
                 {
@@ -113,9 +116,10 @@ class ScheduleRecommendation:
                     "end_time": slot.end.isoformat(),
                     "shadow_percentage": round(slot.shadow_percentage, 1),
                     "sun_altitude": round(slot.sun_altitude, 1),
-                    "time_label": slot.time_label
+                    "time_label": slot.time_label,
+                    "recommendation_reason": alt_reasons[i] if i < len(alt_reasons) else "",
                 }
-                for slot in self.alternatives
+                for i, slot in enumerate(self.alternatives)
             ],
             "recommendation_reason": self.recommendation_reason,
             "total_evaluated": self.total_evaluated,
@@ -230,6 +234,10 @@ class ShadowScheduler:
         )
 
         reason = self._generate_reason(best, location_name, building_face, len(buildings))
+        alternative_reasons = [
+            self._generate_reason(slot, location_name, building_face, len(buildings))
+            for slot in alternatives
+        ]
 
         return ScheduleRecommendation(
             task_name=task_name,
@@ -240,6 +248,7 @@ class ShadowScheduler:
             alternatives=alternatives,
             total_evaluated=len(slots),
             recommendation_reason=reason,
+            alternative_reasons=alternative_reasons,
             buildings_used=len(buildings)
         )
 
@@ -300,6 +309,10 @@ class ShadowScheduler:
             slots, best, recommendation_count - 1
         )
         reason = self._generate_reason(best, location_name, None, len(buildings))
+        alternative_reasons = [
+            self._generate_reason(slot, location_name, None, len(buildings))
+            for slot in alternatives
+        ]
 
         # Build footprint GeoJSON for frontend overlay ("buildings considered for this polygon")
         footprint_features = []
@@ -327,6 +340,7 @@ class ShadowScheduler:
             alternatives=alternatives,
             total_evaluated=len(slots),
             recommendation_reason=reason,
+            alternative_reasons=alternative_reasons,
             buildings_used=len(buildings),
             buildings_footprints_geojson=buildings_footprints_geojson,
         )
@@ -916,14 +930,16 @@ class ShadowScheduler:
                 f"{shadow}% shadow coverage ({source}, sun altitude {alt}deg)."
             )
 
-        if shadow >= 80:
-            desc = "excellent — area is mostly shaded by surrounding buildings"
-        elif shadow >= 60:
-            desc = "good — significant building shadow cover"
-        elif shadow >= 40:
-            desc = "moderate — partial sun exposure expected"
+        if shadow >= 81:
+            desc = "Very High Shade"
+        elif shadow >= 61:
+            desc = "High Shade"
+        elif shadow >= 41:
+            desc = "Moderate Shade"
+        elif shadow >= 21:
+            desc = "Low Shade"
         else:
-            desc = "limited — high direct sun exposure"
+            desc = "Very Low Shade"
 
         return (
             f"Recommended {time_range} at {location_name}. "

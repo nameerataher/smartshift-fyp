@@ -92,7 +92,7 @@ interface WindowRec {
   uv: number;
   uvCat: { level: string; color: string };
   shadePct: number;
-  quality: "excellent" | "good" | "fair" | "poor";
+  quality: "excellent" | "good" | "fair" | "low" | "poor";
   reason?: string;
 }
 
@@ -103,19 +103,22 @@ interface SavedPlaceItem {
   lon: number;
 }
 
+/** Shade coverage bands: 81–100 Very High, 61–80 High, 41–60 Moderate, 21–40 Low, 0–20 Very Low */
 function recQuality(shadePct: number): WindowRec["quality"] {
-  if (shadePct >= 75) return "excellent";
-  if (shadePct >= 55) return "good";
-  if (shadePct >= 35) return "fair";
+  if (shadePct >= 81) return "excellent";
+  if (shadePct >= 61) return "good";
+  if (shadePct >= 41) return "fair";
+  if (shadePct >= 21) return "low";
   return "poor";
 }
 
 function qualityTag(quality: WindowRec["quality"]): { label: string; color: string } {
   switch (quality) {
-    case "excellent": return { label: "Best", color: "bg-green-100 text-green-700" };
-    case "good": return { label: "Recommended", color: "bg-blue-100 text-blue-700" };
-    case "fair": return { label: "Alternative", color: "bg-amber-100 text-amber-700" };
-    default: return { label: "Not Recommended", color: "bg-red-100 text-red-700" };
+    case "excellent": return { label: "Very High Shade", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" };
+    case "good": return { label: "High Shade", color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" };
+    case "fair": return { label: "Moderate Shade", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" };
+    case "low": return { label: "Low Shade", color: "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400" };
+    default: return { label: "Very Low Shade", color: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" };
   }
 }
 
@@ -203,13 +206,14 @@ async function fetchScheduleFromBackend(
       const shadePct = Math.round(slot.shadow_percentage || 0);
       const quality = recQuality(shadePct);
       const uv = calculateUV(new Date(dateStr), Math.floor((startMin + endMin) / 2));
+      const reason = isBest ? rec.recommendation_reason : (slot.recommendation_reason ?? undefined);
       return {
         id: `${isBest ? "best" : "alt"}-${startMin}-${endMin}`,
         title: `${formatTime(startMin)} – ${formatTime(endMin)}`,
         start: startMin, end: endMin,
         timeLabel: slot.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
         uv, uvCat: getUVCategoryStyle(uv), shadePct, quality,
-        reason: isBest ? rec.recommendation_reason : undefined,
+        reason: reason || undefined,
       };
     };
 
@@ -372,6 +376,7 @@ export default function MapPage() {
   const [buildingFace, setBuildingFace] = useState<string>("N");
   const [selectedBuilding, setSelectedBuilding] = useState<SelectedBuilding | null>(null);
   const [hoveredRecId, setHoveredRecId] = useState<string | null>(null);
+  const [expandedRecIds, setExpandedRecIds] = useState<Set<string>>(new Set());
   const [mapBearing, setMapBearing] = useState<number>(0);
   const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
   const [debugShadowInfo, setDebugShadowInfo] = useState<string | null>(null);
@@ -850,6 +855,7 @@ export default function MapPage() {
     setAnalysisConfirmed(false);
     setSiteRecommendations([]);
     setShowBuildingsOverlay(false);
+    setExpandedRecIds(new Set());
   };
 
   const submitSiteAnalysis = async () => {
@@ -880,6 +886,7 @@ export default function MapPage() {
         );
         setSiteRecommendations(result.recs);
         setSiteAnalysisBuildingsGeoJSON(result.buildingsFootprintsGeoJSON ?? null);
+        setExpandedRecIds(new Set());
         setAnalysisConfirmed(true);
         if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
       } catch {
@@ -928,6 +935,7 @@ export default function MapPage() {
         );
         setSiteRecommendations(result.recs);
         setSiteAnalysisBuildingsGeoJSON(null);
+        setExpandedRecIds(new Set());
         setAnalysisConfirmed(true);
         if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
       } catch {
@@ -1350,29 +1358,52 @@ export default function MapPage() {
                     </div>
                   )}
 
-                  {siteRecommendations.map((rec) => {
+                  {siteRecommendations.map((rec, index) => {
                     const recId = `${siteDraft.taskName}-${rec.id}`;
                     const saved = savedRecIds.has(recId);
                     const tag = qualityTag(rec.quality);
                     const isHovered = hoveredRecId === rec.id;
+                    const isFirst = index === 0;
+                    const showReason = isFirst || isHovered || expandedRecIds.has(rec.id);
+
+                    const toggleExpanded = () => {
+                      if (isFirst) return;
+                      setExpandedRecIds((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(rec.id)) next.delete(rec.id);
+                        else next.add(rec.id);
+                        return next;
+                      });
+                    };
 
                     return (
                       <div key={rec.id}
                         className={cn("rounded-xl border p-3 transition-all cursor-pointer",
                           isHovered ? "border-primary/60 bg-primary/5 shadow-md" : "border-border/60 bg-background/55 hover:border-primary/40")}
                         onMouseEnter={() => { setHoveredRecId(rec.id); previewRec(rec); }}
-                        onMouseLeave={() => setHoveredRecId(null)}>
+                        onMouseLeave={() => setHoveredRecId(null)}
+                        onClick={toggleExpanded}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleExpanded(); } }}
+                        aria-expanded={showReason}
+                        aria-label={isFirst ? "Top recommendation" : "Click to keep recommendation details visible"}>
                         <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
                               <span className="text-sm font-semibold text-foreground">{rec.title}</span>
-                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", tag.color)}>{tag.label}</span>
+                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0", tag.color)}>{tag.label}</span>
                             </div>
                             <div className="text-[11px] mt-1 flex items-center gap-2">
                               <span className="text-green-600 font-medium">{rec.shadePct}% shade</span>
+                              {!isFirst && rec.reason && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  {expandedRecIds.has(rec.id) ? "Click to collapse" : "Hover or click for details"}
+                                </span>
+                              )}
                             </div>
-                            {rec.reason && (
-                              <p className="text-[10px] text-muted-foreground mt-1 italic">{rec.reason}</p>
+                            {rec.reason && showReason && (
+                              <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed">{rec.reason}</p>
                             )}
                           </div>
                           <button onClick={(e) => { e.stopPropagation(); saveRecommendation(rec); }}
