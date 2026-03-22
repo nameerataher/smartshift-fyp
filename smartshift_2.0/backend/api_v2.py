@@ -31,7 +31,13 @@ except ImportError:
     print("warning: comfort_navigator not available")
 
 try:
-    from shadow_scheduler import ShadowScheduler, calculate_shadow_at_time, find_optimal_schedule_for_area, parse_client_buildings
+    from shadow_scheduler import (
+        ShadowScheduler,
+        calculate_shadow_at_time,
+        find_optimal_schedule_for_area,
+        parse_client_buildings,
+        recommend_facades_for_fixed_window,
+    )
     from solar_position import SunPosition
     SHADOW_SCHEDULER_AVAILABLE = True
 except ImportError as e:
@@ -306,11 +312,13 @@ def schedule_for_building_face():
         "building_lat": 25.197197,
         "building_lon": 55.274376,
         "face": "S",
+        "face_angle": 185.2,
         "task_duration_minutes": 240,
         "date": "2026-03-10",
         "start_hour": 5,
         "end_hour": 20
     }
+    face_angle (0-360) preferred for accurate shading; face is display-only.
     """
     if not SHADOW_SCHEDULER_AVAILABLE or not ShadowScheduler:
         return jsonify({"error": "shadow scheduler not available"}), 500
@@ -322,6 +330,16 @@ def schedule_for_building_face():
         building_lat = float(data.get('building_lat'))
         building_lon = float(data.get('building_lon'))
         face = data.get('face', 'S')
+        face_angle_raw = data.get('face_angle')
+        face_angle = None
+        if face_angle_raw is not None:
+            try:
+                a = float(face_angle_raw)
+                face_angle = max(0.0, min(360.0, a % 360.0)) if a == a else None
+            except (TypeError, ValueError):
+                pass
+        if face_angle is None and face in ("N", "E", "S", "W"):
+            face_angle = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}[face]
         task_duration = int(data.get('task_duration_minutes', 60))
         date_str = data.get('date', datetime.now().strftime('%Y-%m-%d'))
         date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -340,6 +358,7 @@ def schedule_for_building_face():
             start_hour=start_hour,
             end_hour=end_hour,
             building_face=face,
+            face_angle=face_angle,
             recommendation_count=recommendation_count
         )
 
@@ -635,7 +654,8 @@ def shadow_schedule():
         "date": "2026-03-10",
         "start_hour": 5,
         "end_hour": 20,
-        "building_face": "S",  // optional: N, E, S, W
+        "building_face": "S",  // optional: display label only
+        "face_angle": 112.3,  // preferred: actual bearing 0-360 for accurate physics (avoids N/E/S/W → 90° loss)
         "recommendation_count": 5
     }
 
@@ -671,6 +691,19 @@ def shadow_schedule():
         start_hour = int(data.get('start_hour', 5))
         end_hour = int(data.get('end_hour', 20))
         building_face = data.get('building_face')
+        face_angle_raw = data.get('face_angle')
+        face_angle = None
+        if face_angle_raw is not None:
+            try:
+                a = float(face_angle_raw)
+                face_angle = max(0.0, min(360.0, a % 360.0)) if a == a else None
+            except (TypeError, ValueError):
+                pass
+        # When only building_face is sent, derive a single number so scheduler never maps cardinals
+        if face_angle is None and building_face in ("N", "E", "S", "W"):
+            face_angle = {"N": 0.0, "E": 90.0, "S": 180.0, "W": 270.0}[building_face]
+        # CHECKPOINT 1: Facade angle (frontend → backend)
+        print("[CHECKPOINT 1] Facade angle: raw=%s building_face=%s → facade_angle=%s" % (face_angle_raw, building_face, face_angle))
         recommendation_count = int(data.get('recommendation_count', 5))
 
         raw_buildings = data.get('buildings')
@@ -687,16 +720,19 @@ def shadow_schedule():
             start_hour=start_hour,
             end_hour=end_hour,
             building_face=building_face,
+            face_angle=face_angle,
             recommendation_count=recommendation_count,
             client_buildings=client_buildings
         )
+
+        include_all_slots = bool(data.get("include_all_slots", False))
 
         return jsonify({
             "success": True,
             "mode": "shadow_only",
             "building_source": "client_map_tiles" if client_buildings else "tilequery_api",
             "buildings_used": recommendation.buildings_used,
-            "recommendation": recommendation.to_dict()
+            "recommendation": recommendation.to_dict(include_all_slots=include_all_slots),
         })
 
     except Exception as e:
@@ -704,6 +740,69 @@ def shadow_schedule():
             "success": False,
             "error": str(e),
             "traceback": traceback.format_exc()
+        }), 400
+
+
+@api_v2.route('/facade-recommend-time', methods=['POST'])
+def facade_recommend_time():
+    """
+    Recommend best cardinal facade (N/E/S/W) for a fixed same-day work window.
+    Uses sun azimuth at the midpoint of [start, start + duration].
+
+    POST /api/v2/facade-recommend-time
+    {
+        "lat": 25.197,
+        "lon": 55.274,
+        "date": "2026-03-10",
+        "start_time": "10:30",
+        "duration_minutes": 120
+    }
+    Optional: "start_hour", "start_minute" if start_time omitted.
+    """
+    if not SHADOW_SCHEDULER_AVAILABLE:
+        return jsonify({"success": False, "error": "shadow scheduler not available"}), 500
+
+    try:
+        data = request.get_json() or {}
+        lat = float(data.get("lat", 25.2048))
+        lon = float(data.get("lon", 55.2708))
+        date_str = data.get("date", datetime.now().strftime("%Y-%m-%d"))
+        date = datetime.strptime(date_str, "%Y-%m-%d")
+        duration_minutes = int(data.get("duration_minutes", 60))
+
+        start_time = data.get("start_time")
+        if start_time and isinstance(start_time, str) and ":" in start_time:
+            parts = start_time.strip().split(":")
+            start_hour = int(parts[0])
+            start_minute = int(parts[1]) if len(parts) > 1 else 0
+        else:
+            start_hour = int(data.get("start_hour", 9))
+            start_minute = int(data.get("start_minute", 0))
+
+        if not (0 <= start_hour <= 23 and 0 <= start_minute <= 59):
+            return jsonify({"success": False, "error": "Invalid start time"}), 400
+
+        raw_buildings = data.get("buildings")
+        client_buildings = parse_client_buildings(raw_buildings) if raw_buildings else None
+
+        result = recommend_facades_for_fixed_window(
+            lat=lat,
+            lon=lon,
+            date=date,
+            start_hour=start_hour,
+            start_minute=start_minute,
+            duration_minutes=duration_minutes,
+            buildings=client_buildings,
+        )
+        return jsonify({"success": True, **result})
+
+    except ValueError as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
         }), 400
 
 
@@ -866,6 +965,14 @@ def get_sun_position():
         lon = float(request.args.get('lon', 55.2708))
         time_str = request.args.get('time')
         building_face = request.args.get('face')
+        face_angle_raw = request.args.get('face_angle')
+        face_angle = None
+        if face_angle_raw is not None:
+            try:
+                a = float(face_angle_raw)
+                face_angle = max(0.0, min(360.0, a % 360.0)) if a == a else None
+            except (TypeError, ValueError):
+                pass
 
         if time_str:
             dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
@@ -875,13 +982,14 @@ def get_sun_position():
         if not SHADOW_SCHEDULER_AVAILABLE:
             return jsonify({"success": False, "error": "shadow_scheduler not available"}), 500
 
-        result = calculate_shadow_at_time(lat, lon, dt, building_face)
+        result = calculate_shadow_at_time(lat, lon, dt, building_face, face_angle)
 
         return jsonify({
             "success": True,
             "location": {"lat": lat, "lon": lon},
             "time": dt.isoformat(),
             "building_face": building_face,
+            "face_angle": face_angle,
             **result
         })
 

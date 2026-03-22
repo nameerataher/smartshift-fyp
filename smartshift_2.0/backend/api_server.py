@@ -1155,6 +1155,14 @@ def get_optimal_task_schedule():
         latest_end = int(data.get('end_hour', data.get('latest_end', 18)))
         requires_shade = str(data.get('requires_shade', 'true')).lower() == 'true'
         building_face = data.get('building_face')
+        face_angle_raw = data.get('face_angle')
+        face_angle = None
+        if face_angle_raw is not None:
+            try:
+                a = float(face_angle_raw)
+                face_angle = max(0.0, min(360.0, a % 360.0)) if a == a else None
+            except (TypeError, ValueError):
+                pass
 
         scheduler = ShadowScheduler(temporal_resolution_minutes=30)
         recommendation = scheduler.find_optimal_schedule(
@@ -1167,6 +1175,7 @@ def get_optimal_task_schedule():
             start_hour=earliest_start,
             end_hour=latest_end,
             building_face=building_face,
+            face_angle=face_angle,
             recommendation_count=5
         )
 

@@ -53,6 +53,9 @@ MAPBOX_TOKEN = (
 DEFAULT_BUILDING_HEIGHT = 30.0  # meters – fallback for missing height data
 BUILDING_FETCH_RADIUS = 300     # meters around the target point
 
+# Pipeline: discretize time at this step (minutes) for shade series + sliding window
+TIME_STEP_MINUTES = 30
+
 
 # ─── Data classes ───────────────────────────────────────────────────────────
 
@@ -64,6 +67,12 @@ class TimeSlot:
     shadow_percentage: float  # 0-100
     sun_altitude: float
     sun_azimuth: float
+    # Debug breakdown for facade mode
+    self_shaded_samples: int = 0
+    ext_blocked_samples: int = 0
+    sun_hit_samples: int = 0
+    total_samples: int = 0
+    face_angle_used: Optional[float] = None
 
     @property
     def duration_minutes(self) -> int:
@@ -72,6 +81,26 @@ class TimeSlot:
     @property
     def time_label(self) -> str:
         return f"{self.start.strftime('%I:%M %p')} – {self.end.strftime('%I:%M %p')}"
+
+    @property
+    def is_always_self_shaded(self) -> bool:
+        """True if facade is self-shaded for all samples (sun always behind building)."""
+        return self.total_samples > 0 and self.self_shaded_samples == self.total_samples
+
+    @property
+    def debug_breakdown(self) -> Dict[str, Any]:
+        """Debug info showing how shadow % was computed."""
+        if self.total_samples == 0:
+            return {}
+        return {
+            "face_angle": self.face_angle_used,
+            "total_samples": self.total_samples,
+            "self_shaded": self.self_shaded_samples,
+            "ext_blocked": self.ext_blocked_samples,
+            "sun_hit": self.sun_hit_samples,
+            "self_shaded_pct": round(100 * self.self_shaded_samples / self.total_samples, 1),
+            "is_always_self_shaded": self.is_always_self_shaded,
+        }
 
 
 @dataclass
@@ -90,35 +119,37 @@ class ScheduleRecommendation:
     alternative_reasons: Optional[List[str]] = None  # One reason per alternative slot
     buildings_used: int = 0
     buildings_footprints_geojson: Optional[Dict] = None  # For visual overlay of buildings considered
+    all_slots: Optional[List[TimeSlot]] = None  # When requested for debug: every slot with shade % and breakdown
 
-    def to_dict(self) -> Dict:
+    def to_dict(self, include_all_slots: bool = False) -> Dict:
         """Convert to API response format."""
         alt_reasons = self.alternative_reasons or []
-        return {
+
+        def slot_to_dict(slot: TimeSlot, reason: str = "") -> Dict:
+            d = {
+                "start_time": slot.start.isoformat(),
+                "end_time": slot.end.isoformat(),
+                "shadow_percentage": round(slot.shadow_percentage, 1),
+                "sun_altitude": round(slot.sun_altitude, 1),
+                "sun_azimuth": round(slot.sun_azimuth, 1),
+                "time_label": slot.time_label,
+                "recommendation_reason": reason,
+            }
+            # Include debug breakdown if available (facade mode)
+            if slot.total_samples > 0:
+                d["debug"] = slot.debug_breakdown
+            return d
+
+        out = {
             "task_name": self.task_name,
             "location": {
                 "name": self.location_name,
                 "lat": self.lat,
                 "lon": self.lon
             },
-            "best_schedule": {
-                "start_time": self.best_slot.start.isoformat(),
-                "end_time": self.best_slot.end.isoformat(),
-                "shadow_percentage": round(self.best_slot.shadow_percentage, 1),
-                "sun_altitude": round(self.best_slot.sun_altitude, 1),
-                "sun_azimuth": round(self.best_slot.sun_azimuth, 1),
-                "time_label": self.best_slot.time_label,
-                "recommendation_reason": self.recommendation_reason,
-            },
+            "best_schedule": slot_to_dict(self.best_slot, self.recommendation_reason),
             "alternatives": [
-                {
-                    "start_time": slot.start.isoformat(),
-                    "end_time": slot.end.isoformat(),
-                    "shadow_percentage": round(slot.shadow_percentage, 1),
-                    "sun_altitude": round(slot.sun_altitude, 1),
-                    "time_label": slot.time_label,
-                    "recommendation_reason": alt_reasons[i] if i < len(alt_reasons) else "",
-                }
+                slot_to_dict(slot, alt_reasons[i] if i < len(alt_reasons) else "")
                 for i, slot in enumerate(self.alternatives)
             ],
             "recommendation_reason": self.recommendation_reason,
@@ -126,6 +157,9 @@ class ScheduleRecommendation:
             "buildings_analyzed": self.buildings_used,
             "buildings_footprints_geojson": self.buildings_footprints_geojson,
         }
+        if include_all_slots and self.all_slots:
+            out["all_slots"] = [slot_to_dict(s, "") for s in self.all_slots]
+        return out
 
 
 class BuildingFace(Enum):
@@ -144,6 +178,86 @@ class BuildingFace(Enum):
     def from_string(cls, s: str) -> Optional['BuildingFace']:
         mapping = {'N': cls.NORTH, 'E': cls.EAST, 'S': cls.SOUTH, 'W': cls.WEST}
         return mapping.get(s.upper()) if s else None
+
+
+def _resolve_face_angle(
+    face_angle: Optional[float],
+    building_face: Optional[str],
+) -> Optional[float]:
+    """
+    Resolve effective face angle (0-360) for physics. Uses only the numeric
+    face_angle from the client. N/E/S/W (building_face) is for display only;
+    do not map cardinals to angles here to avoid precision loss (e.g. 112° → E → 90°).
+    """
+    if face_angle is not None and 0 <= face_angle < 360:
+        return float(face_angle)
+    return None
+
+
+def _face_angle_to_cardinal(angle: float) -> str:
+    """Convert face angle (0-360) to cardinal label for display only."""
+    a = angle % 360
+    if a >= 315 or a < 45:
+        return "N"
+    if a < 135:
+        return "E"
+    if a < 225:
+        return "S"
+    return "W"
+
+
+def _get_face_point_on_building(
+    building: Building,
+    face_angle_deg: float,
+) -> Tuple[float, float]:
+    """
+    Return (lat, lon) of a point on the selected face of the building,
+    for use in blocking checks. Using the building center would miss shadow
+    that falls on the east face but not on the center (e.g. at 11:30).
+    """
+    if not building.footprint or len(building.footprint) < 2:
+        clon, clat = building.get_centroid()
+        return (clat, clon)
+    clon, clat = building.get_centroid()
+    cos_lat = math.cos(math.radians(clat))
+    face_rad = math.radians(face_angle_deg)
+    # Bearing 0 = north: (dx_north, dy_north) ~ (0, 1) in (lon, lat) delta
+    # Project each vertex onto face direction; pick farthest in that direction
+    best_proj = -1e9
+    best_pt = (clon, clat)
+    for (plon, plat) in building.footprint:
+        dlon_m = (plon - clon) * 111320 * cos_lat
+        dlat_m = (plat - clat) * 111320
+        proj = dlat_m * math.cos(face_rad) + dlon_m * math.sin(face_rad)
+        if proj > best_proj:
+            best_proj = proj
+            best_pt = (plon, plat)
+    # Midpoint between centroid and farthest point = on the face
+    face_lon = (clon + best_pt[0]) / 2.0
+    face_lat = (clat + best_pt[1]) / 2.0
+    return (face_lat, face_lon)
+
+
+def _get_face_sample_points(
+    building: Building,
+    face_angle_deg: float,
+    n: int = 3,
+) -> List[Tuple[float, float]]:
+    """
+    Return n points along the face (centroid → face point) for Option C:
+    average shade over multiple points smooths out single-point extremes.
+    """
+    if n <= 1:
+        return [_get_face_point_on_building(building, face_angle_deg)]
+    face_lat, face_lon = _get_face_point_on_building(building, face_angle_deg)
+    clon, clat = building.get_centroid()
+    points: List[Tuple[float, float]] = []
+    for i in range(n):
+        t = (i + 1) / (n + 1)
+        lat = clat + t * (face_lat - clat)
+        lon = clon + t * (face_lon - clon)
+        points.append((lat, lon))
+    return points
 
 
 # ─── Main scheduler ────────────────────────────────────────────────────────
@@ -193,6 +307,7 @@ class ShadowScheduler:
         start_hour: int = 5,
         end_hour: int = 20,
         building_face: Optional[str] = None,
+        face_angle: Optional[float] = None,
         recommendation_count: int = 5,
         client_buildings: Optional[List[Building]] = None
     ) -> ScheduleRecommendation:
@@ -207,19 +322,45 @@ class ShadowScheduler:
         If client_buildings is provided, uses those directly (extracted from
         Mapbox's rendered vector tiles on the frontend) instead of querying
         the Tilequery API.
+
+        For facade mode: pass face_angle (0-360) for full precision, or
+        building_face ("N"/"E"/"S"/"W") for backward compatibility. face_angle
+        takes precedence when both are provided.
         """
         buildings = client_buildings if client_buildings else self._fetch_nearby_buildings(lat, lon)
+        effective_face = _resolve_face_angle(face_angle, building_face)
+        facade_mode = effective_face is not None
 
-        print(f"[schedule] mode={'facade' if building_face else 'point'} "
-              f"face={building_face} buildings={len(buildings)} "
+        print(f"[schedule] mode={'facade' if facade_mode else 'point'} "
+              f"face_angle={effective_face} building_face={building_face} buildings={len(buildings)} "
               f"source={'client' if client_buildings else 'tilequery'}")
         for i, b in enumerate(buildings[:10]):
             print(f"  bldg[{i}] id={b.id} h={b.height:.0f}m pts={len(b.footprint)}")
 
-        slots = self._generate_time_slots(
-            date, start_hour, end_hour, task_duration_minutes,
-            lat, lon, buildings, building_face
-        )
+        if facade_mode and effective_face is not None:
+            face_points: List[Tuple[float, float]] = [(lat, lon)]
+            facade_height = 30.0
+            for b in buildings:
+                bc_lon = sum(p[0] for p in b.footprint) / len(b.footprint)
+                bc_lat = sum(p[1] for p in b.footprint) / len(b.footprint)
+                if abs(bc_lat - lat) < 0.0005 and abs(bc_lon - lon) < 0.0005:
+                    facade_height = b.height
+                    face_points = _get_face_sample_points(b, effective_face, n=5)
+                    break
+            shade_series = self._build_shade_series_facade(
+                date, start_hour, end_hour, TIME_STEP_MINUTES,
+                lat, lon, effective_face, face_points, facade_height, buildings,
+            )
+            print(f"[schedule] pipeline: time_step={TIME_STEP_MINUTES}min steps={len(shade_series)}")
+            slots = self._sliding_window_slots(
+                shade_series, task_duration_minutes, TIME_STEP_MINUTES,
+                effective_face, lat, lon,
+            )
+        else:
+            slots = self._generate_time_slots(
+                date, start_hour, end_hour, task_duration_minutes,
+                lat, lon, buildings, building_face, face_angle
+            )
 
         if not slots:
             raise ValueError(
@@ -227,15 +368,27 @@ class ShadowScheduler:
                 f"between {start_hour}:00-{end_hour}:00"
             )
 
-        slots.sort(key=lambda s: s.shadow_percentage, reverse=True)
+        # Check if all slots are always-self-shaded (e.g., North-facing facade)
+        all_self_shaded = all(s.is_always_self_shaded for s in slots if s.total_samples > 0)
+
+        if all_self_shaded and facade_mode:
+            # When all slots have 100% natural shade, rank by sun altitude (lower = cooler)
+            # This gives early morning and late afternoon slots preference
+            slots.sort(key=lambda s: s.sun_altitude)
+            print(f"[schedule] All slots self-shaded, ranking by sun altitude (lower=better)")
+        else:
+            # Normal ranking: highest shade percentage first
+            slots.sort(key=lambda s: s.shadow_percentage, reverse=True)
+
         best = slots[0]
         alternatives = self._pick_diversified_alternatives(
             slots, best, recommendation_count - 1
         )
 
-        reason = self._generate_reason(best, location_name, building_face, len(buildings))
+        display_face = building_face or ( _face_angle_to_cardinal(effective_face) if effective_face is not None else None )
+        reason = self._generate_reason(best, location_name, display_face, len(buildings))
         alternative_reasons = [
-            self._generate_reason(slot, location_name, building_face, len(buildings))
+            self._generate_reason(slot, location_name, display_face, len(buildings))
             for slot in alternatives
         ]
 
@@ -249,7 +402,8 @@ class ShadowScheduler:
             total_evaluated=len(slots),
             recommendation_reason=reason,
             alternative_reasons=alternative_reasons,
-            buildings_used=len(buildings)
+            buildings_used=len(buildings),
+            all_slots=slots,
         )
 
     def find_optimal_schedule_for_area(
@@ -542,7 +696,7 @@ class ShadowScheduler:
                 all_alts: List[float] = []
                 all_azs: List[float] = []
                 for lat, lon in grid_points:
-                    pct, alt, az = self._calculate_slot_shadow(
+                    pct, alt, az, _ = self._calculate_slot_shadow(
                         current, slot_end, lat, lon, buildings
                     )
                     point_shadows.append(pct)
@@ -652,7 +806,137 @@ class ShadowScheduler:
                 ))
         return nearby
 
-    # ─── Real shadow computation ────────────────────────────────────
+    # ─── Pipeline: discretize time → shade series → sliding window ────────
+
+    def _effective_shade_at_time_facade(
+        self,
+        t: datetime,
+        lat: float,
+        lon: float,
+        face_angle: float,
+        face_points: List[Tuple[float, float]],
+        facade_height: float,
+        buildings: List[Building],
+        debug_at_times: Optional[List[datetime]] = None,
+    ) -> float:
+        """
+        Shade score for facade: continuous formula, no hard cap.
+        Fractional cast_shadow = fraction of face points blocked; exposure = cos(angle_diff).
+        effective_shade = cast_shadow + (1 - cast_shadow) * (1 - exposure).
+        """
+        sun = self._get_sun_position(t, lat, lon)
+        if not sun.is_daylight or sun.altitude <= 0:
+            return 1.0
+
+        angle_diff = abs(sun.azimuth - face_angle)
+        angle_diff = min(angle_diff, 360.0 - angle_diff)
+        exposure = max(0.0, math.cos(math.radians(angle_diff)))
+
+        # Fraction of face points in shadow (0..1). Only skip neighbor checks when the sun
+        # is strictly behind the vertical plane (obtuse horizontal angle). At exactly 90°
+        # (grazing) we still sample neighbors — e.g. West can sit in a tall building's shadow
+        # while East stays sunlit at midday.
+        if angle_diff > 90:
+            fraction_blocked = 1.0
+        else:
+            blocked = sum(
+                1 for (face_lat, face_lon) in face_points
+                if self._is_face_blocked(face_lat, face_lon, facade_height, buildings, sun, verbose=False)
+            )
+            fraction_blocked = blocked / len(face_points) if face_points else 0.0
+
+        effective_shade = fraction_blocked + (1.0 - fraction_blocked) * (1.0 - exposure)
+
+        do_debug = debug_at_times and any(
+            abs((t - tt).total_seconds()) < 60 for tt in debug_at_times
+        )
+        if do_debug:
+            print("---- DEBUG ----")
+            print("Time:", t.strftime("%H:%M"))
+            print("Facade:", face_angle)
+            print("Sun:", sun.azimuth)
+            print("Angle diff:", angle_diff)
+            print("Exposure:", exposure)
+            print("Cast shadow (fraction, %d pts):" % len(face_points), round(fraction_blocked, 4))
+            print("Effective shade:", round(effective_shade, 4))
+        return effective_shade
+
+    def _build_shade_series_facade(
+        self,
+        date: datetime,
+        start_hour: int,
+        end_hour: int,
+        time_step_minutes: int,
+        lat: float,
+        lon: float,
+        face_angle: float,
+        face_points: List[Tuple[float, float]],
+        facade_height: float,
+        buildings: List[Building],
+    ) -> List[Tuple[datetime, float]]:
+        """Step 1–3: Discretize time at time_step_minutes, compute shade at each step (Option C: avg over face_points)."""
+        series: List[Tuple[datetime, float]] = []
+        current = datetime(date.year, date.month, date.day, start_hour, 0, 0)
+        end_limit = datetime(date.year, date.month, date.day, end_hour, 0, 0)
+        step = timedelta(minutes=time_step_minutes)
+        debug_times = [
+            datetime(date.year, date.month, date.day, 9, 0, 0),
+            datetime(date.year, date.month, date.day, 11, 30, 0),
+            datetime(date.year, date.month, date.day, 14, 0, 0),
+            datetime(date.year, date.month, date.day, 14, 30, 0),
+            datetime(date.year, date.month, date.day, 15, 0, 0),
+            datetime(date.year, date.month, date.day, 15, 30, 0),
+        ]
+        while current <= end_limit:
+            shade = self._effective_shade_at_time_facade(
+                current, lat, lon, face_angle, face_points, facade_height, buildings,
+                debug_at_times=debug_times,
+            )
+            series.append((current, shade))
+            current += step
+        return series
+
+    def _sliding_window_slots(
+        self,
+        shade_series: List[Tuple[datetime, float]],
+        duration_minutes: int,
+        time_step_minutes: int,
+        face_angle_used: Optional[float],
+        lat: float,
+        lon: float,
+    ) -> List[TimeSlot]:
+        """Step 4: Sliding window over shade series; each window = one candidate slot.
+        Uses shade at slot start (not window average) so the displayed % matches the map
+        when the user sets the time to the slot start (e.g. 11:30 slot shows shade at 11:30).
+        """
+        if not shade_series:
+            return []
+        steps_per_window = max(1, duration_minutes // time_step_minutes)
+        slots: List[TimeSlot] = []
+        times = [s[0] for s in shade_series]
+        shades = [s[1] for s in shade_series]
+        for i in range(len(shade_series) - steps_per_window + 1):
+            window_shades = shades[i : i + steps_per_window]
+            shade_at_start = window_shades[0]
+            start_dt = times[i]
+            end_dt = start_dt + timedelta(minutes=duration_minutes)
+            mid_dt = start_dt + timedelta(minutes=duration_minutes // 2)
+            sun = self._get_sun_position(mid_dt, lat, lon)
+            slots.append(
+                TimeSlot(
+                    start=start_dt,
+                    end=end_dt,
+                    shadow_percentage=shade_at_start * 100.0,
+                    sun_altitude=sun.altitude,
+                    sun_azimuth=sun.azimuth,
+                    self_shaded_samples=0,
+                    ext_blocked_samples=0,
+                    sun_hit_samples=0,
+                    total_samples=len(window_shades),
+                    face_angle_used=face_angle_used,
+                )
+            )
+        return slots
 
     def _generate_time_slots(
         self,
@@ -663,7 +947,8 @@ class ShadowScheduler:
         lat: float,
         lon: float,
         buildings: List[Building],
-        building_face: Optional[str] = None
+        building_face: Optional[str] = None,
+        face_angle: Optional[float] = None
     ) -> List[TimeSlot]:
         """Generate all candidate time slots with real shadow percentages."""
         slots: List[TimeSlot] = []
@@ -672,11 +957,13 @@ class ShadowScheduler:
         current = datetime(date.year, date.month, date.day, start_hour, 0, 0)
         end_limit = datetime(date.year, date.month, date.day, end_hour, 0, 0)
 
+        effective_face = _resolve_face_angle(face_angle, building_face)
+
         while current + timedelta(minutes=duration_minutes) <= end_limit:
             slot_end = current + timedelta(minutes=duration_minutes)
 
-            shadow_pct, avg_alt, avg_az = self._calculate_slot_shadow(
-                current, slot_end, lat, lon, buildings, building_face
+            shadow_pct, avg_alt, avg_az, debug_info = self._calculate_slot_shadow(
+                current, slot_end, lat, lon, buildings, building_face, face_angle
             )
 
             slots.append(TimeSlot(
@@ -684,7 +971,12 @@ class ShadowScheduler:
                 end=slot_end,
                 shadow_percentage=shadow_pct,
                 sun_altitude=avg_alt,
-                sun_azimuth=avg_az
+                sun_azimuth=avg_az,
+                self_shaded_samples=debug_info.get("self_shaded", 0),
+                ext_blocked_samples=debug_info.get("ext_blocked", 0),
+                sun_hit_samples=debug_info.get("sun_hit", 0),
+                total_samples=debug_info.get("total_samples", 0),
+                face_angle_used=effective_face,
             ))
 
             current += timedelta(minutes=slot_step)
@@ -698,32 +990,36 @@ class ShadowScheduler:
         lat: float,
         lon: float,
         buildings: List[Building],
-        building_face: Optional[str] = None
-    ) -> Tuple[float, float, float]:
+        building_face: Optional[str] = None,
+        face_angle: Optional[float] = None
+    ) -> Tuple[float, float, float, Dict[str, Any]]:
         """
         Calculate shadow coverage for a time slot. Samples at adaptive intervals
         over the slot; returns the average coverage so the reported shade %
         reflects typical conditions as the sun moves.
 
         For AREA/POINT mode: uses ground-plane shadow polygons and PIP tests.
-        For FACADE mode: uses 3D elevation-aware analysis.
+        For FACADE mode: uses 3D elevation-aware analysis with full face angle (0-360).
 
-        Returns: (shadow_percentage 0-100, avg_sun_altitude, avg_sun_azimuth)
+        Returns: (shadow_percentage 0-100, avg_sun_altitude, avg_sun_azimuth, debug_info)
         """
         per_sample_pct: List[float] = []
         altitudes: List[float] = []
         azimuths: List[float] = []
 
-        # For facade mode: find the selected building's height
+        effective_face_angle = _resolve_face_angle(face_angle, building_face)
+        facade_mode = effective_face_angle is not None
+
+        # For facade mode: find the selected building and a point ON the selected face (not center)
         facade_height = 0.0
-        face_enum = None
-        if building_face:
-            face_enum = BuildingFace.from_string(building_face)
+        face_lat, face_lon = lat, lon  # default for non-facade
+        if facade_mode:
             for b in buildings:
                 bc_lon = sum(p[0] for p in b.footprint) / len(b.footprint)
                 bc_lat = sum(p[1] for p in b.footprint) / len(b.footprint)
                 if abs(bc_lat - lat) < 0.0005 and abs(bc_lon - lon) < 0.0005:
                     facade_height = b.height
+                    face_lat, face_lon = _get_face_point_on_building(b, effective_face_angle)
                     break
             if facade_height == 0:
                 facade_height = 30.0
@@ -731,6 +1027,7 @@ class ShadowScheduler:
         self_shaded = 0
         ext_blocked = 0
         sun_hit = 0
+        night_samples = 0
         slot_minutes = int((end - start).total_seconds() / 60)
         step_min = get_adaptive_sample_interval_minutes(slot_minutes)
         interval = timedelta(minutes=step_min)
@@ -743,31 +1040,41 @@ class ShadowScheduler:
 
             if not sun.is_daylight or sun.altitude <= 0:
                 per_sample_pct.append(100.0)
+                night_samples += 1
                 current += interval
                 continue
 
             in_shadow = False
-            if building_face and face_enum:
-                # ── Facade mode ──
-                angle_diff = abs(((sun.azimuth - face_enum.azimuth + 180) % 360) - 180)
-                if angle_diff >= 90:
-                    in_shadow = True
+            sample_pct = 100.0
+            if facade_mode and effective_face_angle is not None:
+                # ── Facade mode: orientation exposure + cast shadow → effective_shade ──
+                angle_diff = abs(sun.azimuth - effective_face_angle)
+                angle_diff = min(angle_diff, 360.0 - angle_diff)
+                exposure = max(0.0, math.cos(math.radians(angle_diff)))
+                if angle_diff > 90:
+                    cast_shadow = 1.0
                     self_shaded += 1
+                    in_shadow = True
                 else:
                     do_verbose = len(per_sample_pct) < 2
                     if self._is_face_blocked(
-                        lat, lon, facade_height, buildings, sun,
+                        face_lat, face_lon, facade_height, buildings, sun,
                         verbose=do_verbose,
                     ):
-                        in_shadow = True
+                        cast_shadow = 1.0
                         ext_blocked += 1
+                        in_shadow = True
                     else:
+                        cast_shadow = 0.0
                         sun_hit += 1
+                effective_shade = cast_shadow + (1.0 - cast_shadow) * (1.0 - exposure)
+                sample_pct = 100.0 * effective_shade
             else:
                 # ── Area / point mode: ground-plane shadow PIP ──
                 in_shadow = self._is_point_in_any_shadow(lat, lon, buildings, sun)
+                sample_pct = 100.0 if in_shadow else 0.0
 
-            per_sample_pct.append(100.0 if in_shadow else 0.0)
+            per_sample_pct.append(sample_pct)
             current += interval
 
         total_samples = len(per_sample_pct)
@@ -776,18 +1083,29 @@ class ShadowScheduler:
         avg_alt = sum(altitudes) / len(altitudes) if altitudes else 0
         avg_az = sum(azimuths) / len(azimuths) if azimuths else 0
 
-        if building_face and total_samples > 0:
+        # Debug info for facade mode
+        debug_info = {
+            "face_angle": effective_face_angle,
+            "total_samples": total_samples,
+            "self_shaded": self_shaded,
+            "ext_blocked": ext_blocked,
+            "sun_hit": sun_hit,
+            "night": night_samples,
+        }
+
+        if facade_mode and total_samples > 0:
+            display_face = building_face or _face_angle_to_cardinal(effective_face_angle)
             print(
                 f"  [{start.strftime('%H:%M')}-{end.strftime('%H:%M')}] "
-                f"face={building_face}({face_enum.azimuth if face_enum else '?'}deg) "
+                f"face={display_face}({effective_face_angle:.0f}deg) "
                 f"h={facade_height:.0f}m midpt={facade_height/2:.0f}m | "
                 f"self-shaded={self_shaded} ext-blocked={ext_blocked} "
-                f"sun-hit={sun_hit} night={total_samples - self_shaded - ext_blocked - sun_hit} "
+                f"sun-hit={sun_hit} night={night_samples} "
                 f"/ {total_samples} -> shadow={shadow_pct:.0f}% "
                 f"| sun az={avg_az:.0f} alt={avg_alt:.0f}"
             )
 
-        return shadow_pct, avg_alt, avg_az
+        return shadow_pct, avg_alt, avg_az, debug_info
 
     def _is_face_blocked(
         self,
@@ -925,6 +1243,37 @@ class ShadowScheduler:
             face_name = {"N": "North", "E": "East", "S": "South", "W": "West"}.get(
                 building_face.upper(), building_face
             )
+
+            # Explain WHY the facade has this shade percentage
+            if slot.total_samples > 0:
+                self_pct = round(100 * slot.self_shaded_samples / slot.total_samples)
+                ext_pct = round(100 * slot.ext_blocked_samples / slot.total_samples)
+                sun_pct = round(100 * slot.sun_hit_samples / slot.total_samples)
+
+                if slot.is_always_self_shaded:
+                    # Facade never receives direct sun (e.g., North face in Northern Hemisphere)
+                    return (
+                        f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
+                        f"This facade never receives direct sunlight (sun always behind building). "
+                        f"All time slots have 100% natural shade. Sun altitude {alt}deg."
+                    )
+                elif self_pct > 0 and ext_pct > 0:
+                    return (
+                        f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
+                        f"{shadow}% shade ({self_pct}% self-shaded, {ext_pct}% blocked by buildings). "
+                        f"{source}, sun altitude {alt}deg."
+                    )
+                elif ext_pct > 0:
+                    return (
+                        f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
+                        f"{shadow}% shade (blocked by nearby buildings). {source}, sun altitude {alt}deg."
+                    )
+                elif sun_pct > 0:
+                    return (
+                        f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
+                        f"{shadow}% shade ({sun_pct}% direct sun exposure). {source}, sun altitude {alt}deg."
+                    )
+
             return (
                 f"Recommended {time_range} for {face_name}-facing work at {location_name}. "
                 f"{shadow}% shadow coverage ({source}, sun altitude {alt}deg)."
@@ -999,6 +1348,7 @@ def find_optimal_schedule(
     start_hour: int = 5,
     end_hour: int = 20,
     building_face: Optional[str] = None,
+    face_angle: Optional[float] = None,
     recommendation_count: int = 5
 ) -> Dict:
     """Convenience wrapper returning a dict suitable for API responses."""
@@ -1013,6 +1363,7 @@ def find_optimal_schedule(
         start_hour=start_hour,
         end_hour=end_hour,
         building_face=building_face,
+        face_angle=face_angle,
         recommendation_count=recommendation_count
     )
     return recommendation.to_dict()
@@ -1043,11 +1394,209 @@ def find_optimal_schedule_for_area(
     return recommendation.to_dict()
 
 
+def _circular_abs_diff_deg(a: float, b: float) -> float:
+    """Smallest angle between two compass bearings in [0, 180]."""
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def _normalize_azimuth_deg(azimuth: float) -> float:
+    """Compass azimuth in [0, 360)."""
+    x = azimuth % 360.0
+    return x + 360.0 if x < 0 else x
+
+
+# Cardinal outward normals (same convention as _resolve_face_angle / api_v2)
+_FACADE_CARDINALS: List[Tuple[str, float]] = [
+    ("N", 0.0), ("E", 90.0), ("S", 180.0), ("W", 270.0),
+]
+
+_FACE_FULL_NAME = {"N": "North", "E": "East", "S": "South", "W": "West"}
+
+
+def _pick_building_for_facade(
+    lat: float, lon: float, buildings: List[Building], max_dist_m: float = 120.0
+) -> Optional[Building]:
+    """Building whose footprint centroid is closest to the site, within max_dist_m."""
+    if not buildings:
+        return None
+    best: Optional[Building] = None
+    best_d = max_dist_m + 1.0
+    for b in buildings:
+        clon, clat = b.get_centroid()
+        d = _haversine(lat, lon, clat, clon)
+        if d < best_d:
+            best_d = d
+            best = b
+    return best if best is not None and best_d <= max_dist_m else None
+
+
+def recommend_facades_for_fixed_window(
+    lat: float,
+    lon: float,
+    date: datetime,
+    start_hour: int,
+    start_minute: int,
+    duration_minutes: int,
+    buildings: Optional[List[Building]] = None,
+) -> Dict[str, Any]:
+    """
+    Rank N/E/S/W for a fixed same-day work window (sun at interval midpoint).
+
+    When ``buildings`` is provided and a target footprint is found near (lat, lon),
+    uses the same effective shade model as facade scheduling: self-shade when the sun
+    is behind the wall, plus neighbor-building occlusion along sun rays at sample
+    points on each cardinal face.
+
+    The cardinal whose outward normal is closest to the sun direction is always
+    ranked last (never recommended). Other faces are ordered by shade score
+    (higher = better), then by sun separation as a tie-breaker.
+    """
+    if duration_minutes <= 0:
+        raise ValueError("duration_minutes must be positive")
+
+    t_start = datetime(date.year, date.month, date.day, start_hour, start_minute, 0)
+    t_end = t_start + timedelta(minutes=duration_minutes)
+    if t_end.date() != t_start.date():
+        raise ValueError("Work window must start and end on the same calendar day")
+
+    # Sample at window START (not midpoint) so the recommendation matches
+    # what the user sees when they set the time slider to the work start.
+    t_sample = t_start
+
+    scheduler = ShadowScheduler()
+    sun = scheduler._get_sun_position(t_sample, lat, lon)
+    sun_az = _normalize_azimuth_deg(sun.azimuth)
+
+    b_list = buildings if buildings else []
+    target = _pick_building_for_facade(lat, lon, b_list) if b_list else None
+    ranking_model = "building_3d" if target is not None else "sun_geometry"
+
+    print(f"\n[facade-recommend] sun_az={sun_az:.1f}° alt={sun.altitude:.1f}° at {t_sample.strftime('%H:%M')}")
+    rows: List[Dict[str, Any]] = []
+    for face, fn in _FACADE_CARDINALS:
+        sep = _circular_abs_diff_deg(sun_az, fn)
+        if target is not None:
+            h = max(1.0, float(target.height))
+            face_points = _get_face_sample_points(target, fn, n=5)
+        else:
+            h = DEFAULT_BUILDING_HEIGHT
+            face_points = [(lat, lon)]
+
+        ad = abs(sun_az - fn)
+        ad = min(ad, 360.0 - ad)
+
+        # Always compute neighbor blocking (even near 90°) for a continuous shade model
+        npt = len(face_points)
+        if npt == 0:
+            neighbor_pct = 0.0
+        else:
+            blocked = sum(
+                1
+                for (flat, flon) in face_points
+                if scheduler._is_face_blocked(flat, flon, h, b_list, sun, verbose=False)
+            )
+            neighbor_pct = round(100.0 * blocked / npt, 1)
+
+        # Continuous shade formula: exposure = max(0, cos(angle)).
+        # Sun behind face (ad > 90) → exposure ≤ 0 → clamp to 0.
+        # Neighbor blocking adds to shade. Final = neighbor_frac + (1 - neighbor_frac) * (1 - exposure).
+        exposure = max(0.0, math.cos(math.radians(ad)))
+        neighbor_frac = neighbor_pct / 100.0
+        shade_pct = round(100.0 * (neighbor_frac + (1.0 - neighbor_frac) * (1.0 - exposure)), 1)
+
+        # "self_shaded" label for display (face points away from sun)
+        self_shaded = ad > 90.0
+
+        print(f"  {face}({fn}°): sep={sep:.1f}° ad={ad:.1f}° self_shaded={self_shaded} shade={shade_pct}% neighbor={neighbor_pct}%")
+        rows.append({
+            "face": face,
+            "normal_deg": fn,
+            "separation_deg": round(sep, 1),
+            "shade_score_pct": shade_pct,
+            "self_shaded": self_shaded,
+            "neighbor_blocked_pct": neighbor_pct,
+        })
+
+    base = {
+        "sample_time": t_sample.isoformat(),
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+        "sun_azimuth": round(sun_az, 1),
+        "sun_altitude": round(sun.altitude, 1),
+        "ranking_model": ranking_model,
+        "buildings_used": len(b_list),
+        "is_daylight": bool(sun.is_daylight and sun.altitude > 0),
+    }
+
+    if not sun.is_daylight or sun.altitude <= 0:
+        rows.sort(key=lambda x: (-x["shade_score_pct"], -float(x["separation_deg"]), x["face"]))
+        for i, r in enumerate(rows, start=1):
+            r["rank"] = i
+        base["ranked"] = rows
+        base["recommended"] = None
+        base["avoid"] = None
+        base["second_best"] = None
+        base["reason"] = (
+            f"At {t_sample.strftime('%H:%M')} the sun is below the horizon. "
+            "Direct-sun facade preference does not apply; cardinal facades are similar for this simple model."
+        )
+        return base
+
+    # Sun-facing cardinal = smallest separation; always rank last (never recommended).
+    sun_worst = min(rows, key=lambda r: (float(r["separation_deg"]), r["shade_score_pct"], r["face"]))
+    sun_face = sun_worst["face"]
+    others = [r for r in rows if r["face"] != sun_face]
+    # Tie-break: prefer facades with more neighbor shadow; at midday E/W often tie on score
+    # when exposure≈0 — without this, lexical face order could rank East above a shaded West.
+    others.sort(
+        key=lambda r: (
+            -r["shade_score_pct"],
+            -float(r["neighbor_blocked_pct"]),
+            -float(r["separation_deg"]),
+            r["face"],
+        ),
+    )
+    ordered = others + [sun_worst]
+    for i, r in enumerate(ordered, start=1):
+        r["rank"] = i
+
+    print(f"  sun_worst={sun_face} | ranking: {[r['face'] for r in ordered]}")
+    base["ranked"] = ordered
+    base["recommended"] = ordered[0]["face"]
+    base["avoid"] = sun_face
+    second = ordered[1]["face"] if len(ordered) > 1 else None
+    base["second_best"] = second
+    print(f"  => recommended={base['recommended']} second_best={second} avoid={sun_face}")
+
+    best = ordered[0]
+    worst = sun_worst
+    sb_line = ""
+    if len(ordered) > 1:
+        sb = ordered[1]
+        extra = " — partly from nearby buildings" if sb["neighbor_blocked_pct"] > 5 else ""
+        sb_line = (
+            f" Second best: {_FACE_FULL_NAME[sb['face']]} (~{sb['shade_score_pct']}% shade{extra})."
+        )
+
+    base["reason"] = (
+        f"At work start {t_sample.strftime('%H:%M')}, sun ~{round(sun_az, 1)}° az "
+        f"({round(sun.altitude, 1)}° alt). {_FACE_FULL_NAME[worst['face']]} faces the sun most directly "
+        f"(rank {worst['rank']}); {_FACE_FULL_NAME[best['face']]} scores highest for shade "
+        f"({best['shade_score_pct']}%"
+        f"{' including shadows from other buildings' if best['neighbor_blocked_pct'] > 5 and not best['self_shaded'] else ''}"
+        f"{' — mostly self-shaded' if best['self_shaded'] else ''})."
+        f"{sb_line}"
+    )
+    return base
+
+
 def calculate_shadow_at_time(
     lat: float,
     lon: float,
     dt: datetime,
-    building_face: Optional[str] = None
+    building_face: Optional[str] = None,
+    face_angle: Optional[float] = None
 ) -> Dict:
     """Calculate shadow state at a specific time and location using real 3D data."""
     scheduler = ShadowScheduler()
@@ -1058,11 +1607,10 @@ def calculate_shadow_at_time(
         shadow_pct = 100.0
     else:
         is_self_shaded = False
-        if building_face:
-            face_enum = BuildingFace.from_string(building_face)
-            if face_enum:
-                angle_diff = abs(((sun.azimuth - face_enum.azimuth + 180) % 360) - 180)
-                is_self_shaded = angle_diff > 90
+        effective_face_angle = _resolve_face_angle(face_angle, building_face)
+        if effective_face_angle is not None:
+            angle_diff = abs(((sun.azimuth - effective_face_angle + 180) % 360) - 180)
+            is_self_shaded = angle_diff > 90
 
         if is_self_shaded:
             shadow_pct = 100.0
