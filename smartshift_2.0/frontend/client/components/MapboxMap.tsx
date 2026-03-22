@@ -64,21 +64,27 @@ export interface SelectedBuilding {
 }
 
 export interface BuildingFace {
+  /** Cardinal label for display (derived from bearing). */
   direction: "N" | "E" | "S" | "W";
+  /** Single edge vi → vi+1. Kept as one-element array for backward compat. */
   edges: [number, number][][];
+  /** This facade's single edge [v0, v1] (LineString coordinates). */
+  edge: [number, number][];
+  /** Midpoint of the edge: ((x1+x2)/2, (y1+y2)/2) in [lon, lat]. */
+  midpoint: [number, number];
+  /** True facade direction in degrees 0–360 (outward normal angle). */
   bearing: number;
 }
 
 /**
- * Classify a building footprint's edges into N/S/E/W faces.
+ * Extract one facade per edge of the footprint polygon.
  *
- * For each edge we compute the outward-pointing normal. The normal's
- * compass bearing determines the cardinal direction:
- *   N: 315°–45°   E: 45°–135°   S: 135°–225°   W: 225°–315°
- *
- * We assume the footprint ring is wound counter-clockwise (standard
- * GeoJSON). For a CW ring the normals would flip, so we check and
- * reverse if needed.
+ * Given footprint [v0, v1, v2, ...], each facade is edge_i = (vi → vi+1).
+ * For each edge we compute:
+ * - Midpoint: ((x1+x2)/2, (y1+y2)/2)
+ * - Direction vector: dx = x2-x1, dy = y2-y1
+ * - Outward normal (CCW polygon): nx = dy, ny = -dx
+ * - Angle: atan2(nx, ny), then (angle + 360) % 360
  */
 export function classifyFaces(footprint: [number, number][]): BuildingFace[] {
   const pts = footprint.length > 3 &&
@@ -95,24 +101,28 @@ export function classifyFaces(footprint: [number, number][]): BuildingFace[] {
   }
   if (area > 0) pts.reverse(); // was CW, flip to CCW
 
-  const buckets: Record<"N" | "E" | "S" | "W", { edges: [number, number][][]; bearings: number[] }> = {
-    N: { edges: [], bearings: [] },
-    E: { edges: [], bearings: [] },
-    S: { edges: [], bearings: [] },
-    W: { edges: [], bearings: [] },
-  };
+  const result: BuildingFace[] = [];
 
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i];
     const b = pts[(i + 1) % pts.length];
-    const dx = b[0] - a[0]; // delta lon
-    const dy = b[1] - a[1]; // delta lat
-    // Outward normal for CCW winding: rotate edge vector 90° CW → (dy, -dx)
+    const x1 = a[0], y1 = a[1], x2 = b[0], y2 = b[1];
+
+    // 1. Midpoint
+    const midpoint: [number, number] = [(x1 + x2) / 2, (y1 + y2) / 2];
+
+    // 2. Direction vector
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+
+    // 3. Outward normal (CCW polygon): nx = dy, ny = -dx
+    // In (x=east, y=north), normal = (nx, ny). Compass: 0°=North, 90°=East → bearing = atan2(nx, ny).
     const nx = dy;
     const ny = -dx;
-    // Bearing of normal: atan2(east, north) in degrees
+
+    // 4. Compass bearing 0°=North, 90°=East (must use atan2(nx, ny); atan2(ny,nx) would flip SE↔NW)
     let bearing = (Math.atan2(nx, ny) * 180) / Math.PI;
-    if (bearing < 0) bearing += 360;
+    bearing = ((bearing % 360) + 360) % 360;
 
     let dir: "N" | "E" | "S" | "W";
     if (bearing >= 315 || bearing < 45) dir = "N";
@@ -120,17 +130,26 @@ export function classifyFaces(footprint: [number, number][]): BuildingFace[] {
     else if (bearing >= 135 && bearing < 225) dir = "S";
     else dir = "W";
 
-    buckets[dir].edges.push([a, b]);
-    buckets[dir].bearings.push(bearing);
+    const edge: [number, number][] = [a, b];
+    result.push({
+      direction: dir,
+      edges: [edge],
+      edge,
+      midpoint,
+      bearing,
+    });
   }
 
-  return (["N", "E", "S", "W"] as const)
-    .filter((d) => buckets[d].edges.length > 0)
-    .map((d) => ({
-      direction: d,
-      edges: buckets[d].edges,
-      bearing: buckets[d].bearings.reduce((s, v) => s + v, 0) / buckets[d].bearings.length,
-    }));
+  return result;
+}
+
+/** Convert bearing (0–360°) to cardinal label for display only. */
+export function angleToCardinal(angle: number): "N" | "E" | "S" | "W" {
+  const a = ((angle % 360) + 360) % 360;
+  if (a >= 315 || a < 45) return "N";
+  if (a < 135) return "E";
+  if (a < 225) return "S";
+  return "W";
 }
 
 /** Find which face a click point is closest to. */
@@ -188,6 +207,8 @@ export interface MapboxMapProps {
   onFaceClicked?: (face: BuildingFace) => void;
   selectedBuildingFootprint?: [number, number][] | null;
   selectedFaceDirection?: "N" | "E" | "S" | "W" | null;
+  /** When set, highlight the facade with this bearing (identifies exact edge when multiple share a direction). */
+  selectedFaceAngle?: number | null;
 }
 
 export interface ClientBuilding {
@@ -331,6 +352,7 @@ export default function MapboxMap({
   onFaceClicked,
   selectedBuildingFootprint,
   selectedFaceDirection,
+  selectedFaceAngle,
 }: MapboxMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -466,9 +488,9 @@ export default function MapboxMap({
             });
           }
         } else if (selectedBuildingRef.current) {
-          // Second click: select the face
+          // Second click: select the face (ref holds the footprint array)
           const clickPt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-          const faces = classifyFaces(selectedBuildingRef.current);
+          const faces = classifyFaces(selectedBuildingRef.current as [number, number][]);
           const face = closestFace(clickPt, faces);
           if (face) onFaceClickedRef.current?.(face);
         }
@@ -494,7 +516,7 @@ export default function MapboxMap({
         try { if (map.getSource(hoverSrc)) map.removeSource(hoverSrc); } catch {}
 
         const clickPt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-        const faces = classifyFaces(selectedBuildingRef.current);
+        const faces = classifyFaces(selectedBuildingRef.current as [number, number][]);
         const face = closestFace(clickPt, faces);
         if (face) {
           const lineFeatures = face.edges.map((edge) => ({
@@ -950,7 +972,7 @@ export default function MapboxMap({
     }
   }, [debugShadowGeoJSON]);
 
-  // ── Facade: selected building + face edges overlay ──────────────────────
+  // ── Facade: selected building + face edges overlay (one facade per edge) ──
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReadyRef.current) return;
@@ -958,8 +980,8 @@ export default function MapboxMap({
     const FACE_COLORS: Record<string, string> = {
       N: "#3b82f6", E: "#22c55e", S: "#ef4444", W: "#f59e0b",
     };
-    const layers = ["facade-bldg-fill", "facade-bldg-line", "facade-face-N", "facade-face-E", "facade-face-S", "facade-face-W", "facade-sel-line"];
-    const sources = ["facade-bldg-src", "facade-faces-N", "facade-faces-E", "facade-faces-S", "facade-faces-W", "facade-sel-src"];
+    const layers = ["facade-face-labels", "facade-bldg-fill", "facade-bldg-line", "facade-faces-line", "facade-sel-line"];
+    const sources = ["facade-labels-src", "facade-bldg-src", "facade-faces-src", "facade-sel-src"];
     for (const l of layers) { try { if (map.getLayer(l)) map.removeLayer(l); } catch {} }
     for (const s of sources) { try { if (map.getSource(s)) map.removeSource(s); } catch {} }
 
@@ -981,45 +1003,83 @@ export default function MapboxMap({
       paint: { "line-color": "#6366f1", "line-width": 2, "line-dasharray": [2, 2] },
     } as any);
 
-    // Colored edges per face direction
+    // One feature per facade (edge); highlight by true bearing (walls are rarely axis-aligned)
     const faces = classifyFaces(selectedBuildingFootprint);
-    for (const face of faces) {
-      const srcId = `facade-faces-${face.direction}`;
-      const layerId = `facade-face-${face.direction}`;
-      const lineFeatures = face.edges.map((edge) => ({
+    const lineFeatures = faces.map((face) => {
+      const bearingDelta =
+        selectedFaceAngle != null
+          ? Math.abs(((face.bearing - selectedFaceAngle + 180) % 360) - 180)
+          : 999;
+      const angleMatch = selectedFaceAngle != null && bearingDelta < 3;
+      const legacyMatch =
+        selectedFaceAngle == null &&
+        selectedFaceDirection != null &&
+        selectedFaceDirection === face.direction;
+      const isSelected = angleMatch || legacyMatch ? 1 : 0;
+      return {
         type: "Feature" as const,
-        properties: {},
-        geometry: { type: "LineString" as const, coordinates: edge },
-      }));
-      map.addSource(srcId, { type: "geojson", data: { type: "FeatureCollection", features: lineFeatures } });
-      const isSelected = selectedFaceDirection === face.direction;
-      map.addLayer({
-        id: layerId, type: "line", source: srcId, slot: "top",
-        paint: {
-          "line-color": FACE_COLORS[face.direction] || "#888",
-          "line-width": isSelected ? 6 : 3.5,
-          "line-opacity": isSelected ? 1 : 0.7,
-        },
-      } as any);
-    }
+        properties: { direction: face.direction, bearing: face.bearing, isSelected },
+        geometry: { type: "LineString" as const, coordinates: face.edge as [number, number][] },
+      };
+    });
+    map.addSource("facade-faces-src", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: lineFeatures },
+    });
+    const lineColorExpr: unknown = [
+      "case",
+      ["==", ["get", "isSelected"], 1], "#ffffff",
+      ["match", ["get", "direction"], "N", FACE_COLORS.N, "E", FACE_COLORS.E, "S", FACE_COLORS.S, "W", FACE_COLORS.W, "#888"],
+    ];
+    map.addLayer({
+      id: "facade-faces-line",
+      type: "line",
+      source: "facade-faces-src",
+      slot: "top",
+      paint: {
+        "line-color": lineColorExpr as string,
+        "line-width": ["case", ["==", ["get", "isSelected"], 1], 8, 3.5],
+        "line-opacity": ["case", ["==", ["get", "isSelected"], 1], 0.9, 0.7],
+      },
+    } as any);
 
-    // Extra-highlight the selected face
-    if (selectedFaceDirection) {
-      const selFace = faces.find((f) => f.direction === selectedFaceDirection);
-      if (selFace) {
-        const lineFeatures = selFace.edges.map((edge) => ({
-          type: "Feature" as const,
-          properties: {},
-          geometry: { type: "LineString" as const, coordinates: edge },
-        }));
-        map.addSource("facade-sel-src", { type: "geojson", data: { type: "FeatureCollection", features: lineFeatures } });
-        map.addLayer({
-          id: "facade-sel-line", type: "line", source: "facade-sel-src", slot: "top",
-          paint: { "line-color": "#ffffff", "line-width": 8, "line-opacity": 0.4 },
-        } as any);
-      }
-    }
-  }, [selectedBuildingFootprint, selectedFaceDirection]);
+    // Point labels at edge midpoints: true compass bearing (walls can face any direction)
+    const labelFeatures = faces.map((face) => {
+      const br = Math.round(face.bearing);
+      return {
+        type: "Feature" as const,
+        properties: {
+          label: `${br}° ${face.direction}`,
+        },
+        geometry: { type: "Point" as const, coordinates: face.midpoint },
+      };
+    });
+    map.addSource("facade-labels-src", {
+      type: "geojson",
+      data: { type: "FeatureCollection", features: labelFeatures },
+    });
+    map.addLayer({
+      id: "facade-face-labels",
+      type: "symbol",
+      source: "facade-labels-src",
+      slot: "top",
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 10,
+        "text-line-height": 1.1,
+        "text-offset": [0, 0.4],
+        "text-anchor": "center",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: {
+        "text-color": "#f8fafc",
+        "text-halo-color": "#0f172a",
+        "text-halo-width": 2,
+        "text-halo-blur": 0.5,
+      },
+    } as any);
+  }, [selectedBuildingFootprint, selectedFaceDirection, selectedFaceAngle]);
 
   // ── Facade: cursor style ────────────────────────────────────────────────
   useEffect(() => {
@@ -1030,9 +1090,28 @@ export default function MapboxMap({
     }
   }, [facadeSelectMode]);
 
+  const showFacadeLegend =
+    selectedBuildingFootprint != null && selectedBuildingFootprint.length >= 3;
+
   return (
     <div style={{ position: "absolute", inset: 0 }}>
       <div ref={mapContainerRef} style={{ width: "100%", height: "100%" }} />
+      {showFacadeLegend && (
+        <div
+          className="pointer-events-none absolute bottom-3 left-3 z-30 max-w-[200px] rounded-lg border border-white/20 bg-black/70 px-2.5 py-2 text-[10px] leading-snug text-slate-100 shadow-lg backdrop-blur-sm"
+          aria-label="Facade edge legend"
+        >
+          <div className="font-semibold text-white/95 mb-1">Edges</div>
+          <p className="text-slate-300/95 mb-1.5">Each label: degrees + N/S/E/W (wall direction).</p>
+          <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px]">
+            <span><span className="inline-block w-2 h-2 rounded-sm align-middle mr-0.5" style={{ background: "#3b82f6" }} />N</span>
+            <span><span className="inline-block w-2 h-2 rounded-sm align-middle mr-0.5" style={{ background: "#22c55e" }} />E</span>
+            <span><span className="inline-block w-2 h-2 rounded-sm align-middle mr-0.5" style={{ background: "#ef4444" }} />S</span>
+            <span><span className="inline-block w-2 h-2 rounded-sm align-middle mr-0.5" style={{ background: "#f59e0b" }} />W</span>
+            <span className="text-slate-400">· white = pick</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

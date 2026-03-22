@@ -10,7 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import MapboxMap, {
   LOCATIONS, FlyToTarget, RouteToDraw, AltRouteToDraw, queryBuildingsFromMap, ClientBuilding,
-  SelectedBuilding, BuildingFace as MapBuildingFace, classifyFaces, closestFace,
+  SelectedBuilding, BuildingFace as MapBuildingFace, classifyFaces, closestFace, angleToCardinal,
 } from "@/components/MapboxMap";
 import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
@@ -104,6 +104,32 @@ interface WindowRec {
   };
 }
 
+interface FacadeTimeRankedItem {
+  face: string;
+  normal_deg: number;
+  separation_deg: number;
+  rank?: number;
+  shade_score_pct?: number;
+  self_shaded?: boolean;
+  neighbor_blocked_pct?: number;
+}
+
+export interface FacadeTimeResult {
+  recommended: string | null;
+  avoid: string | null;
+  second_best?: string | null;
+  ranked: FacadeTimeRankedItem[];
+  sun_azimuth: number;
+  sun_altitude: number;
+  sample_time: string;
+  window_start: string;
+  window_end: string;
+  reason: string;
+  is_daylight: boolean;
+  ranking_model?: string;
+  buildings_used?: number;
+}
+
 interface SavedPlaceItem {
   id: string;
   name: string;
@@ -143,6 +169,8 @@ function getUVCategoryStyle(uv: number): { level: string; color: string } {
 export interface ScheduleAreaResult {
   recs: WindowRec[];
   buildingsFootprintsGeoJSON?: { type: "FeatureCollection"; features: unknown[] } | null;
+  /** When facade mode: every slot with shade % and breakdown for debug */
+  allSlots?: Array<{ start_time: string; end_time: string; shadow_percentage: number; time_label?: string; debug?: WindowRec["debug"] }>;
 }
 
 async function fetchScheduleFromBackend(
@@ -181,13 +209,18 @@ async function fetchScheduleFromBackend(
         body: JSON.stringify(payload),
       });
     } else {
+      // Physics uses numeric face_angle only (no N/E/S/W → 90° mapping on backend). Use actual bearing from map when available.
+      const CARDINAL_ANGLES: Record<string, number> = { N: 0, E: 90, S: 180, W: 270 };
+      const effectiveFaceAngle =
+        faceAngle != null ? faceAngle : (buildingFace ? CARDINAL_ANGLES[buildingFace] : undefined);
       const payload: Record<string, unknown> = {
         task_name: taskName, lat, lon, location_name: locationName,
         duration_minutes: durationMinutes, date: dateStr,
         start_hour: startHour, end_hour: endHour,
         recommendation_count: 5, building_face: buildingFace || undefined,
-        face_angle: faceAngle != null ? faceAngle : undefined,
+        face_angle: effectiveFaceAngle,
         buildings: buildingsPayload,
+        include_all_slots: true,
       };
       res = await fetch(`${API_BASE}/api/v2/shadow-schedule`, {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -235,11 +268,68 @@ async function fetchScheduleFromBackend(
       if (r) results.push(r);
     }
     const buildingsFootprintsGeoJSON = rec.buildings_footprints_geojson ?? null;
-    return { recs: results, buildingsFootprintsGeoJSON };
+    const allSlots = rec.all_slots ?? undefined;
+    return { recs: results, buildingsFootprintsGeoJSON, allSlots };
   } catch {
     const fallback = computeWindowsFallback(dateStr, durationMinutes, startHour, endHour);
     return { recs: fallback };
   }
+}
+
+async function fetchFacadeRecommendTime(
+  lat: number,
+  lon: number,
+  dateStr: string,
+  startHour: number,
+  startMinute: number,
+  durationMinutes: number,
+  clientBuildings?: ClientBuilding[],
+): Promise<FacadeTimeResult> {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const buildingsPayload = clientBuildings?.length
+    ? clientBuildings.map((b) => ({
+        id: b.id,
+        footprint: b.footprint,
+        height: b.height,
+        name: b.name,
+      }))
+    : undefined;
+  const res = await fetch(`${API_BASE}/api/v2/facade-recommend-time`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      lat,
+      lon,
+      date: dateStr,
+      start_time: `${pad(startHour)}:${pad(startMinute)}`,
+      duration_minutes: durationMinutes,
+      buildings: buildingsPayload,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) throw new Error(data.error || "Facade recommendation failed");
+  return data as FacadeTimeResult;
+}
+
+const CARDINAL_ANGLE_BY_FACE: Record<string, number> = { N: 0, E: 90, S: 180, W: 270 };
+
+/** Pick building edge whose outward bearing is closest to the cardinal normal. */
+function snapCardinalToBuildingFace(
+  recommended: string,
+  faces: MapBuildingFace[],
+): { direction: "N" | "E" | "S" | "W"; bearing: number } | null {
+  if (!faces.length) return null;
+  const target = CARDINAL_ANGLE_BY_FACE[recommended] ?? 0;
+  let best = faces[0];
+  let bestDiff = 400;
+  for (const f of faces) {
+    const d = Math.abs(((f.bearing - target + 180) % 360) - 180);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = f;
+    }
+  }
+  return { direction: best.direction, bearing: best.bearing };
 }
 
 function computeWindowsFallback(dateStr: string, durationMinutes: number, startHour: number, endHour: number): WindowRec[] {
@@ -362,17 +452,7 @@ export default function MapPage() {
   // Commercial site flow
   type AnalysisMode = "workzone" | "facade";
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>("workzone");
-  const [drawnPolygon, setDrawnPolygon] = useState<[number, number][] | null>(() => {
-    try {
-      const s = sessionStorage.getItem("mapPage_drawn_polygon");
-      if (!s) return null;
-      const parsed = JSON.parse(s) as unknown;
-      if (Array.isArray(parsed) && parsed.length >= 3 && parsed.every((p) => Array.isArray(p) && p.length >= 2 && typeof p[0] === "number" && typeof p[1] === "number")) {
-        return parsed as [number, number][];
-      }
-    } catch {}
-    return null;
-  });
+  const [drawnPolygon, setDrawnPolygon] = useState<[number, number][] | null>(null);
   const [isSitePopupOpen, setIsSitePopupOpen] = useState(false);
   const [isSelectingSite, setIsSelectingSite] = useState(false);
   const [commercialSite, setCommercialSite] = useState<{ lat: number; lng: number } | null>(null);
@@ -393,6 +473,11 @@ export default function MapPage() {
   const [debugShadowGeoJSON, setDebugShadowGeoJSON] = useState<any>(null);
   const [debugShadowInfo, setDebugShadowInfo] = useState<string | null>(null);
   const [siteAnalysisBuildingsGeoJSON, setSiteAnalysisBuildingsGeoJSON] = useState<{ type: "FeatureCollection"; features: unknown[] } | null>(null);
+  const [siteAllSlots, setSiteAllSlots] = useState<ScheduleAreaResult["allSlots"]>(undefined);
+  const [showAllSlotsDebug, setShowAllSlotsDebug] = useState(false);
+  const [facadeWorkStartHour, setFacadeWorkStartHour] = useState(9);
+  const [facadeWorkStartMinute, setFacadeWorkStartMinute] = useState(0);
+  const [facadeTimeResult, setFacadeTimeResult] = useState<FacadeTimeResult | null>(null);
   const [showBuildingsOverlay, setShowBuildingsOverlay] = useState(false);
   const [showDensityOverlay, setShowDensityOverlay] = useState(false);
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
@@ -421,6 +506,60 @@ export default function MapPage() {
         .catch(() => {});
     }
   }, [user]);
+
+  // Full reload gets fresh React state, but we used to persist the work-zone polygon in sessionStorage.
+  // Back/forward cache can restore the full JS heap (including selected building + analysis). Clear commercial UI in both cases.
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem("mapPage_drawn_polygon");
+    } catch {
+      /* ignore */
+    }
+
+    const clearCommercialUi = () => {
+      setDrawnPolygon(null);
+      setCommercialSite(null);
+      setSelectedBuilding(null);
+      setAnalysisConfirmed(false);
+      setSiteRecommendations([]);
+      setSiteAllSlots(undefined);
+      setSiteAnalysisBuildingsGeoJSON(null);
+      setFacadeTimeResult(null);
+      setBuildingFace("N");
+      setSelectedFaceAngle(null);
+      setExpandedRecIds(new Set());
+      setHoveredRecId(null);
+      setShowBuildingsOverlay(false);
+      setShowAllSlotsDebug(false);
+      setDebugShadowGeoJSON(null);
+      setDebugShadowInfo(null);
+      setIsSitePopupOpen(false);
+      setIsSelectingSite(false);
+      setScheduleLoading(false);
+      setSiteDraft({
+        taskName: "",
+        locationLabel: "",
+        locationName: "",
+        durationMinutes: 60,
+        startHour: 5,
+        endHour: 20,
+      });
+      setFacadeWorkStartHour(9);
+      setFacadeWorkStartMinute(0);
+      shadowOverlayActiveRef.current = false;
+    };
+
+    const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (nav?.type === "reload") {
+      clearCommercialUi();
+    }
+
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) clearCommercialUi();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
 
   const addSavedPlace = async () => {
     if (!newPlaceName.trim() || !newPlaceCoords) return;
@@ -866,12 +1005,14 @@ export default function MapPage() {
     setIsSitePopupOpen(true);
     setAnalysisConfirmed(false);
     setSiteRecommendations([]);
+    setSiteAllSlots(undefined);
+    setFacadeTimeResult(null);
     setShowBuildingsOverlay(false);
     setExpandedRecIds(new Set());
   };
 
   const submitSiteAnalysis = async () => {
-    if (siteDraft.endHour <= siteDraft.startHour) {
+    if (analysisMode === "workzone" && siteDraft.endHour <= siteDraft.startHour) {
       toast.error("End hour must be after start hour.");
       return;
     }
@@ -897,8 +1038,10 @@ export default function MapPage() {
           drawnPolygon,
           buildings
         );
+        setFacadeTimeResult(null);
         setSiteRecommendations(result.recs);
         setSiteAnalysisBuildingsGeoJSON(result.buildingsFootprintsGeoJSON ?? null);
+        setSiteAllSlots(undefined);
         setExpandedRecIds(new Set());
         setAnalysisConfirmed(true);
         if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
@@ -907,22 +1050,25 @@ export default function MapPage() {
         const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
         setSiteRecommendations(fallback);
         setSiteAnalysisBuildingsGeoJSON(null);
+        setSiteAllSlots(undefined);
+        setFacadeTimeResult(null);
         setAnalysisConfirmed(true);
       }
       setScheduleLoading(false);
     } else {
       if (!commercialSite && !selectedBuilding) {
-        toast.error("Select a building on the map first.");
-        return;
-      }
-      if (!buildingFace) {
-        toast.error("Select a building face (N / E / S / W).");
+        toast.error("Select a building or site on the map first.");
         return;
       }
       const lat = commercialSite?.lat ?? 25.2048;
       const lng = commercialSite?.lng ?? 55.2708;
+      const startTotal = facadeWorkStartHour * 60 + facadeWorkStartMinute;
+      const endTotal = startTotal + siteDraft.durationMinutes;
+      if (endTotal > 24 * 60) {
+        toast.error("Work window must end before midnight on the same day.");
+        return;
+      }
       const buildings = getClientBuildings(lat, lng);
-      // Include the selected building itself if not already in the query results
       if (selectedBuilding) {
         const selBldg: ClientBuilding = {
           id: "selected_facade_bldg",
@@ -938,28 +1084,85 @@ export default function MapPage() {
       setScheduleLoading(true);
       setIsSitePopupOpen(false);
       try {
-        const result = await fetchScheduleFromBackend(
-          siteDraft.taskName, lat, lng,
-          siteDraft.locationName || siteDraft.locationLabel || "Dubai",
-          dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour,
-          buildingFace,
-          selectedFaceAngle ?? undefined,
-          undefined,
-          buildings
+        const result = await fetchFacadeRecommendTime(
+          lat,
+          lng,
+          dateStr,
+          facadeWorkStartHour,
+          facadeWorkStartMinute,
+          siteDraft.durationMinutes,
+          buildings,
         );
-        setSiteRecommendations(result.recs);
+        setFacadeTimeResult(result);
+        setSiteRecommendations([]);
         setSiteAnalysisBuildingsGeoJSON(null);
+        setSiteAllSlots(undefined);
         setExpandedRecIds(new Set());
         setAnalysisConfirmed(true);
-        if (result.recs.length > 0) toast.success(`Found ${result.recs.length} optimal time windows (${buildings.length} buildings).`);
-      } catch {
-        toast.error("Failed to fetch recommendations.");
-        const fallback = computeWindowsFallback(dateStr, siteDraft.durationMinutes, siteDraft.startHour, siteDraft.endHour);
-        setSiteRecommendations(fallback);
-        setSiteAnalysisBuildingsGeoJSON(null);
-        setAnalysisConfirmed(true);
+        if (result.recommended && selectedBuilding?.faces?.length) {
+          const snapped = snapCardinalToBuildingFace(result.recommended, selectedBuilding.faces);
+          if (snapped) {
+            setBuildingFace(snapped.direction);
+            setSelectedFaceAngle(snapped.bearing);
+          } else {
+            setBuildingFace(result.recommended);
+            setSelectedFaceAngle(CARDINAL_ANGLE_BY_FACE[result.recommended] ?? 0);
+          }
+        } else if (result.recommended) {
+          setBuildingFace(result.recommended);
+          setSelectedFaceAngle(CARDINAL_ANGLE_BY_FACE[result.recommended] ?? 0);
+        }
+        toast.success(
+          result.recommended
+            ? `Best facade for this window: ${result.recommended === "N" ? "North" : result.recommended === "E" ? "East" : result.recommended === "S" ? "South" : "West"}`
+            : "Analysis complete (sun below horizon for sample time).",
+        );
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to get facade recommendation.");
+        setFacadeTimeResult(null);
+        setSiteRecommendations([]);
+        setSiteAllSlots(undefined);
+        setAnalysisConfirmed(false);
       }
       setScheduleLoading(false);
+    }
+  };
+
+  const saveFacadeTimePlan = async () => {
+    if (!facadeTimeResult) return;
+    const ws = new Date(facadeTimeResult.window_start);
+    const we = new Date(facadeTimeResult.window_end);
+    const startMin = ws.getHours() * 60 + ws.getMinutes();
+    const endMin = we.getHours() * 60 + we.getMinutes();
+    const id = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}`;
+    const recLabel =
+      facadeTimeResult.recommended != null
+        ? `Best facade: ${facadeTimeResult.recommended} (${startMin}–${endMin} min)`
+        : `Facade plan (${startMin}–${endMin} min)`;
+    try {
+      const taskRes = await fetch(`${API_BASE}/api/tasks`, {
+        method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
+        body: JSON.stringify({
+          task_id: id,
+          task_name: siteDraft.taskName,
+          location_name: siteDraft.locationName || siteDraft.locationLabel,
+          location_lat: commercialSite?.lat || 25.2048,
+          location_lon: commercialSite?.lng || 55.2708,
+          duration_minutes: siteDraft.durationMinutes,
+          hour_start: Math.floor(startMin / 60),
+          hour_end: Math.max(Math.ceil(endMin / 60), Math.floor(startMin / 60) + 1),
+          date: dateStr,
+          status: "draft",
+          user_id: user?.user_id || "",
+        }),
+      });
+      if (!taskRes.ok) throw new Error("Failed to create task");
+      await taskRes.json();
+      setSavedRecIds((prev) => new Set(prev).add(id));
+      toast.success("Task saved!", { description: recLabel });
+    } catch {
+      setSavedRecIds((prev) => new Set(prev).add(id));
+      toast.success("Task saved locally");
     }
   };
 
@@ -1133,9 +1336,6 @@ export default function MapPage() {
             drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && isSelectingSite}
             onPolygonDrawn={(pts) => {
               setDrawnPolygon(pts);
-              try {
-                sessionStorage.setItem("mapPage_drawn_polygon", JSON.stringify(pts));
-              } catch {}
               setIsSelectingSite(false);
               setSiteDraft((prev) => ({ ...prev, locationLabel: `Polygon (${pts.length - 1} vertices)` }));
               setIsSitePopupOpen(true);
@@ -1169,6 +1369,7 @@ export default function MapPage() {
             }}
             selectedBuildingFootprint={selectedBuilding?.footprint ?? null}
             selectedFaceDirection={analysisMode === "facade" ? buildingFace as "N" | "E" | "S" | "W" : null}
+            selectedFaceAngle={analysisMode === "facade" ? selectedFaceAngle ?? undefined : undefined}
           />
 
 
@@ -1239,9 +1440,6 @@ export default function MapPage() {
                 <div className="absolute w-1.5 h-1.5 rounded-full bg-background border border-red-700" />
               </div>
             </div>
-            <p className="text-[9px] text-muted-foreground text-center max-w-[90px] leading-tight">
-              Shadows point away from sun
-            </p>
           </div>
         </div>
 
@@ -1334,7 +1532,9 @@ export default function MapPage() {
               {scheduleLoading && (
                 <div className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-6 text-center">
                   <Loader2 className="w-6 h-6 text-primary animate-spin mx-auto mb-2" />
-                  <p className="text-sm font-medium text-foreground">Analyzing shadow patterns...</p>
+                  <p className="text-sm font-medium text-foreground">
+                    {analysisMode === "facade" ? "Computing best facade from sun position…" : "Analyzing shadow patterns…"}
+                  </p>
                 </div>
               )}
 
@@ -1351,7 +1551,16 @@ export default function MapPage() {
                     <div className="text-xs font-semibold text-foreground">{siteDraft.taskName}</div>
                     <div className="text-[11px] text-muted-foreground truncate">{siteDraft.locationName || siteDraft.locationLabel}</div>
                     <div className="text-[11px] text-muted-foreground mt-0.5">
-                      {siteDraft.durationMinutes} min · {siteDraft.startHour}:00–{siteDraft.endHour}:00
+                      {analysisMode === "facade" ? (
+                        <>
+                          {siteDraft.durationMinutes} min · work starts{" "}
+                          {String(facadeWorkStartHour).padStart(2, "0")}:{String(facadeWorkStartMinute).padStart(2, "0")}
+                        </>
+                      ) : (
+                        <>
+                          {siteDraft.durationMinutes} min · search {siteDraft.startHour}:00–{siteDraft.endHour}:00
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -1377,9 +1586,123 @@ export default function MapPage() {
                     </div>
                   )}
 
-                  {[...siteRecommendations]
-                    .sort((a, b) => b.shadePct - a.shadePct)
-                    .map((rec, index) => {
+                  {analysisMode === "facade" && facadeTimeResult && (() => {
+                    const longName = (f: string) =>
+                      f === "N" ? "North" : f === "E" ? "East" : f === "S" ? "South" : f === "W" ? "West" : f;
+                    const fid = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}`;
+                    const savedF = savedRecIds.has(fid);
+                    const bestFaces: string[] = [];
+                    if (facadeTimeResult.recommended) bestFaces.push(facadeTimeResult.recommended);
+                    if (
+                      facadeTimeResult.second_best &&
+                      facadeTimeResult.second_best !== facadeTimeResult.recommended
+                    ) {
+                      bestFaces.push(facadeTimeResult.second_best);
+                    }
+
+                    const bestFacadesTitle = bestFaces.map((f) => longName(f)).join(" · ");
+
+                    return (
+                      <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-4 text-sm">
+                        <div className="space-y-2">
+                          {bestFaces.length > 0 ? (
+                            <div>
+                              <div className="text-xs text-muted-foreground uppercase tracking-wide">Best facades</div>
+                              <p className="mt-1 text-lg font-bold text-primary leading-snug tracking-tight">
+                                {bestFacadesTitle}
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="text-muted-foreground text-sm">Sun below horizon — no strong preference.</p>
+                          )}
+                          {facadeTimeResult.avoid && (
+                            <p className="text-foreground/90 text-sm">
+                              <span className="text-muted-foreground">Avoid (faces sun most directly): </span>
+                              <span className="font-semibold">{longName(facadeTimeResult.avoid)}</span>
+                            </p>
+                          )}
+                        </div>
+
+                        {facadeTimeResult.ranking_model && (
+                          <p className="text-xs text-muted-foreground">
+                            Model: {facadeTimeResult.ranking_model === "building_3d" ? "footprint + neighbor shadows" : "sun direction only"}
+                            {facadeTimeResult.buildings_used != null && ` · ${facadeTimeResult.buildings_used} buildings`}
+                          </p>
+                        )}
+
+                        {selectedBuilding && (
+                          <p className="text-[10px] text-muted-foreground leading-relaxed">
+                            White edge = primary map pick. Labels on the building show each wall’s bearing (degrees + N/S/E/W).
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void saveFacadeTimePlan()}
+                          className={cn(
+                            "w-full flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium border",
+                            savedF
+                              ? "bg-green-500/15 border-green-500/30 text-green-600"
+                              : "border-border/60 bg-background/80 hover:bg-primary/10 text-foreground",
+                          )}
+                        >
+                          {savedF ? <CheckCircle className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+                          {savedF ? "Saved" : "Save task"}
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {analysisMode === "workzone" && siteAllSlots && siteAllSlots.length > 0 && (
+                    <div className="border border-border/60 rounded-lg overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSlotsDebug((v) => !v)}
+                        className="w-full flex items-center justify-between px-3 py-2 text-left text-xs font-medium bg-muted/40 hover:bg-muted/60 text-muted-foreground"
+                      >
+                        <span>All time slots ({siteAllSlots.length}) – why each time has its shade %</span>
+                        <span className="text-[10px]">{showAllSlotsDebug ? "▼" : "▶"}</span>
+                      </button>
+                      {showAllSlotsDebug && (
+                        <div className="max-h-48 overflow-auto p-2 font-mono text-[10px]">
+                          <table className="w-full border-collapse">
+                            <thead>
+                              <tr className="text-left text-muted-foreground border-b border-border/40">
+                                <th className="py-1 pr-2">Time</th>
+                                <th className="py-1 pr-2">Shade %</th>
+                                <th className="py-1 pr-2">self</th>
+                                <th className="py-1 pr-2">ext</th>
+                                <th className="py-1 pr-2">sun</th>
+                                <th className="py-1">face°</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {siteAllSlots.map((slot, i) => {
+                                const start = slot.start_time ? new Date(slot.start_time) : null;
+                                const timeStr = start ? `${start.getHours().toString().padStart(2, "0")}:${start.getMinutes().toString().padStart(2, "0")}` : "–";
+                                const db = slot.debug;
+                                return (
+                                  <tr key={i} className="border-b border-border/30">
+                                    <td className="py-0.5 pr-2">{timeStr}</td>
+                                    <td className="py-0.5 pr-2 font-medium">{Math.round(slot.shadow_percentage ?? 0)}%</td>
+                                    <td className="py-0.5 pr-2">{db?.self_shaded ?? "–"}</td>
+                                    <td className="py-0.5 pr-2">{db?.ext_blocked ?? "–"}</td>
+                                    <td className="py-0.5 pr-2">{db?.sun_hit ?? "–"}</td>
+                                    <td className="py-0.5">{db?.face_angle != null ? `${Math.round(db.face_angle)}°` : "–"}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                          <p className="text-[9px] text-muted-foreground mt-2">self = self-shaded (sun behind building), ext = blocked by other buildings, sun = direct sun on face. Top recommendations are highest shade %.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {analysisMode === "workzone" &&
+                    [...siteRecommendations]
+                      .sort((a, b) => b.shadePct - a.shadePct)
+                      .map((rec, index) => {
                     const recId = `${siteDraft.taskName}-${rec.id}`;
                     const saved = savedRecIds.has(recId);
                     const tag = qualityTag(rec.quality);
@@ -1738,7 +2061,11 @@ export default function MapPage() {
             {/* Mode tabs */}
             <div className="flex border-b border-border">
               <button
-                onClick={() => setAnalysisMode("workzone")}
+                type="button"
+                onClick={() => {
+                  setAnalysisMode("workzone");
+                  setFacadeTimeResult(null);
+                }}
                 className={cn("flex-1 py-2.5 text-sm font-medium transition-all text-center",
                   analysisMode === "workzone"
                     ? "text-primary border-b-2 border-primary bg-primary/5"
@@ -1747,6 +2074,7 @@ export default function MapPage() {
                 Work Zone
               </button>
               <button
+                type="button"
                 onClick={() => setAnalysisMode("facade")}
                 className={cn("flex-1 py-2.5 text-sm font-medium transition-all text-center",
                   analysisMode === "facade"
@@ -1791,7 +2119,7 @@ export default function MapPage() {
                 )}
                 {analysisMode === "facade" && selectedBuilding && (
                   <p className="text-xs text-green-600 mt-1">
-                    Building: {selectedBuilding.height.toFixed(0)}m — Face: {buildingFace} ({selectedBuilding.faces.length} faces)
+                    Building: {selectedBuilding.height.toFixed(0)}m ({selectedBuilding.faces.length} edges). After analysis, the best edge is highlighted.
                   </p>
                 )}
               </div>
@@ -1803,78 +2131,77 @@ export default function MapPage() {
                   className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Duration (min)</label>
-                  <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
-                    onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+              {analysisMode === "workzone" ? (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Duration (min)</label>
+                    <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
+                      onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">From Hour</label>
+                    <input type="number" min={0} max={23} value={siteDraft.startHour}
+                      onChange={(e) => setSiteDraft((p) => ({ ...p, startHour: Number(e.target.value) }))}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">To Hour</label>
+                    <input type="number" min={1} max={24} value={siteDraft.endHour}
+                      onChange={(e) => setSiteDraft((p) => ({ ...p, endHour: Number(e.target.value) }))}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">From Hour</label>
-                  <input type="number" min={0} max={23} value={siteDraft.startHour}
-                    onChange={(e) => setSiteDraft((p) => ({ ...p, startHour: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">To Hour</label>
-                  <input type="number" min={1} max={24} value={siteDraft.endHour}
-                    onChange={(e) => setSiteDraft((p) => ({ ...p, endHour: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
-                </div>
-              </div>
-
-              {/* Building Face selector - only in Facade mode */}
-              {analysisMode === "facade" && (
-                <div className="space-y-2">
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Duration (min)</label>
+                      <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
+                        onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Start hour</label>
+                      <input type="number" min={0} max={23} value={facadeWorkStartHour}
+                        onChange={(e) => setFacadeWorkStartHour(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Start minute</label>
+                      <input type="number" min={0} max={59} step={5} value={facadeWorkStartMinute}
+                        onChange={(e) => setFacadeWorkStartMinute(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    We use sun direction at the <strong>midpoint</strong> of your work window. The window must end before midnight the same day.
+                  </p>
                   {selectedBuilding && (
                     <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <div>
                           <p className="text-sm font-medium text-indigo-700 dark:text-indigo-300">
                             {selectedBuilding.name} — {selectedBuilding.height.toFixed(0)}m
                           </p>
                           <p className="text-xs text-indigo-500">
-                            {selectedBuilding.faces.length} faces detected. Click a face on the map or select below.
+                            Optional: click a wall on the map to preview an edge; analysis does not require it.
                           </p>
                         </div>
-                        <button onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }}
-                          className="text-indigo-400 hover:text-indigo-600 p-1"><X className="w-3.5 h-3.5" /></button>
+                        <button type="button" onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }}
+                          className="text-indigo-400 hover:text-indigo-600 p-1 shrink-0"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </div>
                   )}
-                  <div>
-                    <label className="block text-sm font-medium mb-1">Building Face</label>
-                    <div className="flex gap-2">
-                      {(["N", "E", "S", "W"] as const).map((face) => {
-                        const colors: Record<string, string> = {
-                          N: "bg-blue-500 border-blue-500 text-white",
-                          E: "bg-green-500 border-green-500 text-white",
-                          S: "bg-red-500 border-red-500 text-white",
-                          W: "bg-amber-500 border-amber-500 text-white",
-                        };
-                        const labels: Record<string, string> = { N: "North", E: "East", S: "South", W: "West" };
-                        const faceAngles: Record<string, number> = { N: 0, E: 90, S: 180, W: 270 };
-                        return (
-                          <button key={face} type="button" onClick={() => { setBuildingFace(face); setSelectedFaceAngle(faceAngles[face]); }}
-                            className={cn("flex-1 py-2 rounded-lg border text-sm font-medium transition-all",
-                              buildingFace === face ? colors[face] : "border-border bg-background hover:bg-muted")}>
-                            <span className="block text-xs">{labels[face]}</span>
-                            <span className="block font-bold">{face}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
                 </div>
               )}
             </div>
 
             <div className="px-5 py-4 border-t border-border flex justify-end gap-2">
-              <button onClick={() => setIsSitePopupOpen(false)} className="px-4 py-2 rounded-lg border border-border">Cancel</button>
-              <button onClick={submitSiteAnalysis}
+              <button type="button" onClick={() => setIsSitePopupOpen(false)} className="px-4 py-2 rounded-lg border border-border">Cancel</button>
+              <button type="button" onClick={() => void submitSiteAnalysis()}
                 className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-amber-500 text-primary-foreground font-medium">
-                Generate Recommendations
+                {analysisMode === "facade" ? "Recommend best facade" : "Generate recommendations"}
               </button>
             </div>
           </div>
