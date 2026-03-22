@@ -391,30 +391,11 @@ export default function MapPage() {
   const [searchParams] = useSearchParams();
   const { mode, setMode, isPersonalUser } = useMode();
   const { user } = useAuth();
-  const { minutes: initMinutes, dateStr: initDate } = getDubaiNow();
+  /** When true, time/date track Dubai wall clock (updates shadows on the map). */
+  const [followRealTime, setFollowRealTime] = useState(true);
 
-  const [currentMinutes, setCurrentMinutes] = useState(() => {
-    try {
-      const s = sessionStorage.getItem("mapPage_time_minutes");
-      if (s != null) {
-        const m = Number(s);
-        if (Number.isFinite(m) && m >= 0 && m < 1440) return m;
-      }
-    } catch {}
-    return initMinutes;
-  });
-  const [dateStr, setDateStr] = useState(() => {
-    try {
-      const s = sessionStorage.getItem("mapPage_date_str");
-      if (s != null && s.length >= 10) return s;
-    } catch {}
-    return initDate;
-  });
-
-  useEffect(() => {
-    sessionStorage.setItem("mapPage_time_minutes", String(currentMinutes));
-    sessionStorage.setItem("mapPage_date_str", dateStr);
-  }, [currentMinutes, dateStr]);
+  const [currentMinutes, setCurrentMinutes] = useState(() => getDubaiNow().minutes);
+  const [dateStr, setDateStr] = useState(() => getDubaiNow().dateStr);
 
   const navItems = [
     { path: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -441,6 +422,37 @@ export default function MapPage() {
     }
     return () => { if (animRef.current) clearInterval(animRef.current); };
   }, [isPlaying, animSpeed]);
+
+  // Keep map time aligned with Dubai “now” while following real time (not scrubbing / animating).
+  useEffect(() => {
+    if (!followRealTime || isPlaying) return;
+    const sync = () => {
+      const n = getDubaiNow();
+      setCurrentMinutes((prev) => (n.minutes !== prev ? n.minutes : prev));
+      setDateStr((prev) => (n.dateStr !== prev ? n.dateStr : prev));
+    };
+    sync();
+    const id = window.setInterval(sync, 5000);
+    return () => window.clearInterval(id);
+  }, [followRealTime, isPlaying]);
+
+  const onManualTimeMinutes = useCallback((m: number) => {
+    setFollowRealTime(false);
+    setCurrentMinutes(m);
+  }, []);
+
+  const onManualDateStr = useCallback((d: string) => {
+    setFollowRealTime(false);
+    setDateStr(d);
+  }, []);
+
+  const snapToDubaiNow = useCallback(() => {
+    setIsPlaying(false);
+    const n = getDubaiNow();
+    setCurrentMinutes(n.minutes);
+    setDateStr(n.dateStr);
+    setFollowRealTime(true);
+  }, []);
 
   const shadowRefetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shadowOverlayActiveRef = useRef(false);
@@ -644,8 +656,8 @@ export default function MapPage() {
   const [routeUpdateInterval, setRouteUpdateInterval] = useState<number>(120);
   const [routeNavigating, setRouteNavigating] = useState(false);
   const [routeDepartureMode, setRouteDepartureMode] = useState<"now" | "selected">("now");
-  const [routeDepartureDate, setRouteDepartureDate] = useState(initDate);
-  const [routeDepartureMinutes, setRouteDepartureMinutes] = useState(initMinutes);
+  const [routeDepartureDate, setRouteDepartureDate] = useState(() => getDubaiNow().dateStr);
+  const [routeDepartureMinutes, setRouteDepartureMinutes] = useState(() => getDubaiNow().minutes);
   const [routeShadowStatus, setRouteShadowStatus] = useState<{
     inShadow: boolean; remainingShadePct: number; rerouteSuggested: boolean; progressPct: number;
   } | null>(null);
@@ -766,9 +778,9 @@ export default function MapPage() {
       };
     }
     return {
-      date: routeDepartureDate || initDate,
+      date: routeDepartureDate || getDubaiNow().dateStr,
       minutes: routeDepartureMinutes,
-      label: `Leave later · ${routeDepartureDate || initDate} ${formatTime(routeDepartureMinutes)}`,
+      label: `Leave later · ${routeDepartureDate || getDubaiNow().dateStr} ${formatTime(routeDepartureMinutes)}`,
     };
   };
 
@@ -1288,6 +1300,7 @@ export default function MapPage() {
   };
 
   const previewRec = (rec: WindowRec) => {
+    setFollowRealTime(false);
     setCurrentMinutes(rec.start);
     setIsPlaying(false);
   };
@@ -1468,26 +1481,63 @@ export default function MapPage() {
 
           {/* Floating time card */}
           <div className="absolute top-4 left-4 z-20 w-[310px] rounded-2xl border border-white/20 bg-background/45 backdrop-blur-xl shadow-2xl p-3">
-            <div className="flex items-baseline justify-between mb-2">
+            <div className="flex items-baseline justify-between mb-2 gap-2">
               <span className="text-xl font-bold font-mono text-foreground">{formatTime(currentMinutes)}</span>
-              <span className="text-xs text-primary font-medium">{period}</span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {followRealTime && !isPlaying ? (
+                  <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">Live</span>
+                ) : null}
+                <span className="text-xs text-primary font-medium">{period}</span>
+              </div>
             </div>
             <input type="range" min={0} max={1440} step={5} value={currentMinutes}
-              onInput={(e) => setCurrentMinutes(Number((e.target as HTMLInputElement).value))}
-              onChange={(e) => setCurrentMinutes(Number(e.target.value))}
+              onInput={(e) => onManualTimeMinutes(Number((e.target as HTMLInputElement).value))}
+              onChange={(e) => onManualTimeMinutes(Number(e.target.value))}
               className="w-full accent-primary h-2 cursor-pointer" />
             <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
               {["12A", "6A", "12P", "6P", "12A"].map((t) => <span key={t}>{t}</span>)}
             </div>
-            <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-1.5 items-center">
-              <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => setCurrentMinutes(Number(e.target.value))} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs">
+            <div className="grid grid-cols-[1fr_1fr_auto_auto_auto] gap-1.5 items-center">
+              <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => onManualTimeMinutes(Number(e.target.value))} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs">
                 {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
               </select>
-              <input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
-              <button onClick={() => setIsPlaying((p) => !p)} className={cn("rounded-lg px-2 py-1.5 text-xs font-medium", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")} aria-label={isPlaying ? "Pause time animation" : "Play time animation"}>
+              <input type="date" value={dateStr} onChange={(e) => onManualDateStr(e.target.value)} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
+              <button
+                type="button"
+                onClick={snapToDubaiNow}
+                className={cn(
+                  "rounded-lg px-2 py-1.5 text-xs border font-medium",
+                  followRealTime && !isPlaying
+                    ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                    : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground",
+                )}
+                title="Use current Dubai time and keep updating (shadows follow the clock)"
+                aria-label="Snap to current Dubai time and follow live"
+              >
+                <Clock className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPlaying((p) => {
+                  const next = !p;
+                  if (next) setFollowRealTime(false);
+                  return next;
+                })}
+                className={cn("rounded-lg px-2 py-1.5 text-xs font-medium", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}
+                aria-label={isPlaying ? "Pause time animation" : "Play time animation"}
+              >
                 {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
               </button>
-              <button onClick={() => { setIsPlaying(false); setCurrentMinutes(720); }} className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50" aria-label="Reset time to noon">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlaying(false);
+                  setFollowRealTime(false);
+                  setCurrentMinutes(720);
+                }}
+                className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50"
+                aria-label="Reset time to noon"
+              >
                 <RotateCcw className="w-3 h-3" />
               </button>
             </div>
@@ -2150,7 +2200,7 @@ export default function MapPage() {
                 { label: "Autumnal", date: "2026-09-22" },
                 { label: "Winter", date: "2026-12-21" },
               ].map(({ label, date }) => (
-                <button key={date} onClick={() => { setDateStr(date); toast.info(`Set to ${label} (${date})`); }}
+                <button key={date} onClick={() => { setFollowRealTime(false); setDateStr(date); toast.info(`Set to ${label} (${date})`); }}
                   className="flex-1 min-w-0 py-1 rounded border border-border/60 text-[9px] font-medium hover:bg-primary/10">
                   {label}
                 </button>
