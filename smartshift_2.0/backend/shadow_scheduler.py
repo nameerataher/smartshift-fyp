@@ -260,6 +260,95 @@ def _get_face_sample_points(
     return points
 
 
+def _compute_building_edges(footprint: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
+    """
+    For each edge of a building footprint, compute outward normal bearing and midpoint.
+    Returns list of {bearing, midpoint_lat, midpoint_lon, cardinal, p1, p2} with ``p1``/``p2``
+    as (lon, lat) endpoints for sampling along the wall.
+    """
+    if len(footprint) < 3:
+        return []
+    
+    # Ensure closed ring
+    ring = list(footprint)
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    
+    # Compute centroid for determining outward direction
+    n = len(ring) - 1
+    cx = sum(p[0] for p in ring[:-1]) / n
+    cy = sum(p[1] for p in ring[:-1]) / n
+    
+    edges = []
+    for i in range(len(ring) - 1):
+        p1 = ring[i]
+        p2 = ring[i + 1]
+        
+        # Edge midpoint
+        mx = (p1[0] + p2[0]) / 2
+        my = (p1[1] + p2[1]) / 2
+        
+        # Edge direction (tangent)
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 1e-9:
+            continue
+        
+        # Perpendicular (rotate 90° clockwise: (dx, dy) → (dy, -dx))
+        # This gives "right side" normal
+        nx = dy / length
+        ny = -dx / length
+        
+        # Check if this normal points outward (away from centroid)
+        to_centroid_x = cx - mx
+        to_centroid_y = cy - my
+        dot = nx * to_centroid_x + ny * to_centroid_y
+        if dot > 0:
+            # Normal points toward centroid, flip it
+            nx, ny = -nx, -ny
+        
+        # Convert to compass bearing (0=N, 90=E, 180=S, 270=W)
+        # atan2(dx, dy) where dx=east, dy=north
+        bearing = math.degrees(math.atan2(nx, ny)) % 360
+        
+        # Nearest cardinal
+        if bearing >= 315 or bearing < 45:
+            cardinal = "N"
+        elif bearing < 135:
+            cardinal = "E"
+        elif bearing < 225:
+            cardinal = "S"
+        else:
+            cardinal = "W"
+        
+        edges.append({
+            "bearing": round(bearing, 1),
+            "cardinal": cardinal,
+            "midpoint_lon": mx,
+            "midpoint_lat": my,
+            "p1": (p1[0], p1[1]),
+            "p2": (p2[0], p2[1]),
+        })
+    
+    return edges
+
+
+def _edge_segment_sample_points(
+    p1: Tuple[float, float], p2: Tuple[float, float], n: int = 5
+) -> List[Tuple[float, float]]:
+    """Lon/lat points along one footprint edge (inclusive endpoints)."""
+    if n <= 1:
+        return [((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)]
+    return [
+        (
+            p1[0] + (p2[0] - p1[0]) * (i / (n - 1)),
+            p1[1] + (p2[1] - p1[1]) * (i / (n - 1)),
+        )
+        for i in range(n)
+    ]
+
+
 # ─── Main scheduler ────────────────────────────────────────────────────────
 
 class ShadowScheduler:
@@ -1336,6 +1425,32 @@ def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
+def _window_sample_times(t_start: datetime, duration_minutes: int) -> List[datetime]:
+    """Evenly spaced sample times from window start through end (inclusive).
+
+    Uses about one sample every **10 minutes** (not every 5) so a 60 min task has
+    ~7 time steps (edge×time counts scale accordingly), while keeping a floor of
+    3 samples and a cap for performance.
+    """
+    if duration_minutes <= 0:
+        return [t_start]
+    n = max(3, min(25, duration_minutes // 10 + 1))
+    if n == 1:
+        return [t_start]
+    return [
+        t_start + timedelta(minutes=duration_minutes * (i / (n - 1)))
+        for i in range(n)
+    ]
+
+
+def _circular_mean_azimuth_deg(azimuths: List[float]) -> float:
+    if not azimuths:
+        return 0.0
+    sx = sum(math.sin(math.radians(a)) for a in azimuths)
+    cx = sum(math.cos(math.radians(a)) for a in azimuths)
+    return _normalize_azimuth_deg(math.degrees(math.atan2(sx, cx)))
+
+
 # ─── Convenience functions (API compatibility) ──────────────────────────────
 
 def find_optimal_schedule(
@@ -1441,16 +1556,20 @@ def recommend_facades_for_fixed_window(
     buildings: Optional[List[Building]] = None,
 ) -> Dict[str, Any]:
     """
-    Rank N/E/S/W for a fixed same-day work window (sun at interval midpoint).
+    Rank N/E/S/W for a fixed same-day work window.
+
+    Shade and neighbor occlusion are **averaged** over evenly spaced samples from
+    ``window_start`` through ``window_end`` so sun position and shadows from
+    nearby buildings change over the interval.
 
     When ``buildings`` is provided and a target footprint is found near (lat, lon),
     uses the same effective shade model as facade scheduling: self-shade when the sun
     is behind the wall, plus neighbor-building occlusion along sun rays at sample
     points on each cardinal face.
 
-    The cardinal whose outward normal is closest to the sun direction is always
-    ranked last (never recommended). Other faces are ordered by shade score
-    (higher = better), then by sun separation as a tie-breaker.
+    Facades are ranked by **effective shade** (geometry plus neighbor shadows).
+    Sun–wall separation is only a tie-breaker, not a rule that the sun-facing
+    cardinal must rank last.
     """
     if duration_minutes <= 0:
         raise ValueError("duration_minutes must be positive")
@@ -1460,77 +1579,137 @@ def recommend_facades_for_fixed_window(
     if t_end.date() != t_start.date():
         raise ValueError("Work window must start and end on the same calendar day")
 
-    # Sample at window START (not midpoint) so the recommendation matches
-    # what the user sees when they set the time slider to the work start.
-    t_sample = t_start
-
+    sample_times = _window_sample_times(t_start, duration_minutes)
     scheduler = ShadowScheduler()
-    sun = scheduler._get_sun_position(t_sample, lat, lon)
-    sun_az = _normalize_azimuth_deg(sun.azimuth)
-
     b_list = buildings if buildings else []
     target = _pick_building_for_facade(lat, lon, b_list) if b_list else None
     ranking_model = "building_3d" if target is not None else "sun_geometry"
 
-    print(f"\n[facade-recommend] sun_az={sun_az:.1f}° alt={sun.altitude:.1f}° at {t_sample.strftime('%H:%M')}")
-    rows: List[Dict[str, Any]] = []
-    for face, fn in _FACADE_CARDINALS:
-        sep = _circular_abs_diff_deg(sun_az, fn)
-        if target is not None:
-            h = max(1.0, float(target.height))
-            face_points = _get_face_sample_points(target, fn, n=5)
-        else:
-            h = DEFAULT_BUILDING_HEIGHT
-            face_points = [(lat, lon)]
+    acc_shade: Dict[str, List[float]] = {face: [] for face, _ in _FACADE_CARDINALS}
+    acc_neighbor: Dict[str, List[float]] = {face: [] for face, _ in _FACADE_CARDINALS}
+    acc_sep: Dict[str, List[float]] = {face: [] for face, _ in _FACADE_CARDINALS}
+    acc_ad: Dict[str, List[float]] = {face: [] for face, _ in _FACADE_CARDINALS}
+    sun_azimuths: List[float] = []
+    sun_alts: List[float] = []
+    daylight_samples = 0
 
-        ad = abs(sun_az - fn)
-        ad = min(ad, 360.0 - ad)
+    for t in sample_times:
+        sun = scheduler._get_sun_position(t, lat, lon)
+        if not sun.is_daylight or sun.altitude <= 0:
+            continue
+        daylight_samples += 1
+        sun_azimuths.append(float(sun.azimuth))
+        sun_alts.append(float(sun.altitude))
+        sun_az = _normalize_azimuth_deg(sun.azimuth)
+        for face, fn in _FACADE_CARDINALS:
+            sep = _circular_abs_diff_deg(sun_az, fn)
+            if target is not None:
+                h = max(1.0, float(target.height))
+                face_points = _get_face_sample_points(target, fn, n=5)
+            else:
+                h = DEFAULT_BUILDING_HEIGHT
+                face_points = [(lat, lon)]
 
-        # Always compute neighbor blocking (even near 90°) for a continuous shade model
-        npt = len(face_points)
-        if npt == 0:
-            neighbor_pct = 0.0
-        else:
-            blocked = sum(
-                1
-                for (flat, flon) in face_points
-                if scheduler._is_face_blocked(flat, flon, h, b_list, sun, verbose=False)
+            ad = abs(sun_az - fn)
+            ad = min(ad, 360.0 - ad)
+
+            npt = len(face_points)
+            if npt == 0:
+                neighbor_pct = 0.0
+            else:
+                blocked = sum(
+                    1
+                    for (flat, flon) in face_points
+                    if scheduler._is_face_blocked(flat, flon, h, b_list, sun, verbose=False)
+                )
+                neighbor_pct = round(100.0 * blocked / npt, 1)
+
+            exposure = max(0.0, math.cos(math.radians(ad)))
+            neighbor_frac = neighbor_pct / 100.0
+            shade_pct = round(
+                100.0 * (neighbor_frac + (1.0 - neighbor_frac) * (1.0 - exposure)), 1
             )
-            neighbor_pct = round(100.0 * blocked / npt, 1)
 
-        # Continuous shade formula: exposure = max(0, cos(angle)).
-        # Sun behind face (ad > 90) → exposure ≤ 0 → clamp to 0.
-        # Neighbor blocking adds to shade. Final = neighbor_frac + (1 - neighbor_frac) * (1 - exposure).
-        exposure = max(0.0, math.cos(math.radians(ad)))
-        neighbor_frac = neighbor_pct / 100.0
-        shade_pct = round(100.0 * (neighbor_frac + (1.0 - neighbor_frac) * (1.0 - exposure)), 1)
+            acc_shade[face].append(shade_pct)
+            acc_neighbor[face].append(neighbor_pct)
+            acc_sep[face].append(sep)
+            acc_ad[face].append(ad)
 
-        # "self_shaded" label for display (face points away from sun)
-        self_shaded = ad > 90.0
+    def _mean(xs: List[float]) -> float:
+        return sum(xs) / len(xs) if xs else 0.0
 
-        print(f"  {face}({fn}°): sep={sep:.1f}° ad={ad:.1f}° self_shaded={self_shaded} shade={shade_pct}% neighbor={neighbor_pct}%")
-        rows.append({
-            "face": face,
-            "normal_deg": fn,
-            "separation_deg": round(sep, 1),
-            "shade_score_pct": shade_pct,
-            "self_shaded": self_shaded,
-            "neighbor_blocked_pct": neighbor_pct,
-        })
+    def _mean_round(xs: List[float], nd: int = 1) -> float:
+        return round(_mean(xs), nd) if xs else 0.0
 
-    base = {
-        "sample_time": t_sample.isoformat(),
-        "window_start": t_start.isoformat(),
-        "window_end": t_end.isoformat(),
-        "sun_azimuth": round(sun_az, 1),
-        "sun_altitude": round(sun.altitude, 1),
-        "ranking_model": ranking_model,
-        "buildings_used": len(b_list),
-        "is_daylight": bool(sun.is_daylight and sun.altitude > 0),
-    }
+    t_mid = t_start + timedelta(minutes=duration_minutes / 2.0)
+    rows: List[Dict[str, Any]] = []
 
-    if not sun.is_daylight or sun.altitude <= 0:
-        rows.sort(key=lambda x: (-x["shade_score_pct"], -float(x["separation_deg"]), x["face"]))
+    if daylight_samples == 0:
+        t_sample = t_start
+        sun = scheduler._get_sun_position(t_sample, lat, lon)
+        sun_az = _normalize_azimuth_deg(sun.azimuth)
+        print(
+            f"\n[facade-recommend] no daylight in window; snapshot sun_az={sun_az:.1f}° "
+            f"alt={sun.altitude:.1f}° at {t_sample.strftime('%H:%M')}"
+        )
+        for face, fn in _FACADE_CARDINALS:
+            sep = _circular_abs_diff_deg(sun_az, fn)
+            if target is not None:
+                h = max(1.0, float(target.height))
+                face_points = _get_face_sample_points(target, fn, n=5)
+            else:
+                h = DEFAULT_BUILDING_HEIGHT
+                face_points = [(lat, lon)]
+            ad = abs(sun_az - fn)
+            ad = min(ad, 360.0 - ad)
+            npt = len(face_points)
+            if npt == 0:
+                neighbor_pct = 0.0
+            else:
+                blocked = sum(
+                    1
+                    for (flat, flon) in face_points
+                    if scheduler._is_face_blocked(flat, flon, h, b_list, sun, verbose=False)
+                )
+                neighbor_pct = round(100.0 * blocked / npt, 1)
+            exposure = max(0.0, math.cos(math.radians(ad)))
+            neighbor_frac = neighbor_pct / 100.0
+            shade_pct = round(100.0 * (neighbor_frac + (1.0 - neighbor_frac) * (1.0 - exposure)), 1)
+            self_shaded = ad > 90.0
+            print(
+                f"  {face}({fn}°): sep={sep:.1f}° ad={ad:.1f}° self_shaded={self_shaded} "
+                f"shade={shade_pct}% neighbor={neighbor_pct}%"
+            )
+            rows.append({
+                "face": face,
+                "normal_deg": fn,
+                "separation_deg": round(sep, 1),
+                "shade_score_pct": shade_pct,
+                "self_shaded": self_shaded,
+                "neighbor_blocked_pct": neighbor_pct,
+            })
+
+        base = {
+            "sample_time": t_mid.isoformat(),
+            "window_start": t_start.isoformat(),
+            "window_end": t_end.isoformat(),
+            "window_schedule_points": len(sample_times),
+            "window_average_samples": 0,
+            "shade_averaged_over_window": False,
+            "sun_azimuth": round(sun_az, 1),
+            "sun_altitude": round(sun.altitude, 1),
+            "ranking_model": ranking_model,
+            "buildings_used": len(b_list),
+            "is_daylight": bool(sun.is_daylight and sun.altitude > 0),
+        }
+        rows.sort(
+            key=lambda x: (
+                -x["shade_score_pct"],
+                -float(x["neighbor_blocked_pct"]),
+                -float(x["separation_deg"]),
+                x["face"],
+            ),
+        )
         for i, r in enumerate(rows, start=1):
             r["rank"] = i
         base["ranked"] = rows
@@ -1538,52 +1717,269 @@ def recommend_facades_for_fixed_window(
         base["avoid"] = None
         base["second_best"] = None
         base["reason"] = (
-            f"At {t_sample.strftime('%H:%M')} the sun is below the horizon. "
+            f"Across {t_start.strftime('%H:%M')}–{t_end.strftime('%H:%M')} the sun stays below the horizon. "
             "Direct-sun facade preference does not apply; cardinal facades are similar for this simple model."
         )
         return base
 
-    # Sun-facing cardinal = smallest separation; always rank last (never recommended).
-    sun_worst = min(rows, key=lambda r: (float(r["separation_deg"]), r["shade_score_pct"], r["face"]))
-    sun_face = sun_worst["face"]
-    others = [r for r in rows if r["face"] != sun_face]
-    # Tie-break: prefer facades with more neighbor shadow; at midday E/W often tie on score
-    # when exposure≈0 — without this, lexical face order could rank East above a shaded West.
-    others.sort(
-        key=lambda r: (
-            -r["shade_score_pct"],
-            -float(r["neighbor_blocked_pct"]),
-            -float(r["separation_deg"]),
-            r["face"],
-        ),
+    sun_az_mean = _circular_mean_azimuth_deg(sun_azimuths)
+    alt_mean = round(_mean(sun_alts), 1)
+
+    for face, fn in _FACADE_CARDINALS:
+        avg_shade = _mean_round(acc_shade[face], 1)
+        avg_neighbor = _mean_round(acc_neighbor[face], 1)
+        avg_sep = _mean_round(acc_sep[face], 1)
+        avg_ad = _mean(acc_ad[face])
+        self_shaded = avg_ad > 90.0
+        print(
+            f"  {face}({fn}°): avg sep={avg_sep:.1f}° avg ad={avg_ad:.1f}° self_shaded={self_shaded} "
+            f"shade={avg_shade}% neighbor={avg_neighbor}% (n={daylight_samples})"
+        )
+        rows.append({
+            "face": face,
+            "normal_deg": fn,
+            "separation_deg": avg_sep,
+            "shade_score_pct": avg_shade,
+            "self_shaded": self_shaded,
+            "neighbor_blocked_pct": avg_neighbor,
+        })
+
+    print(
+        f"\n[facade-recommend] window {t_start.strftime('%H:%M')}–{t_end.strftime('%H:%M')}: "
+        f"{daylight_samples} daylight samples / {len(sample_times)} schedule points | "
+        f"mean sun_az={sun_az_mean:.1f}° alt={alt_mean:.1f}°"
     )
-    ordered = others + [sun_worst]
+
+    base = {
+        "sample_time": t_mid.isoformat(),
+        "window_start": t_start.isoformat(),
+        "window_end": t_end.isoformat(),
+        "window_schedule_points": len(sample_times),
+        "window_average_samples": daylight_samples,
+        "shade_averaged_over_window": True,
+        "sun_azimuth": round(sun_az_mean, 1),
+        "sun_altitude": alt_mean,
+        "ranking_model": ranking_model,
+        "buildings_used": len(b_list),
+        "is_daylight": True,
+    }
+
+    # Rank by effective shade (geometry + neighbor shadows); separation tie-breaks only.
+    _facade_rank_key = lambda r: (
+        -r["shade_score_pct"],
+        -float(r["neighbor_blocked_pct"]),
+        -float(r["separation_deg"]),
+        r["face"],
+    )
+    ordered = sorted(rows, key=_facade_rank_key)
     for i, r in enumerate(ordered, start=1):
         r["rank"] = i
 
-    print(f"  sun_worst={sun_face} | ranking: {[r['face'] for r in ordered]}")
+    shade_worst = min(
+        rows,
+        key=lambda r: (
+            r["shade_score_pct"],
+            float(r["separation_deg"]),
+            r["face"],
+        ),
+    )
+    avoid_face = shade_worst["face"]
+
+    print(f"  shade_worst={avoid_face} | ranking: {[r['face'] for r in ordered]}")
     base["ranked"] = ordered
     base["recommended"] = ordered[0]["face"]
-    base["avoid"] = sun_face
+    base["avoid"] = avoid_face
     second = ordered[1]["face"] if len(ordered) > 1 else None
     base["second_best"] = second
-    print(f"  => recommended={base['recommended']} second_best={second} avoid={sun_face}")
+    print(f"  => recommended={base['recommended']} second_best={second} avoid={avoid_face}")
 
+    # Complex buildings: average each edge's shade over daylight samples in the window.
+    # cardinal_summary total_count / shaded_count are edge×time slots (e.g. 5 edges × 6 samples = 30).
+    if target is not None and target.footprint and len(target.footprint) >= 3:
+        edges = _compute_building_edges(target.footprint)
+        if len(edges) > 4:
+            h = max(1.0, float(target.height))
+            edge_shades: List[List[float]] = [[] for _ in edges]
+            edge_ad: List[List[float]] = [[] for _ in edges]
+            edge_neighbor_blocked: List[List[bool]] = [[] for _ in edges]
+
+            for t in sample_times:
+                sun = scheduler._get_sun_position(t, lat, lon)
+                if not sun.is_daylight or sun.altitude <= 0:
+                    continue
+                sun_az_edge = _normalize_azimuth_deg(sun.azimuth)
+                for ei, edge in enumerate(edges):
+                    bearing = edge["bearing"]
+                    ad = abs(sun_az_edge - bearing)
+                    ad = min(ad, 360.0 - ad)
+                    # Same model as N/E/S/W cardinals: several points along the wall + continuous shade
+                    # (single midpoint missed neighbor shadow on long façades vs map polygons).
+                    p1 = edge["p1"]
+                    p2 = edge["p2"]
+                    pts = _edge_segment_sample_points(p1, p2, n=5)
+                    npt = len(pts)
+                    blocked = 0
+                    for (plon, plat) in pts:
+                        if scheduler._is_face_blocked(plat, plon, h, b_list, sun, verbose=False):
+                            blocked += 1
+                    neighbor_pct = round(100.0 * blocked / npt, 1)
+                    exposure = max(0.0, math.cos(math.radians(ad)))
+                    neighbor_frac = neighbor_pct / 100.0
+                    shade_pct = round(
+                        100.0 * (neighbor_frac + (1.0 - neighbor_frac) * (1.0 - exposure)), 1
+                    )
+                    edge_shades[ei].append(shade_pct)
+                    edge_ad[ei].append(ad)
+                    edge_neighbor_blocked[ei].append(neighbor_pct >= 50.0)
+
+            edge_rows: List[Dict[str, Any]] = []
+            for ei, edge in enumerate(edges):
+                shades = edge_shades[ei]
+                if not shades:
+                    continue
+                avg_shade = round(_mean(shades), 1)
+                avg_ad = round(_mean(edge_ad[ei]), 1)
+                nb = edge_neighbor_blocked[ei]
+                nb_frac = sum(1 for b in nb if b) / len(nb)
+                neighbor_blocked_maj = nb_frac >= 0.5
+                self_shaded = avg_ad > 90.0
+                edge_rows.append({
+                    "bearing": edge["bearing"],
+                    "cardinal": edge["cardinal"],
+                    "separation_deg": avg_ad,
+                    "shade_score_pct": avg_shade,
+                    "self_shaded": self_shaded,
+                    "neighbor_blocked": neighbor_blocked_maj,
+                })
+
+            SHADE_OK = 80.0
+            ALL_SHADED_RATIO = 0.9
+            CARDINAL_ORDER = ("N", "E", "S", "W")
+
+            n_edges = len(edge_rows)
+            n_time = max((len(s) for s in edge_shades), default=0)
+            base["facade_edge_time_samples"] = n_time
+
+            global_shaded = sum(1 for e in edge_rows if e["shade_score_pct"] >= SHADE_OK)
+
+            cardinal_summary: List[Dict[str, Any]] = []
+            for c in CARDINAL_ORDER:
+                slot_total = 0
+                slot_shaded = 0
+                shade_sum = 0.0
+                for ei, edge in enumerate(edges):
+                    if edge["cardinal"] != c:
+                        continue
+                    shades_t = edge_shades[ei]
+                    if not shades_t:
+                        continue
+                    slot_total += len(shades_t)
+                    shade_sum += sum(shades_t)
+                    slot_shaded += sum(1 for v in shades_t if v >= SHADE_OK)
+                if slot_total == 0:
+                    continue
+                avg_shade = shade_sum / slot_total
+                ratio = slot_shaded / slot_total
+                cardinal_summary.append({
+                    "cardinal": c,
+                    "total_count": slot_total,
+                    "shaded_count": slot_shaded,
+                    "avg_shade_pct": round(avg_shade, 1),
+                    "ratio": round(ratio, 3),
+                })
+
+            all_faces_largely_shaded = n_edges > 0 and (global_shaded / n_edges) >= ALL_SHADED_RATIO
+
+            if all_faces_largely_shaded:
+                recommended_cardinals = [c for c in CARDINAL_ORDER if any(e["cardinal"] == c for e in edge_rows)]
+            else:
+                # Rank by mean shade over the window, not by fraction of ≥80% slots (which favored
+                # “spiky” directions and could rank North above a consistently shaded South wall).
+                sorted_all = sorted(
+                    cardinal_summary,
+                    key=lambda r: (
+                        -r["avg_shade_pct"],
+                        -r["ratio"],
+                        CARDINAL_ORDER.index(r["cardinal"]),
+                    ),
+                )
+                recommended_cardinals = [r["cardinal"] for r in sorted_all[:2]]
+
+            base["cardinal_summary"] = cardinal_summary
+            base["recommended_cardinals"] = recommended_cardinals
+            base["all_faces_largely_shaded"] = all_faces_largely_shaded
+
+            avoid_row = min(
+                cardinal_summary,
+                key=lambda r: (
+                    r["avg_shade_pct"],
+                    -r["ratio"],
+                    -r["shaded_count"],
+                    CARDINAL_ORDER.index(r["cardinal"]),
+                ),
+            )
+            avoid_c = avoid_row["cardinal"]
+            base["avoid"] = avoid_c
+            avoid_edges_c = [e for e in edge_rows if e["cardinal"] == avoid_c]
+            if avoid_edges_c:
+                worst_e = min(avoid_edges_c, key=lambda e: e["shade_score_pct"])
+                base["avoid_edges"] = [{
+                    "bearing": worst_e["bearing"],
+                    "cardinal": worst_e["cardinal"],
+                    "shade_score_pct": worst_e["shade_score_pct"],
+                }]
+                base["avoid_bearing"] = worst_e["bearing"]
+
+            print(
+                f"  complex building: {n_edges} edges x {n_time} time samples, "
+                f"cardinal_summary={[ (r['cardinal'], r['shaded_count'], r['total_count']) for r in cardinal_summary ]} "
+                f"recommended={recommended_cardinals} avoid(aggregate)={avoid_c} all_shaded={all_faces_largely_shaded}"
+            )
     best = ordered[0]
-    worst = sun_worst
+    worst = shade_worst
     sb_line = ""
     if len(ordered) > 1:
         sb = ordered[1]
         extra = " — partly from nearby buildings" if sb["neighbor_blocked_pct"] > 5 else ""
         sb_line = (
-            f" Second best: {_FACE_FULL_NAME[sb['face']]} (~{sb['shade_score_pct']}% shade{extra})."
+            f" Second best: {_FACE_FULL_NAME[sb['face']]} (~{sb['shade_score_pct']}% average shade{extra})."
+        )
+
+    win_label = f"{t_start.strftime('%H:%M')}–{t_end.strftime('%H:%M')}"
+    if base.get("cardinal_summary") and base.get("avoid"):
+        _avoid_avg = next(
+            (r["avg_shade_pct"] for r in base["cardinal_summary"] if r["cardinal"] == base["avoid"]),
+            0.0,
+        )
+        _nts = base.get("facade_edge_time_samples") or 0
+        _av_row = next((r for r in base["cardinal_summary"] if r["cardinal"] == base["avoid"]), None)
+        _n_edge = (_av_row["total_count"] // _nts) if _av_row and _nts else None
+        _slot_h = (
+            f" ({_n_edge} edges × {_nts} time samples = {_av_row['total_count']} edge×time slots)"
+            if _n_edge and _nts and _av_row
+            else (f" ({_nts} time samples per edge)" if _nts else "")
+        )
+        avoid_expl = (
+            f"{_FACE_FULL_NAME[base['avoid']]} has the lowest average shade on this footprint over {win_label}"
+            f"{_slot_h} (~{_avoid_avg}% mean shade across those samples, including neighbor shadows)."
+        )
+    else:
+        nb = float(worst["neighbor_blocked_pct"])
+        nb_note = (
+            ", including shading along sun rays from nearby buildings"
+            if nb > 5.0
+            else ""
+        )
+        avoid_expl = (
+            f"{_FACE_FULL_NAME[worst['face']]} has the lowest shade score "
+            f"(~{worst['shade_score_pct']}%{nb_note}; rank {worst['rank']})"
         )
 
     base["reason"] = (
-        f"At work start {t_sample.strftime('%H:%M')}, sun ~{round(sun_az, 1)}° az "
-        f"({round(sun.altitude, 1)}° alt). {_FACE_FULL_NAME[worst['face']]} faces the sun most directly "
-        f"(rank {worst['rank']}); {_FACE_FULL_NAME[best['face']]} scores highest for shade "
-        f"({best['shade_score_pct']}%"
+        f"Averaged over {win_label} ({daylight_samples} daylight samples). "
+        f"Mean sun ~{round(sun_az_mean, 1)}° az ({alt_mean}° alt). {avoid_expl}; "
+        f"{_FACE_FULL_NAME[best['face']]} scores highest for shade "
+        f"({best['shade_score_pct']}% average"
         f"{' including shadows from other buildings' if best['neighbor_blocked_pct'] > 5 and not best['self_shaded'] else ''}"
         f"{' — mostly self-shaded' if best['self_shaded'] else ''})."
         f"{sb_line}"

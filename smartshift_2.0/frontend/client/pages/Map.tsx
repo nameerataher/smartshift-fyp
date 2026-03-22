@@ -114,6 +114,21 @@ interface FacadeTimeRankedItem {
   neighbor_blocked_pct?: number;
 }
 
+interface BestEdge {
+  bearing: number;
+  cardinal: string;
+  shade_score_pct?: number;
+  self_shaded?: boolean;
+}
+
+export interface CardinalSummaryRow {
+  cardinal: string;
+  total_count: number;
+  shaded_count: number;
+  avg_shade_pct: number;
+  ratio: number;
+}
+
 export interface FacadeTimeResult {
   recommended: string | null;
   avoid: string | null;
@@ -124,10 +139,26 @@ export interface FacadeTimeResult {
   sample_time: string;
   window_start: string;
   window_end: string;
+  /** Number of time points in the work window used for scheduling (evenly spaced). */
+  window_schedule_points?: number;
+  /** Daylight samples actually averaged (subset when some times are night). */
+  window_average_samples?: number;
+  /** True when shade scores are means over the window (not a single instant). */
+  shade_averaged_over_window?: boolean;
+  /** Daylight time steps per edge used for complex-footprint edge×time counts. */
+  facade_edge_time_samples?: number;
   reason: string;
   is_daylight: boolean;
   ranking_model?: string;
   buildings_used?: number;
+  cardinal_summary?: CardinalSummaryRow[];
+  recommended_cardinals?: string[];
+  all_faces_largely_shaded?: boolean;
+  best_edges?: BestEdge[];
+  avoid_edges?: BestEdge[];
+  recommended_bearing?: number;
+  second_best_bearing?: number;
+  avoid_bearing?: number;
 }
 
 interface SavedPlaceItem {
@@ -477,6 +508,10 @@ export default function MapPage() {
   const [showAllSlotsDebug, setShowAllSlotsDebug] = useState(false);
   const [facadeWorkStartHour, setFacadeWorkStartHour] = useState(9);
   const [facadeWorkStartMinute, setFacadeWorkStartMinute] = useState(0);
+  // Facade sub-mode: "best_facade" = pick time, get best edges; "best_time" = pick edge, get best times
+  type FacadeSubMode = "best_facade" | "best_time";
+  const [facadeSubMode, setFacadeSubMode] = useState<FacadeSubMode>("best_facade");
+  const [selectedEdgeBearing, setSelectedEdgeBearing] = useState<number | null>(null);
   const [facadeTimeResult, setFacadeTimeResult] = useState<FacadeTimeResult | null>(null);
   const [showBuildingsOverlay, setShowBuildingsOverlay] = useState(false);
   const [showDensityOverlay, setShowDensityOverlay] = useState(false);
@@ -546,6 +581,8 @@ export default function MapPage() {
       });
       setFacadeWorkStartHour(9);
       setFacadeWorkStartMinute(0);
+      setFacadeSubMode("best_facade");
+      setSelectedEdgeBearing(null);
       shadowOverlayActiveRef.current = false;
     };
 
@@ -1062,12 +1099,6 @@ export default function MapPage() {
       }
       const lat = commercialSite?.lat ?? 25.2048;
       const lng = commercialSite?.lng ?? 55.2708;
-      const startTotal = facadeWorkStartHour * 60 + facadeWorkStartMinute;
-      const endTotal = startTotal + siteDraft.durationMinutes;
-      if (endTotal > 24 * 60) {
-        toast.error("Work window must end before midnight on the same day.");
-        return;
-      }
       const buildings = getClientBuildings(lat, lng);
       if (selectedBuilding) {
         const selBldg: ClientBuilding = {
@@ -1081,50 +1112,105 @@ export default function MapPage() {
           buildings.unshift(selBldg);
         }
       }
-      setScheduleLoading(true);
-      setIsSitePopupOpen(false);
-      try {
-        const result = await fetchFacadeRecommendTime(
-          lat,
-          lng,
-          dateStr,
-          facadeWorkStartHour,
-          facadeWorkStartMinute,
-          siteDraft.durationMinutes,
-          buildings,
-        );
-        setFacadeTimeResult(result);
-        setSiteRecommendations([]);
-        setSiteAnalysisBuildingsGeoJSON(null);
-        setSiteAllSlots(undefined);
-        setExpandedRecIds(new Set());
-        setAnalysisConfirmed(true);
-        if (result.recommended && selectedBuilding?.faces?.length) {
-          const snapped = snapCardinalToBuildingFace(result.recommended, selectedBuilding.faces);
-          if (snapped) {
-            setBuildingFace(snapped.direction);
-            setSelectedFaceAngle(snapped.bearing);
-          } else {
+
+      if (facadeSubMode === "best_facade") {
+        // Mode 1: Pick time → Get best edges
+        const startTotal = facadeWorkStartHour * 60 + facadeWorkStartMinute;
+        const endTotal = startTotal + siteDraft.durationMinutes;
+        if (endTotal > 24 * 60) {
+          toast.error("Work window must end before midnight on the same day.");
+          return;
+        }
+        setScheduleLoading(true);
+        setIsSitePopupOpen(false);
+        try {
+          const result = await fetchFacadeRecommendTime(
+            lat,
+            lng,
+            dateStr,
+            facadeWorkStartHour,
+            facadeWorkStartMinute,
+            siteDraft.durationMinutes,
+            buildings,
+          );
+          setFacadeTimeResult(result);
+          setSiteRecommendations([]);
+          setSiteAnalysisBuildingsGeoJSON(null);
+          setSiteAllSlots(undefined);
+          setExpandedRecIds(new Set());
+          setAnalysisConfirmed(true);
+          if (result.recommended && selectedBuilding?.faces?.length) {
+            const snapped = snapCardinalToBuildingFace(result.recommended, selectedBuilding.faces);
+            if (snapped) {
+              setBuildingFace(snapped.direction);
+              setSelectedFaceAngle(snapped.bearing);
+            } else {
+              setBuildingFace(result.recommended);
+              setSelectedFaceAngle(CARDINAL_ANGLE_BY_FACE[result.recommended] ?? 0);
+            }
+          } else if (result.recommended) {
             setBuildingFace(result.recommended);
             setSelectedFaceAngle(CARDINAL_ANGLE_BY_FACE[result.recommended] ?? 0);
           }
-        } else if (result.recommended) {
-          setBuildingFace(result.recommended);
-          setSelectedFaceAngle(CARDINAL_ANGLE_BY_FACE[result.recommended] ?? 0);
+          toast.success(
+            result.recommended
+              ? `Best edges for this window identified`
+              : "Analysis complete (sun below horizon for sample time).",
+          );
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to get facade recommendation.");
+          setFacadeTimeResult(null);
+          setSiteRecommendations([]);
+          setSiteAllSlots(undefined);
+          setAnalysisConfirmed(false);
         }
-        toast.success(
-          result.recommended
-            ? `Best facade for this window: ${result.recommended === "N" ? "North" : result.recommended === "E" ? "East" : result.recommended === "S" ? "South" : "West"}`
-            : "Analysis complete (sun below horizon for sample time).",
-        );
-      } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Failed to get facade recommendation.");
-        setFacadeTimeResult(null);
-        setSiteRecommendations([]);
-        setSiteAllSlots(undefined);
-        setAnalysisConfirmed(false);
+        setScheduleLoading(false);
+      } else {
+        // Mode 2: Pick edge → Get best times
+        if (selectedEdgeBearing == null) {
+          toast.error("Select an edge from the dropdown first.");
+          return;
+        }
+        if (siteDraft.endHour <= siteDraft.startHour) {
+          toast.error("End hour must be after start hour.");
+          return;
+        }
+        setScheduleLoading(true);
+        setIsSitePopupOpen(false);
+        try {
+          const result = await fetchScheduleFromBackend(
+            siteDraft.taskName || "Facade work",
+            lat,
+            lng,
+            siteDraft.locationName || siteDraft.locationLabel || "Building facade",
+            dateStr,
+            siteDraft.durationMinutes,
+            siteDraft.startHour,
+            siteDraft.endHour,
+            undefined, // building_face cardinal
+            selectedEdgeBearing, // face_angle - actual bearing
+            undefined, // polygon
+            buildings
+          );
+          setFacadeTimeResult(null);
+          setSiteRecommendations(result.recs);
+          setSiteAnalysisBuildingsGeoJSON(result.buildingsFootprintsGeoJSON ?? null);
+          setSiteAllSlots(result.allSlots);
+          setExpandedRecIds(new Set());
+          setAnalysisConfirmed(true);
+          setBuildingFace(angleToCardinal(selectedEdgeBearing));
+          setSelectedFaceAngle(selectedEdgeBearing);
+          if (result.recs.length > 0) {
+            toast.success(`Found ${result.recs.length} optimal time windows for ${Math.round(selectedEdgeBearing)}° edge`);
+          }
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Failed to get time recommendations.");
+          setSiteRecommendations([]);
+          setSiteAllSlots(undefined);
+          setAnalysisConfirmed(false);
+        }
+        setScheduleLoading(false);
       }
-      setScheduleLoading(false);
     }
   };
 
@@ -1591,34 +1677,100 @@ export default function MapPage() {
                       f === "N" ? "North" : f === "E" ? "East" : f === "S" ? "South" : f === "W" ? "West" : f;
                     const fid = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}`;
                     const savedF = savedRecIds.has(fid);
-                    const bestFaces: string[] = [];
-                    if (facadeTimeResult.recommended) bestFaces.push(facadeTimeResult.recommended);
-                    if (
-                      facadeTimeResult.second_best &&
-                      facadeTimeResult.second_best !== facadeTimeResult.recommended
-                    ) {
-                      bestFaces.push(facadeTimeResult.second_best);
+
+                    const hasCardinalSummary =
+                      facadeTimeResult.recommended_cardinals &&
+                      facadeTimeResult.recommended_cardinals.length > 0;
+                    const hasEdgeBearings =
+                      facadeTimeResult.best_edges && facadeTimeResult.best_edges.length > 0;
+
+                    let bestFacadesTitle = "";
+                    let avoidText = "";
+                    let cardinalDetailLines: string[] = [];
+
+                    if (facadeTimeResult.all_faces_largely_shaded && hasCardinalSummary) {
+                      bestFacadesTitle = facadeTimeResult.recommended_cardinals!
+                        .map((c) => longName(c))
+                        .join(" · ");
+                      cardinalDetailLines = [
+                        "Most edges are shaded at this time — all main directions on this footprint look favorable.",
+                      ];
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${longName(worst.cardinal)} (${Math.round(worst.bearing)}°)`;
+                      }
+                    } else if (hasCardinalSummary) {
+                      bestFacadesTitle = facadeTimeResult.recommended_cardinals!
+                        .map((c) => longName(c))
+                        .join(" · ");
+                      if (facadeTimeResult.cardinal_summary?.length) {
+                        cardinalDetailLines = facadeTimeResult.cardinal_summary
+                          .filter((row) => facadeTimeResult.recommended_cardinals!.includes(row.cardinal))
+                          .map(
+                            (row) =>
+                              `${longName(row.cardinal)}: ${row.shaded_count}/${row.total_count} edge×time samples ≥80% shade (avg ${row.avg_shade_pct}%)`,
+                          );
+                      }
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${longName(worst.cardinal)} (${Math.round(worst.bearing)}°)`;
+                      }
+                    } else if (hasEdgeBearings) {
+                      const bestEdges = facadeTimeResult.best_edges!.slice(0, 3);
+                      bestFacadesTitle = bestEdges.map((e) => `${Math.round(e.bearing)}° ${e.cardinal}`).join(" · ");
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${Math.round(worst.bearing)}° ${worst.cardinal}`;
+                      } else if (facadeTimeResult.avoid) {
+                        avoidText = longName(facadeTimeResult.avoid);
+                      }
+                    } else {
+                      const bestFaces: string[] = [];
+                      if (facadeTimeResult.recommended) bestFaces.push(facadeTimeResult.recommended);
+                      if (
+                        facadeTimeResult.second_best &&
+                        facadeTimeResult.second_best !== facadeTimeResult.recommended
+                      ) {
+                        bestFaces.push(facadeTimeResult.second_best);
+                      }
+                      bestFacadesTitle = bestFaces.map((f) => longName(f)).join(" · ");
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
                     }
 
-                    const bestFacadesTitle = bestFaces.map((f) => longName(f)).join(" · ");
+                    const showCardinalAggregated = hasCardinalSummary || facadeTimeResult.all_faces_largely_shaded;
 
                     return (
                       <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-4 text-sm">
                         <div className="space-y-2">
-                          {bestFaces.length > 0 ? (
+                          {bestFacadesTitle ? (
                             <div>
-                              <div className="text-xs text-muted-foreground uppercase tracking-wide">Best facades</div>
+                              <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                                Best {showCardinalAggregated ? "directions" : hasEdgeBearings ? "edges" : "facades"}
+                              </div>
                               <p className="mt-1 text-lg font-bold text-primary leading-snug tracking-tight">
                                 {bestFacadesTitle}
                               </p>
+                              {cardinalDetailLines.length > 0 && (
+                                <ul className="mt-2 space-y-0.5 text-[11px] text-muted-foreground leading-snug list-disc pl-4">
+                                  {cardinalDetailLines.map((line, i) => (
+                                    <li key={i}>{line}</li>
+                                  ))}
+                                </ul>
+                              )}
                             </div>
                           ) : (
                             <p className="text-muted-foreground text-sm">Sun below horizon — no strong preference.</p>
                           )}
-                          {facadeTimeResult.avoid && (
+                          {avoidText && (
                             <p className="text-foreground/90 text-sm">
-                              <span className="text-muted-foreground">Avoid (faces sun most directly): </span>
-                              <span className="font-semibold">{longName(facadeTimeResult.avoid)}</span>
+                              <span className="text-muted-foreground">
+                                {facadeTimeResult.cardinal_summary?.length
+                                  ? "Avoid (lowest avg shade on footprint, incl. neighbor shadows): "
+                                  : "Avoid (lowest shade score over the window): "}
+                              </span>
+                              <span className="font-semibold">{avoidText}</span>
                             </p>
                           )}
                         </div>
@@ -2154,29 +2306,101 @@ export default function MapPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Duration (min)</label>
-                      <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
-                        onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Start hour</label>
-                      <input type="number" min={0} max={23} value={facadeWorkStartHour}
-                        onChange={(e) => setFacadeWorkStartHour(Number(e.target.value))}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium mb-1">Start minute</label>
-                      <input type="number" min={0} max={59} step={5} value={facadeWorkStartMinute}
-                        onChange={(e) => setFacadeWorkStartMinute(Number(e.target.value))}
-                        className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
-                    </div>
+                  {/* Facade sub-mode toggle */}
+                  <div className="flex rounded-lg border border-border overflow-hidden text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setFacadeSubMode("best_facade")}
+                      className={cn("flex-1 py-2 px-2 transition-all",
+                        facadeSubMode === "best_facade"
+                          ? "bg-primary/15 text-primary font-medium"
+                          : "text-muted-foreground hover:bg-muted/50"
+                      )}>
+                      Pick time → Best edges
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFacadeSubMode("best_time")}
+                      className={cn("flex-1 py-2 px-2 transition-all",
+                        facadeSubMode === "best_time"
+                          ? "bg-primary/15 text-primary font-medium"
+                          : "text-muted-foreground hover:bg-muted/50"
+                      )}>
+                      Pick edge → Best times
+                    </button>
                   </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    We use sun direction at the <strong>midpoint</strong> of your work window. The window must end before midnight the same day.
-                  </p>
+
+                  {facadeSubMode === "best_facade" ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Duration (min)</label>
+                          <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
+                            onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Start hour</label>
+                          <input type="number" min={0} max={23} value={facadeWorkStartHour}
+                            onChange={(e) => setFacadeWorkStartHour(Number(e.target.value))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Start minute</label>
+                          <input type="number" min={0} max={59} step={5} value={facadeWorkStartMinute}
+                            onChange={(e) => setFacadeWorkStartMinute(Number(e.target.value))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        We use sun direction at <strong>work start</strong> to recommend the best building edges for shade.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Duration (min)</label>
+                          <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
+                            onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">From hour</label>
+                          <input type="number" min={5} max={20} value={siteDraft.startHour}
+                            onChange={(e) => setSiteDraft((p) => ({ ...p, startHour: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">To hour</label>
+                          <input type="number" min={6} max={21} value={siteDraft.endHour}
+                            onChange={(e) => setSiteDraft((p) => ({ ...p, endHour: Number(e.target.value) }))}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background" />
+                        </div>
+                      </div>
+                      {selectedBuilding && selectedBuilding.faces.length > 0 && (
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Select edge (bearing)</label>
+                          <select
+                            value={selectedEdgeBearing ?? ""}
+                            onChange={(e) => setSelectedEdgeBearing(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm"
+                          >
+                            <option value="">Choose an edge...</option>
+                            {selectedBuilding.faces.map((face, idx) => (
+                              <option key={idx} value={face.bearing}>
+                                {Math.round(face.bearing)}° {face.direction} — {face.direction === "N" ? "North" : face.direction === "E" ? "East" : face.direction === "S" ? "South" : "West"}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <p className="text-[11px] text-muted-foreground">
+                        Select a building and edge, then we'll find the best time slots when that edge is most shaded.
+                      </p>
+                    </>
+                  )}
+
                   {selectedBuilding && (
                     <div className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800">
                       <div className="flex items-center justify-between gap-2">
@@ -2185,10 +2409,12 @@ export default function MapPage() {
                             {selectedBuilding.name} — {selectedBuilding.height.toFixed(0)}m
                           </p>
                           <p className="text-xs text-indigo-500">
-                            Optional: click a wall on the map to preview an edge; analysis does not require it.
+                            {facadeSubMode === "best_facade"
+                              ? "Click a wall on the map to preview an edge (optional)."
+                              : "Select an edge above to find the best work times."}
                           </p>
                         </div>
-                        <button type="button" onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }}
+                        <button type="button" onClick={() => { setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); setSelectedEdgeBearing(null); }}
                           className="text-indigo-400 hover:text-indigo-600 p-1 shrink-0"><X className="w-3.5 h-3.5" /></button>
                       </div>
                     </div>
@@ -2201,7 +2427,9 @@ export default function MapPage() {
               <button type="button" onClick={() => setIsSitePopupOpen(false)} className="px-4 py-2 rounded-lg border border-border">Cancel</button>
               <button type="button" onClick={() => void submitSiteAnalysis()}
                 className="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-amber-500 text-primary-foreground font-medium">
-                {analysisMode === "facade" ? "Recommend best facade" : "Generate recommendations"}
+                {analysisMode === "facade"
+                  ? (facadeSubMode === "best_facade" ? "Find best edges" : "Find best times")
+                  : "Generate recommendations"}
               </button>
             </div>
           </div>
