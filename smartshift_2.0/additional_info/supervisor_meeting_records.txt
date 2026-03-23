@@ -5,7 +5,7 @@ Personal Meeting Records to Track Work Progress - University
 Oct 10, 2025 | Meeting #1 with Supervisor
 
 Meeting Notes:
-* Discussed the initial project idea. Conveyed industry collaboration.
+* Discussed the initial project idea. Conveyed company collaboration.
 
 Action items:
 * Project Approved. Look further into developing methods and datasets available. Complex project if unable to do. Start early.
@@ -83,3 +83,14 @@ Action items:
 * Navigation functionality: develop further so that routes update in real-time based on user movement (10 min window instead of 30). E.g., if a route takes 10 minutes to walk, the shadow conditions update dynamically at each interval and calculate the shadow conditions at the user’s estimated position at time n along the route.
 * Integrate the visualization, scheduling engine, and navigation features into a full dashboard-style application.
 * Deploying through pipelines or external services is unnecessary. Localhost is an accepted standard.
+
+-----------------------------------------------------------------
+
+Mar 12, 2026 | Progress Meeting #8 with Supervisor
+
+Meeting Notes:
+* Discussed previous action items that were resolved.
+* Briefly touched on the progress with the report and AI-usage declaration.
+
+Action items:
+* Prepare for final inspection meeting and schedule meeting before the 18th for any doubts or clarifications.

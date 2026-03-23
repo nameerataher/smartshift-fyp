@@ -172,3 +172,16 @@ Action items:
    * Rework the navigation graphs (A* and Yen)
    * Heatmap to be consistently shaded, improve grid pattern
    * Complete the validation tests
+
+-----------------------------------------------------------------
+
+March 18, 2026 | Progress Meeting #13 for PerformByAI
+
+Meeting Notes:
+   * Went over all the main complex features and finalized
+   * Discussed the future scope of the project
+
+Action items:
+   * Show only face recommendation (N/S/E/W) for facade scheduling instead of continuous percentage scoring
+   * Consult with the University on giving access to the codebase
+   * Next meeting in two week's time
