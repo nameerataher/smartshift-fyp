@@ -398,140 +398,15 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Quick Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-foreground">Tasks Today</h3>
-                <ClipboardList className="w-5 h-5 text-primary" />
-              </div>
-              <div className="text-4xl font-bold text-primary mb-2">{tasks.length}</div>
-              <p className="text-sm text-muted-foreground">{scheduledCount} scheduled</p>
-            </div>
-            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-amber-500/10 p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-foreground">Avg. Shade Coverage</h3>
-                <Sun className="w-5 h-5 text-primary" />
-              </div>
-              <div className="text-4xl font-bold text-primary mb-2">{avgShadeCoverage}%</div>
-              <p className="text-sm text-muted-foreground">Across all scheduled tasks</p>
-            </div>
-            <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-violet-500/10 p-6 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-foreground">Best Shade Window</h3>
-                <TrendingUp className="w-5 h-5 text-primary" />
-              </div>
-              <div className="text-lg font-bold text-primary mb-2">{bestSlotText}</div>
-              <p className="text-sm text-muted-foreground">Based on past shade trends</p>
-            </div>
-          </div>
-
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.9fr)_minmax(300px,0.85fr)] gap-6 items-start">
             <div className="space-y-6">
-              {/* Work Analytics */}
               <div className="rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/10 via-background to-accent/10 p-6 shadow-sm">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <BarChart3 className="w-5 h-5 text-primary" />
-                      <h2 className="text-xl font-semibold text-foreground">Work Analytics</h2>
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">Task completion trends overview</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {(["monthly", "weekly", "daily"] as ChartScale[]).map((s) => (
-                      <button key={s} onClick={() => setChartScale(s)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium ${chartScale === s ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:text-foreground"}`}>
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
-                      </button>
-                    ))}
-                  </div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-foreground">Tasks Today</h3>
+                  <ClipboardList className="w-5 h-5 text-primary" />
                 </div>
-
-                <div className="mt-5 flex flex-wrap items-center gap-6">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70">Total Completed</p>
-                    <div className="mt-1 flex items-end gap-2">
-                      <span className="text-4xl font-bold text-foreground">{progressTotal}</span>
-                      <span className={`mb-1 rounded-full px-2 py-0.5 text-xs font-semibold ${trendDelta >= 0 ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600"}`}>
-                        {trendDelta >= 0 ? "+" : ""}{trendDelta}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="h-10 w-px bg-border/60" />
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70 flex items-center gap-1">Attainment</p>
-                    <p className="mt-1 text-4xl font-bold text-foreground">{progressPercent}%</p>
-                  </div>
-                  <div className="h-10 w-px bg-border/60" />
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-widest text-primary/70 flex items-center gap-1">
-                      Target
-                      {!editingTarget && (
-                        <button onClick={() => { setEditingTarget(true); setTempTarget(userTarget); }}
-                          className="ml-1 text-muted-foreground hover:text-primary"><Pencil className="w-3 h-3" /></button>
-                      )}
-                    </p>
-                    {editingTarget ? (
-                      <div className="mt-1 flex items-center gap-1">
-                        <input type="number" min={1} max={999} value={tempTarget}
-                          onChange={(e) => setTempTarget(Number(e.target.value))}
-                          className="w-20 px-2 py-1 rounded-lg border border-border bg-background text-2xl font-bold" />
-                        <button onClick={() => { setUserTarget(tempTarget); setEditingTarget(false); }}
-                          className="p-1 rounded bg-primary text-primary-foreground"><Check className="w-4 h-4" /></button>
-                        <button onClick={() => setEditingTarget(false)}
-                          className="p-1 rounded border border-border"><X className="w-4 h-4" /></button>
-                      </div>
-                    ) : (
-                      <p className="mt-1 text-4xl font-bold text-foreground">{progressGoal}</p>
-                    )}
-                  </div>
-                  <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1.5"><span className="inline-block h-2 w-6 rounded-full bg-gradient-to-r from-primary to-amber-500" />Completed</span>
-                    <span className="flex items-center gap-1.5"><span className="inline-block h-0 w-6 border-t-2 border-dashed border-amber-400/80" />Target</span>
-                  </div>
-                </div>
-
-                <div className="mt-5 overflow-hidden rounded-2xl border border-primary/10 bg-background/60 px-2 pb-2 pt-4">
-                  <svg viewBox="0 0 540 200" className="h-52 w-full" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-                    <defs>
-                      <linearGradient id="areaFill" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.22" />
-                        <stop offset="88%" stopColor="hsl(var(--primary))" stopOpacity="0" />
-                      </linearGradient>
-                      <linearGradient id="lineGrad" x1="0" x2="1" y1="0" y2="0">
-                        <stop offset="0%" stopColor="hsl(var(--primary))" />
-                        <stop offset="100%" stopColor="#f59e0b" />
-                      </linearGradient>
-                    </defs>
-                    {/* Y-axis labels */}
-                    {[0, 0.25, 0.5, 0.75, 1].map((t) => {
-                      const y = CY0 + (1 - t) * cyRange;
-                      const val = Math.round(t * progressMax);
-                      return (
-                        <g key={t}>
-                          <line x1={CX0} y1={y} x2={CX1} y2={y} stroke="currentColor" strokeOpacity="0.07" />
-                          <text x={CX0 - 4} y={y + 3} textAnchor="end" fontSize="9" fill="currentColor" opacity="0.4">{val}</text>
-                        </g>
-                      );
-                    })}
-                    {/* Y-axis title */}
-                    <text x={8} y={CY0 + cyRange / 2} textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.4" transform={`rotate(-90, 8, ${CY0 + cyRange / 2})`}>Tasks</text>
-                    <polygon points={analyticsAreaPoints} fill="url(#areaFill)" />
-                    <polyline points={analyticsGoalPoints} fill="none" stroke="#f59e0b" strokeOpacity="0.75" strokeWidth="1.5" strokeDasharray="6 5" strokeLinecap="round" />
-                    <polyline points={analyticsPoints} fill="none" stroke="url(#lineGrad)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-                    {progressSeries.map((point, index) => (
-                      <g key={point.label}>
-                        <text x={cx(index)} y={CY1 + 22} textAnchor="middle" fontSize="11" fill="currentColor" opacity="0.5">{point.label}</text>
-                        <text x={cx(index)} y={cy(point.value) - 10} textAnchor="middle" fontSize="10.5" fill="currentColor" opacity="0.65" fontWeight="600">{point.value}</text>
-                        <circle cx={cx(index)} cy={cy(point.value)} r="5" fill="hsl(var(--primary))" opacity="0.18" />
-                        <circle cx={cx(index)} cy={cy(point.value)} r="3.4" fill="hsl(var(--primary))" stroke="white" strokeWidth="2" />
-                      </g>
-                    ))}
-                    {/* X-axis title */}
-                    <text x={CX0 + cxRange / 2} y={CY1 + 38} textAnchor="middle" fontSize="9" fill="currentColor" opacity="0.4">{chartScale === "monthly" ? "Month" : chartScale === "weekly" ? "Week" : "Day"}</text>
-                  </svg>
-                </div>
+                <div className="text-4xl font-bold text-primary mb-2">{tasks.length}</div>
+                <p className="text-sm text-muted-foreground">{scheduledCount} scheduled</p>
               </div>
 
               {/* Today's Tasks */}
