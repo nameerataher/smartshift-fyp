@@ -643,6 +643,13 @@ export default function MapPage() {
   const [routeDepartureMode, setRouteDepartureMode] = useState<"now" | "selected">("now");
   const [routeDepartureDate, setRouteDepartureDate] = useState(() => getDubaiNow().dateStr);
   const [routeDepartureMinutes, setRouteDepartureMinutes] = useState(() => getDubaiNow().minutes);
+  const toDubaiIso = (date: string, minutes: number): string => {
+    const [y, mo, d] = date.split("-").map((x) => Number(x));
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    // Dubai is UTC+4 and does not observe DST.
+    return new Date(Date.UTC(y, (mo || 1) - 1, d || 1, h - 4, m, 0, 0)).toISOString();
+  };
   const [routeShadowStatus, setRouteShadowStatus] = useState<{
     inShadow: boolean; remainingShadePct: number; rerouteSuggested: boolean; progressPct: number;
   } | null>(null);
@@ -759,7 +766,7 @@ export default function MapPage() {
       return {
         date: now.dateStr,
         minutes: now.minutes,
-        label: "Leave now",
+        label: `Leave now · ${formatTime(now.minutes)}`,
       };
     }
     return {
@@ -841,6 +848,7 @@ export default function MapPage() {
         });
 
         const departureSelection = getRouteDepartureSelection();
+        const departureTimeIso = toDubaiIso(departureSelection.date, departureSelection.minutes);
         const midLat = (fromCoords[1] + toCoords[1]) / 2;
         const midLon = (fromCoords[0] + toCoords[0]) / 2;
         const buildings = getClientBuildings(midLat, midLon);
@@ -904,10 +912,19 @@ export default function MapPage() {
             label: i === mostShadedIdx ? "Most shaded" : i === shortestIdx ? "Shortest" : i === balancedIdx ? "Balanced" : r.label,
           }));
         }
+        routes = routes.map((r) => ({
+          ...r,
+          departureTime: departureTimeIso,
+          departureLabel: departureSelection.label,
+        }));
 
         setAlternativeRoutes(routes);
         setSelectedRouteIdx(0);
-        setRouteResult({ ...routes[0], departureLabel: departureSelection.label });
+        setRouteResult({
+          ...routes[0],
+          departureTime: departureTimeIso,
+          departureLabel: departureSelection.label,
+        });
         if (routes[0].coordinates.length >= 2) {
           routeKeyRef.current += 1;
           setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current });
@@ -1973,7 +1990,12 @@ export default function MapPage() {
               <div className="mb-2">
                 <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Departure</div>
                 <div className="grid grid-cols-2 gap-1.5">
-                  <button onClick={() => setRouteDepartureMode("now")}
+                  <button onClick={() => {
+                    const now = getDubaiNow();
+                    setRouteDepartureMode("now");
+                    setRouteDepartureDate(now.dateStr);
+                    setRouteDepartureMinutes(now.minutes);
+                  }}
                     className={cn("py-1.5 rounded-lg border text-[10px] font-medium flex items-center justify-center",
                       routeDepartureMode === "now" ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
                     Leave now
@@ -2030,7 +2052,7 @@ export default function MapPage() {
                       </p>
                       {routeResult?.departureLabel && (
                         <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium mt-0.5 inline-block",
-                          routeResult.departureLabel === "Leave now" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300")}>
+                          (routeResult.departureLabel || "").startsWith("Leave now") ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300")}>
                           {routeResult.departureLabel}
                         </span>
                       )}
