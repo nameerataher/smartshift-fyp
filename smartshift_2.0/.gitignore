@@ -1,20 +1,15 @@
-# Cache
 .cache.sqlite
 *.sqlite
 .cache/
 cache/
 .graph_cache/
-
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
-
-# C extensions
 *.so
 
-# Distribution / packaging
+#packages
 .Python
 build/
 develop-eggs/
@@ -30,16 +25,17 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# PyInstaller
 *.manifest
 *.spec
 
-# Installer logs
+#pip logs
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Unit test / coverage
+#ML model artifacts (generated at runtime)
+heat_risk_model.pkl
+
+#unit tests & coverage
 .htmlcov
 .tox/
 .nox/
@@ -53,7 +49,6 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Virtual environments
 venv/
 .venv/
 env/
@@ -61,13 +56,11 @@ env/
 .env/
 .env.local
 
-# IDE
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# OS
 .DS_Store
 Thumbs.db
