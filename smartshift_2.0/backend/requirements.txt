@@ -49,7 +49,7 @@ shapely>=2.0.0                  # merge shadow polygons, area-based coverage
 # =============================================================================
 # development dependencies (optional)
 # =============================================================================
-# pytest>=7.4.0                 # testing framework
+pytest>=7.4.0                   # testing framework
 # black>=24.0.0                 # code formatting
 # mypy>=1.8.0                   # type checking
 
