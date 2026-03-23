@@ -65,6 +65,7 @@ except ImportError:
 from database import (
     init_database, seed_dummy_data, create_task, get_task, get_all_tasks, get_today_tasks,
     update_task, delete_task, create_accepted_recommendation, get_recommendation_by_task,
+    delete_recommendations_for_task,
     mark_task_completed, get_analytics, get_analytics_range, update_analytics_for_month,
     get_dashboard_summary, create_user, get_user_by_email, get_user_by_id, authenticate_user,
     update_user, create_saved_place, get_saved_places, delete_saved_place, hash_password,
@@ -130,6 +131,15 @@ def parse_datetime_param(date_str, time_str):
         except:
             pass
     return now
+
+def _task_end_is_in_past(task_date: str, hour_end: int) -> bool:
+    try:
+        y, m, d = map(int, str(task_date).split("-"))
+        end_hour = max(0, min(23, int(hour_end)))
+        task_end = datetime(y, m, d, end_hour, 59, 59)
+        return task_end < datetime.now()
+    except Exception:
+        return False
 
 def _get_heat_risk_level_for_location(lat, lon, dt):
     if not ML_MODELS_AVAILABLE or not WEATHER_API_AVAILABLE:
@@ -1200,6 +1210,8 @@ def api_get_tasks():
         status_filter = request.args.get('status')
         user_id = request.headers.get('X-User-Id') or request.args.get('user_id')
         tasks = get_all_tasks(date_filter=date_filter, status_filter=status_filter, user_id=user_id)
+        for task in tasks:
+            task['recommendation'] = get_recommendation_by_task(task.get('task_id'))
         return jsonify({"success": True, "tasks": tasks, "count": len(tasks)})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1218,7 +1230,26 @@ def api_create_task():
     try:
         data = request.get_json() or {}
         user_id = data.get('user_id') or request.headers.get('X-User-Id', '')
-        task = UserTask(task_id=data.get('task_id', str(uuid.uuid4())), task_name=data.get('task_name', 'Untitled Task'), location_name=data.get('location_name', ''), location_lat=float(data.get('location_lat', DUBAI.LATITUDE)), location_lon=float(data.get('location_lon', DUBAI.LONGITUDE)), duration_minutes=int(data.get('duration_minutes', 60)), hour_start=int(data.get('hour_start', 6)), hour_end=int(data.get('hour_end', 18)), date=data.get('date', datetime.now().strftime('%Y-%m-%d')), status=data.get('status', 'draft'), user_id=user_id)
+        task_date = data.get('date', datetime.now().strftime('%Y-%m-%d'))
+        hour_end = int(data.get('hour_end', 18))
+        status = data.get('status', 'draft')
+        if status != "completed" and _task_end_is_in_past(task_date, hour_end):
+            return jsonify({"success": False, "error": "Cannot schedule a task in the past"}), 400
+        task = UserTask(
+            task_id=data.get('task_id', str(uuid.uuid4())),
+            task_name=data.get('task_name', 'Untitled Task'),
+            location_name=data.get('location_name', ''),
+            location_lat=float(data.get('location_lat', DUBAI.LATITUDE)),
+            location_lon=float(data.get('location_lon', DUBAI.LONGITUDE)),
+            duration_minutes=int(data.get('duration_minutes', 60)),
+            hour_start=int(data.get('hour_start', 6)),
+            hour_end=hour_end,
+            date=task_date,
+            status=status,
+            user_id=user_id,
+            work_zone_polygon=data.get('work_zone_polygon') or '',
+            analysis_mode=data.get('analysis_mode') or 'workzone',
+        )
         task_id = create_task(task)
         return jsonify({"success": True, "task_id": task_id, "message": "Task created"})
     except Exception as e:
@@ -1240,10 +1271,21 @@ def api_get_task(task_id):
 def api_update_task(task_id):
     try:
         data = request.get_json() or {}
-        allowed_fields = ['task_name', 'location_name', 'location_lat', 'location_lon', 'duration_minutes', 'hour_start', 'hour_end', 'date', 'status']
+        allowed_fields = [
+            'task_name', 'location_name', 'location_lat', 'location_lon', 'duration_minutes',
+            'hour_start', 'hour_end', 'date', 'status', 'work_zone_polygon', 'analysis_mode',
+        ]
         updates = {k: v for k, v in data.items() if k in allowed_fields}
         if not updates:
             return jsonify({"success": False, "error": "No valid fields to update"}), 400
+        existing = get_task(task_id)
+        if not existing:
+            return jsonify({"success": False, "error": "Task not found"}), 404
+        next_date = updates.get("date", existing.get("date"))
+        next_hour_end = int(updates.get("hour_end", existing.get("hour_end", 18)))
+        next_status = updates.get("status", existing.get("status", "draft"))
+        if next_status != "completed" and _task_end_is_in_past(next_date, next_hour_end):
+            return jsonify({"success": False, "error": "Cannot schedule a task in the past"}), 400
         success = update_task(task_id, updates)
         if success:
             return jsonify({"success": True, "message": "Task updated"})
@@ -1275,6 +1317,7 @@ def api_complete_task(task_id):
 def api_accept_recommendation(task_id):
     try:
         data = request.get_json() or {}
+        delete_recommendations_for_task(task_id)
         rec = AcceptedRecommendation(id=str(uuid.uuid4()), task_id=task_id, accepted_time_start=data.get('accepted_time_start', ''), accepted_time_end=data.get('accepted_time_end', ''), shade_percentage=float(data.get('shade_percentage', 0)), shade_slot=data.get('shade_slot', ''))
         rec_id = create_accepted_recommendation(rec)
         update_task(task_id, {'status': 'scheduled'})

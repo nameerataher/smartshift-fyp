@@ -106,6 +106,9 @@ class UserTask:
     user_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    # JSON array of [lng, lat] pairs for work zone; empty if point/facade only
+    work_zone_polygon: str = ""
+    analysis_mode: str = "workzone"  # workzone | facade
 
 
 @dataclass
@@ -197,7 +200,9 @@ def init_database():
                 status VARCHAR(50) DEFAULT 'draft',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                user_id VARCHAR(255) DEFAULT ''
+                user_id VARCHAR(255) DEFAULT '',
+                work_zone_polygon TEXT DEFAULT '',
+                analysis_mode VARCHAR(20) DEFAULT 'workzone'
             )
         """)
 
@@ -316,7 +321,9 @@ def init_database():
                 status TEXT DEFAULT 'draft',
                 created_at TEXT,
                 updated_at TEXT,
-                user_id TEXT DEFAULT ''
+                user_id TEXT DEFAULT '',
+                work_zone_polygon TEXT DEFAULT '',
+                analysis_mode TEXT DEFAULT 'workzone'
             )
         """)
 
@@ -379,9 +386,31 @@ def init_database():
             )
         """)
 
+    _migrate_user_tasks_extra_columns(cur)
+
     conn.commit()
     conn.close()
     print(f"[OK] Database initialized ({'PostgreSQL' if USE_POSTGRES else 'SQLite'})")
+
+
+def _migrate_user_tasks_extra_columns(cur) -> None:
+    """Add work_zone_polygon / analysis_mode if missing (SQLite & PostgreSQL)."""
+    if USE_POSTGRES:
+        for stmt in (
+            "ALTER TABLE user_tasks ADD COLUMN work_zone_polygon TEXT DEFAULT ''",
+            "ALTER TABLE user_tasks ADD COLUMN analysis_mode VARCHAR(20) DEFAULT 'workzone'",
+        ):
+            try:
+                cur.execute(stmt)
+            except Exception:
+                pass
+    else:
+        cur.execute("PRAGMA table_info(user_tasks)")
+        cols = {row[1] for row in cur.fetchall()}
+        if "work_zone_polygon" not in cols:
+            cur.execute("ALTER TABLE user_tasks ADD COLUMN work_zone_polygon TEXT DEFAULT ''")
+        if "analysis_mode" not in cols:
+            cur.execute("ALTER TABLE user_tasks ADD COLUMN analysis_mode TEXT DEFAULT 'workzone'")
 
 
 # ============================================================================
@@ -495,16 +524,20 @@ def create_task(task: UserTask) -> str:
     cur = conn.cursor()
     ph = get_placeholder()
 
+    wz = getattr(task, "work_zone_polygon", None) or ""
+    am = getattr(task, "analysis_mode", None) or "workzone"
     cur.execute(f"""
         INSERT INTO user_tasks
         (task_id, task_name, location_name, location_lat, location_lon,
-         duration_minutes, hour_start, hour_end, date, status, created_at, updated_at, user_id)
-        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
+         duration_minutes, hour_start, hour_end, date, status, created_at, updated_at, user_id,
+         work_zone_polygon, analysis_mode)
+        VALUES ({ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph}, {ph})
     """, (
         task.task_id, task.task_name, task.location_name, task.location_lat,
         task.location_lon, task.duration_minutes, task.hour_start, task.hour_end,
         task.date, task.status, task.created_at, task.updated_at,
-        getattr(task, 'user_id', None) or ''
+        getattr(task, 'user_id', None) or '',
+        wz, am,
     ))
 
     conn.commit()
@@ -601,6 +634,16 @@ def delete_task(task_id: str) -> bool:
 # ============================================================================
 # Accepted Recommendations
 # ============================================================================
+
+def delete_recommendations_for_task(task_id: str) -> None:
+    """Remove prior accepted rows for a task (one active recommendation per task)."""
+    conn = get_connection()
+    cur = conn.cursor()
+    ph = get_placeholder()
+    cur.execute(f"DELETE FROM accepted_recommendations WHERE task_id = {ph}", (task_id,))
+    conn.commit()
+    conn.close()
+
 
 def create_accepted_recommendation(rec: AcceptedRecommendation) -> str:
     """Create a new accepted recommendation."""
@@ -781,6 +824,29 @@ def get_dashboard_summary(user_id: Optional[str] = None) -> Dict:
     cur.execute("SELECT AVG(shade_percentage) as avg FROM accepted_recommendations")
     avg_shade_row = cur.fetchone()
     avg_shade = round(avg_shade_row["avg"], 1) if avg_shade_row and avg_shade_row["avg"] else 0
+
+    task_ids = [t.get("task_id") for t in today_tasks if t.get("task_id")]
+    if task_ids:
+        shade_by_task: Dict[str, float] = {}
+        for task_id in task_ids:
+            cur.execute(
+                f"""
+                SELECT shade_percentage
+                FROM accepted_recommendations
+                WHERE task_id = {ph}
+                ORDER BY accepted_at DESC
+                LIMIT 1
+                """,
+                (task_id,),
+            )
+            row = cur.fetchone()
+            if row and row["shade_percentage"] is not None:
+                shade_by_task[task_id] = float(row["shade_percentage"])
+        for t in today_tasks:
+            t["shade_percentage"] = round(shade_by_task.get(t.get("task_id"), 0.0), 1)
+    else:
+        for t in today_tasks:
+            t["shade_percentage"] = 0.0
 
     conn.close()
 

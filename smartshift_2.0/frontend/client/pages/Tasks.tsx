@@ -71,7 +71,25 @@ export default function Tasks() {
     return null;
   }
 
-  const filteredTasks = tasks.filter((t) => filter === "all" || t.status === filter);
+  const isPastIncomplete = (task: Task): boolean => {
+    if (task.status === "completed") return false;
+    const now = new Date();
+    const taskDate = new Date(`${task.date}T00:00:00`);
+    if (taskDate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) return true;
+    if (taskDate > new Date(now.getFullYear(), now.getMonth(), now.getDate())) return false;
+    let endMinutes = task.hour_end * 60;
+    const recEnd = task.recommendation?.accepted_time_end;
+    if (recEnd && recEnd.includes(":")) {
+      const [h, m] = recEnd.split(":").map((x) => Number(x));
+      if (!Number.isNaN(h) && !Number.isNaN(m)) endMinutes = h * 60 + m;
+    }
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    return endMinutes < nowMinutes;
+  };
+
+  const pastIncompleteTasks = tasks.filter(isPastIncomplete);
+  const activeTasks = tasks.filter((t) => !isPastIncomplete(t));
+  const filteredTasks = activeTasks.filter((t) => filter === "all" || t.status === filter);
 
   const deleteTask = async (taskId: string) => {
     if (!confirm("Are you sure you want to delete this task?")) return;
@@ -108,7 +126,7 @@ export default function Tasks() {
   };
 
   const redirectToMapForReschedule = (task: Task) => {
-    navigate(`/map?reschedule=${task.task_id}&lat=${task.location_lat}&lon=${task.location_lon}&name=${encodeURIComponent(task.task_name)}&date=${task.date}&duration=${task.duration_minutes}`);
+    navigate(`/map?reschedule=${encodeURIComponent(task.task_id)}`);
   };
 
   const formatTimeWindow = (task: Task): string => {
@@ -267,23 +285,75 @@ export default function Tasks() {
           </div>
         )}
 
+        {!loading && filter === "all" && pastIncompleteTasks.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-600" />
+              <h2 className="text-lg font-semibold text-foreground">Past Tasks</h2>
+              <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">!</span>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              These tasks are in the past and were not completed.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {pastIncompleteTasks.map((task) => (
+                <div key={`past-${task.task_id}`} className="rounded-2xl border border-red-200 bg-red-50/50 shadow-sm overflow-hidden">
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <h3 className="font-semibold text-foreground line-clamp-2">{task.task_name}</h3>
+                      <span className="shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold bg-red-100 text-red-700">
+                        ! Not Completed
+                      </span>
+                    </div>
+                    <div className="space-y-2 text-sm text-muted-foreground">
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-red-500" />
+                        <span className="truncate">{task.location_name || "—"}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-red-500" />
+                        <span>{formatTimeWindow(task)}</span>
+                        <span className="text-xs">({task.duration_minutes} min)</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-red-500" />
+                        <span>{new Date(task.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="border-t border-red-200 px-4 py-3 flex items-center justify-end gap-2 bg-red-50/60">
+                    <button onClick={() => redirectToMapForReschedule(task)}
+                      className="py-1.5 px-3 rounded-lg border border-amber-400 bg-amber-50 text-amber-700 text-xs font-medium flex items-center gap-1.5">
+                      <ExternalLink className="w-3.5 h-3.5" /> Reschedule
+                    </button>
+                    <button onClick={() => markCompleted(task.task_id)}
+                      className="py-1.5 px-3 rounded-lg bg-green-600 text-white text-xs font-semibold flex items-center gap-1.5 hover:bg-green-500">
+                      <CheckCircle className="w-3.5 h-3.5" /> Complete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {!loading && tasks.length > 0 && (
           <div className="rounded-2xl border border-border bg-muted/30 p-4">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
               <div>
-                <div className="text-2xl font-bold text-foreground">{tasks.length}</div>
-                <div className="text-xs text-muted-foreground">Total Tasks</div>
+                <div className="text-2xl font-bold text-foreground">{activeTasks.length}</div>
+                <div className="text-xs text-muted-foreground">Active tasks</div>
               </div>
               <div>
-                <div className="text-2xl font-bold text-blue-600">{tasks.filter((t) => t.status === "scheduled").length}</div>
+                <div className="text-2xl font-bold text-blue-600">{activeTasks.filter((t) => t.status === "scheduled").length}</div>
                 <div className="text-xs text-muted-foreground">Scheduled</div>
               </div>
               <div>
-                <div className="text-2xl font-bold text-amber-600">{tasks.filter((t) => t.status === "in-process").length}</div>
+                <div className="text-2xl font-bold text-amber-600">{activeTasks.filter((t) => t.status === "in-process").length}</div>
                 <div className="text-xs text-muted-foreground">In Process</div>
               </div>
               <div>
-                <div className="text-2xl font-bold text-green-600">{tasks.filter((t) => t.status === "completed").length}</div>
+                <div className="text-2xl font-bold text-green-600">{activeTasks.filter((t) => t.status === "completed").length}</div>
                 <div className="text-xs text-muted-foreground">Completed</div>
               </div>
             </div>

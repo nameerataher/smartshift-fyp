@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   Sun, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin,
@@ -381,6 +381,7 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
 export default function MapPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { mode, setMode, isPersonalUser } = useMode();
   const { user } = useAuth();
   /** When true, time/date track Dubai wall clock (updates shadows on the map). */
@@ -496,6 +497,8 @@ export default function MapPage() {
     taskName: "", locationLabel: "", locationName: "",
     durationMinutes: 60, startHour: 5, endHour: 20,
   });
+  /** When set, saving updates this task id instead of creating a new composite id (Past Tasks → Reschedule). */
+  const [rescheduleTaskId, setRescheduleTaskId] = useState<string | null>(null);
   const [analysisConfirmed, setAnalysisConfirmed] = useState(false);
   const [siteRecommendations, setSiteRecommendations] = useState<WindowRec[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
@@ -1048,11 +1051,94 @@ export default function MapPage() {
   // Open site popup on new task
   useEffect(() => {
     if (searchParams.get("newTask") === "true" && mode === "commercial") {
+      setRescheduleTaskId(null);
       setIsSitePopupOpen(true);
     }
   }, [searchParams, mode]);
 
+  // Load task from DB when opening /map?reschedule=<task_id> (polygon, date, hours, etc.)
+  useEffect(() => {
+    const rid = searchParams.get("reschedule");
+    if (!rid || mode !== "commercial") return;
+    const ac = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(rid)}`, {
+          headers: { "X-User-Id": user?.user_id || "" },
+          signal: ac.signal,
+        });
+        const data = await res.json();
+        if (ac.signal.aborted) return;
+        if (!data.success || !data.task) {
+          toast.error((data as { error?: string }).error || "Could not load task to reschedule");
+          return;
+        }
+        const task = data.task as {
+          task_id: string;
+          task_name: string;
+          location_name: string;
+          location_lat: number;
+          location_lon: number;
+          duration_minutes: number;
+          hour_start: number;
+          hour_end: number;
+          date: string;
+          work_zone_polygon?: string;
+          analysis_mode?: string;
+        };
+        setRescheduleTaskId(task.task_id);
+        setFollowRealTime(false);
+        const hs = Number(task.hour_start);
+        const he = Number(task.hour_end);
+        setSiteDraft({
+          taskName: task.task_name || "",
+          locationLabel: task.location_name || "",
+          locationName: task.location_name || "",
+          durationMinutes: Number(task.duration_minutes) || 60,
+          startHour: Number.isFinite(hs) ? hs : 5,
+          endHour: Number.isFinite(he) ? he : 20,
+        });
+        if (task.date) setDateStr(String(task.date).slice(0, 10));
+        setAnalysisMode(task.analysis_mode === "facade" ? "facade" : "workzone");
+        let pts: [number, number][] | null = null;
+        if (task.work_zone_polygon) {
+          try {
+            const parsed = JSON.parse(task.work_zone_polygon);
+            if (Array.isArray(parsed) && parsed.length >= 3) pts = parsed as [number, number][];
+          } catch {
+            /* ignore */
+          }
+        }
+        if (pts) {
+          setDrawnPolygon(pts);
+          const clng = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+          const clat = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+          setCommercialSite({ lat: clat, lng: clng });
+          flyToCoords([clng, clat], 16);
+        } else {
+          const lat = Number(task.location_lat);
+          const lon = Number(task.location_lon);
+          if (Number.isFinite(lat) && Number.isFinite(lon)) {
+            setCommercialSite({ lat, lng: lon });
+            flyToCoords([lon, lat], 16);
+          }
+        }
+        setAnalysisConfirmed(false);
+        setSiteRecommendations([]);
+        setSiteAllSlots(undefined);
+        setIsSitePopupOpen(true);
+        toast.success("Task loaded — adjust date/time if needed, then Generate recommendations.");
+        navigate("/map", { replace: true });
+      } catch {
+        if (ac.signal.aborted) return;
+        toast.error("Could not load task to reschedule");
+      }
+    })();
+    return () => ac.abort();
+  }, [searchParams, mode, user, navigate, flyToCoords]);
+
   const openSitePopup = () => {
+    setRescheduleTaskId(null);
     setIsSitePopupOpen(true);
     setAnalysisConfirmed(false);
     setSiteRecommendations([]);
@@ -1184,70 +1270,131 @@ export default function MapPage() {
     const we = new Date(facadeTimeResult.window_end);
     const startMin = ws.getHours() * 60 + ws.getMinutes();
     const endMin = we.getHours() * 60 + we.getMinutes();
-    const id = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}`;
+    const id = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}-${Date.now()}`;
     const recLabel =
       facadeTimeResult.recommended != null
         ? `Best facade: ${facadeTimeResult.recommended} (${startMin}–${endMin} min)`
         : `Facade plan (${startMin}–${endMin} min)`;
+    const baseBody = {
+      task_name: siteDraft.taskName,
+      location_name: siteDraft.locationName || siteDraft.locationLabel,
+      location_lat: commercialSite?.lat || 25.2048,
+      location_lon: commercialSite?.lng || 55.2708,
+      duration_minutes: siteDraft.durationMinutes,
+      hour_start: Math.floor(startMin / 60),
+      hour_end: Math.max(Math.ceil(endMin / 60), Math.floor(startMin / 60) + 1),
+      date: dateStr,
+      status: "draft" as const,
+      user_id: user?.user_id || "",
+      work_zone_polygon: "",
+      analysis_mode: "facade" as const,
+    };
     try {
-      const taskRes = await fetch(`${API_BASE}/api/tasks`, {
-        method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
-        body: JSON.stringify({
-          task_id: id,
-          task_name: siteDraft.taskName,
-          location_name: siteDraft.locationName || siteDraft.locationLabel,
-          location_lat: commercialSite?.lat || 25.2048,
-          location_lon: commercialSite?.lng || 55.2708,
-          duration_minutes: siteDraft.durationMinutes,
-          hour_start: Math.floor(startMin / 60),
-          hour_end: Math.max(Math.ceil(endMin / 60), Math.floor(startMin / 60) + 1),
-          date: dateStr,
-          status: "draft",
-          user_id: user?.user_id || "",
-        }),
-      });
-      if (!taskRes.ok) throw new Error("Failed to create task");
-      await taskRes.json();
-      setSavedRecIds((prev) => new Set(prev).add(id));
-      toast.success("Task saved!", { description: recLabel });
-    } catch {
-      setSavedRecIds((prev) => new Set(prev).add(id));
-      toast.success("Task saved locally");
+      const wasFacadeReschedule = !!rescheduleTaskId;
+      let taskId: string;
+      if (rescheduleTaskId) {
+        const taskRes = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(rescheduleTaskId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
+          body: JSON.stringify(baseBody),
+        });
+        if (!taskRes.ok) {
+          const err = await taskRes.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error || "Failed to update task");
+        }
+        taskId = rescheduleTaskId;
+      } else {
+        const taskRes = await fetch(`${API_BASE}/api/tasks`, {
+          method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
+          body: JSON.stringify({ ...baseBody, task_id: id }),
+        });
+        if (!taskRes.ok) {
+          const err = await taskRes.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error || "Failed to create task");
+        }
+        const taskData = await taskRes.json();
+        taskId = taskData.task_id as string;
+      }
+      setSavedRecIds((prev) => new Set(prev).add(wasFacadeReschedule ? taskId : id));
+      if (wasFacadeReschedule) setRescheduleTaskId(null);
+      toast.success(wasFacadeReschedule ? "Task rescheduled!" : "Task saved!", { description: recLabel });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save task");
     }
   };
 
   const saveRecommendation = async (rec: WindowRec) => {
-    const id = `${siteDraft.taskName}-${rec.id}`;
+    const compositeId = `${siteDraft.taskName}-${rec.id}-${Date.now()}`;
+    const polygonJson =
+      drawnPolygon && drawnPolygon.length >= 3 ? JSON.stringify(drawnPolygon) : "";
+    let centroidLat = commercialSite?.lat ?? 25.2048;
+    let centroidLng = commercialSite?.lng ?? 55.2708;
+    if (drawnPolygon && drawnPolygon.length >= 3) {
+      centroidLng = drawnPolygon.reduce((s, p) => s + p[0], 0) / drawnPolygon.length;
+      centroidLat = drawnPolygon.reduce((s, p) => s + p[1], 0) / drawnPolygon.length;
+    }
+    const payload = {
+      task_name: siteDraft.taskName,
+      location_name: siteDraft.locationName || siteDraft.locationLabel,
+      location_lat: centroidLat,
+      location_lon: centroidLng,
+      duration_minutes: siteDraft.durationMinutes,
+      hour_start: Math.floor(rec.start / 60),
+      hour_end: Math.ceil(rec.end / 60),
+      date: dateStr,
+      status: "draft" as const,
+      user_id: user?.user_id || "",
+      work_zone_polygon: polygonJson,
+      analysis_mode: analysisMode,
+    };
     try {
-      const taskRes = await fetch(`${API_BASE}/api/tasks`, {
-        method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
-        body: JSON.stringify({
-          task_id: id, task_name: siteDraft.taskName,
-          location_name: siteDraft.locationName || siteDraft.locationLabel,
-          location_lat: commercialSite?.lat || 25.2048,
-          location_lon: commercialSite?.lng || 55.2708,
-          duration_minutes: siteDraft.durationMinutes,
-          hour_start: Math.floor(rec.start / 60),
-          hour_end: Math.ceil(rec.end / 60),
-          date: dateStr, status: "draft",
-          user_id: user?.user_id || ""
-        })
-      });
-      if (!taskRes.ok) throw new Error("Failed to create task");
-      const taskData = await taskRes.json();
-      await fetch(`${API_BASE}/api/tasks/${taskData.task_id}/accept`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const wasWorkzoneReschedule = !!rescheduleTaskId;
+      let taskId: string;
+      if (rescheduleTaskId) {
+        const taskRes = await fetch(`${API_BASE}/api/tasks/${encodeURIComponent(rescheduleTaskId)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
+          body: JSON.stringify(payload),
+        });
+        if (!taskRes.ok) {
+          const err = await taskRes.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error || "Failed to update task");
+        }
+        taskId = rescheduleTaskId;
+      } else {
+        const taskRes = await fetch(`${API_BASE}/api/tasks`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-User-Id": user?.user_id || "" },
+          body: JSON.stringify({ ...payload, task_id: compositeId }),
+        });
+        if (!taskRes.ok) {
+          const err = await taskRes.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error || "Failed to create task");
+        }
+        const taskData = await taskRes.json();
+        taskId = taskData.task_id as string;
+      }
+      const acceptRes = await fetch(`${API_BASE}/api/tasks/${taskId}/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           accepted_time_start: formatTime(rec.start).split(" ")[0],
           accepted_time_end: formatTime(rec.end).split(" ")[0],
-          shade_percentage: rec.shadePct, shade_slot: rec.title
-        })
+          shade_percentage: rec.shadePct,
+          shade_slot: rec.title,
+        }),
       });
-      setSavedRecIds((prev) => new Set(prev).add(id));
-      toast.success("Task saved!", { description: `${siteDraft.taskName} at ${rec.timeLabel}` });
-    } catch {
-      setSavedRecIds((prev) => new Set(prev).add(id));
-      toast.success("Task saved locally");
+      if (!acceptRes.ok) {
+        const err = await acceptRes.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error || "Failed to accept recommendation");
+      }
+      setSavedRecIds((prev) => new Set(prev).add(wasWorkzoneReschedule ? taskId : compositeId));
+      if (wasWorkzoneReschedule) setRescheduleTaskId(null);
+      toast.success(wasWorkzoneReschedule ? "Task rescheduled!" : "Task saved!", {
+        description: `${siteDraft.taskName} at ${rec.timeLabel}`,
+      });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save recommendation");
     }
   };
 
@@ -1424,7 +1571,7 @@ export default function MapPage() {
           />
 
           {/* Floating time card */}
-          <div className="absolute top-4 left-4 z-20 w-[310px] rounded-2xl border border-white/20 bg-background/45 backdrop-blur-xl shadow-2xl p-3">
+          <div className="absolute top-4 left-4 z-20 w-[22rem] max-w-[calc(100vw-2rem)] rounded-2xl border border-white/20 bg-background/45 backdrop-blur-xl shadow-2xl p-3 box-border">
             <div className="flex items-baseline justify-between mb-2 gap-2">
               <span className="text-xl font-bold font-mono text-foreground">{formatTime(currentMinutes)}</span>
               <div className="flex items-center gap-1.5 shrink-0">
@@ -1441,49 +1588,53 @@ export default function MapPage() {
             <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
               {["12A", "6A", "12P", "6P", "12A"].map((t) => <span key={t}>{t}</span>)}
             </div>
-            <div className="grid grid-cols-[1fr_1fr_auto_auto_auto] gap-1.5 items-center">
-              <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => onManualTimeMinutes(Number(e.target.value))} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs">
-                {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
-              </select>
-              <input type="date" value={dateStr} onChange={(e) => onManualDateStr(e.target.value)} className="px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
-              <button
-                type="button"
-                onClick={snapToDubaiNow}
-                className={cn(
-                  "rounded-lg px-2 py-1.5 text-xs border font-medium",
-                  followRealTime && !isPlaying
-                    ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                    : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground",
-                )}
-                title="Use current Dubai time and keep updating (shadows follow the clock)"
-                aria-label="Snap to current Dubai time and follow live"
-              >
-                <Clock className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsPlaying((p) => {
-                  const next = !p;
-                  if (next) setFollowRealTime(false);
-                  return next;
-                })}
-                className={cn("rounded-lg px-2 py-1.5 text-xs font-medium", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}
-                aria-label={isPlaying ? "Pause time animation" : "Play time animation"}
-              >
-                {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsPlaying(false);
-                  setFollowRealTime(false);
-                  setCurrentMinutes(720);
-                }}
-                className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50"
-                aria-label="Reset time to noon"
-              >
-                <RotateCcw className="w-3 h-3" />
-              </button>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex gap-1.5 min-w-0">
+                <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => onManualTimeMinutes(Number(e.target.value))} className="min-w-0 flex-1 px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs">
+                  {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
+                </select>
+                <input type="date" value={dateStr} onChange={(e) => onManualDateStr(e.target.value)} className="min-w-0 flex-1 px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  onClick={snapToDubaiNow}
+                  className={cn(
+                    "rounded-lg px-2 py-1.5 text-xs border font-medium flex items-center justify-center",
+                    followRealTime && !isPlaying
+                      ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                      : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground",
+                  )}
+                  title="Use current Dubai time and keep updating (shadows follow the clock)"
+                  aria-label="Snap to current Dubai time and follow live"
+                >
+                  <Clock className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPlaying((p) => {
+                    const next = !p;
+                    if (next) setFollowRealTime(false);
+                    return next;
+                  })}
+                  className={cn("rounded-lg px-2 py-1.5 text-xs font-medium flex items-center justify-center", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}
+                  aria-label={isPlaying ? "Pause time animation" : "Play time animation"}
+                >
+                  {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setFollowRealTime(false);
+                    setCurrentMinutes(720);
+                  }}
+                  className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50 flex items-center justify-center"
+                  aria-label="Reset time to noon"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <span className="text-[10px] text-muted-foreground">Speed</span>

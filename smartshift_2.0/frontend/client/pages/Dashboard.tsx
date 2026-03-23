@@ -59,6 +59,7 @@ interface DashboardData {
     status: string;
     duration_minutes: number;
     date: string;
+    shade_percentage?: number;
   }>;
   today_task_count: number;
   total_duration_minutes: number;
@@ -161,7 +162,7 @@ export default function Dashboard() {
           location_lat: t.location_lat || 25.2048,
           location_lon: t.location_lon || 55.2708,
           timeWindow: `${String(t.hour_start).padStart(2, "0")}:00 – ${String(t.hour_end).padStart(2, "0")}:00`,
-          shadePercentage: data.avg_shade_coverage || 70,
+          shadePercentage: Number(t.shade_percentage ?? 0),
           status: t.status as ScheduledTask["status"],
           date: t.date || dateStr,
           duration_minutes: t.duration_minutes || 60,
