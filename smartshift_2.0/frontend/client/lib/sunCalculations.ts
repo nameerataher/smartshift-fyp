@@ -112,11 +112,12 @@ export function calculateSunPosition(
 /** Time-of-day label from sun altitude/azimuth */
 export function getTimePeriod(altitude: number, _azimuth: number): string {
   if (altitude < -6) return "Night";
-  if (altitude < 0) return "Twilight";
-  if (altitude < 15) return "Morning";
-  if (altitude < 75) return "Midday";
-  if (altitude < 90) return "Afternoon";
-  return "Noon";
+  const azimuth = norm360(_azimuth);
+  if (altitude < 0) return azimuth < 180 ? "Dawn" : "Dusk";
+  // East side of sky => morning; west side => afternoon/evening.
+  if (azimuth < 120) return "Morning";
+  if (azimuth <= 240) return "Midday";
+  return "Afternoon";
 }
 
 /** Approximate UV index (0–12) from date and minutes since midnight in Dubai */
