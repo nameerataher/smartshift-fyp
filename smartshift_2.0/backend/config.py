@@ -1,22 +1,15 @@
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 
-
 # geographic configuration
-
 @dataclass(frozen=True)
 class DubaiConfig:
-    """
-    Geographic and timezone configuration for Dubai.
-
-    These values are used throughout the application for solar
-    calculations and coordinate transformations.
-    """
-    # Dubai's geographic center (Downtown Dubai area)
+    #used throughout the application for solar calculations and coordinate transformations
+    # Dubai's geographic center
     LATITUDE: float = 25.2048
     LONGITUDE: float = 55.2708
 
-    # UAE Standard Time (UTC+4, no daylight saving)
+    # UAE Standard Time (UTC+4)
     TIMEZONE_OFFSET: float = 4.0
     TIMEZONE_NAME: str = "Asia/Dubai"
 
@@ -29,14 +22,10 @@ class DubaiConfig:
     BOUNDS_EAST: float = 55.55
     BOUNDS_WEST: float = 54.90
 
-
 # Default Dubai configuration instance
 DUBAI = DubaiConfig()
 
-
 # map locations - landmarks and points of interest
-
-# Each entry contains: center (lon, lat), zoom, pitch, bearing
 LANDMARK_LOCATIONS: Dict[str, Dict] = {
     "burj_khalifa": {
         "center": [55.274376, 25.197197],
@@ -104,12 +93,9 @@ LANDMARK_LOCATIONS: Dict[str, Dict] = {
     }
 }
 
-
 # shadow calculation settings
-
 @dataclass(frozen=True)
 class ShadowSettings:
-
     # Minimum sun altitude to calculate shadows (degrees)
     # Below this, shadows become too long and impractical
     MIN_SUN_ALTITUDE: float = 1.0
@@ -135,16 +121,11 @@ class ShadowSettings:
     DEFAULT_ANIMATION_INTERVAL_MINUTES: int = 30
     DEFAULT_ANIMATION_SPEED_MS: int = 500  # Milliseconds per frame
 
-
 SHADOW = ShadowSettings()
 
-
 # api server configuration
-
 @dataclass(frozen=True)
 class APIConfig:
-
-    # Server settings
     HOST: str = "0.0.0.0"
     PORT: int = 8002
     DEBUG: bool = True
@@ -161,14 +142,9 @@ class APIConfig:
     # API version
     VERSION: str = "1.0.0"
 
-
 API = APIConfig()
 
-
 # sample building data
-
-# Sample building data for Dubai landmarks
-# In production, this would come from OpenStreetMap or a building database
 SAMPLE_BUILDINGS: List[Dict] = [
     {
         "id": "burj_khalifa",
@@ -260,14 +236,9 @@ SAMPLE_BUILDINGS: List[Dict] = [
     },
 ]
 
-
 # ui theme configuration
-
 @dataclass(frozen=True)
 class UITheme:
-    """
-    UI theme colors and styles for the shadow simulation interface.
-    """
     # Primary colors
     PRIMARY_BG: str = "rgba(15, 23, 42, 0.88)"
     SECONDARY_BG: str = "#1e293b"
@@ -288,20 +259,11 @@ class UITheme:
     SHADOW_COLOR: str = "rgba(0, 0, 0, 0.4)"
     SUNLIGHT_COLOR: str = "rgba(255, 200, 100, 0.1)"
 
-
 THEME = UITheme()
 
-
-# heat safety thresholds (for future integration)
-
+# heat safety thresholds
 @dataclass(frozen=True)
 class HeatSafetyConfig:
-    """
-    Configuration for heat safety calculations.
-
-    These thresholds are used to determine safe working conditions
-    based on temperature, humidity, and sun exposure.
-    """
     # Temperature thresholds (Celsius)
     TEMP_CAUTION: float = 32.0
     TEMP_WARNING: float = 38.0
@@ -317,49 +279,22 @@ class HeatSafetyConfig:
     MAX_SUN_EXPOSURE_WARNING: int = 30
     MAX_SUN_EXPOSURE_DANGER: int = 15
 
-
 HEAT_SAFETY = HeatSafetyConfig()
-
 
 # utility functions
 
 def get_location_config(location_key: str) -> Dict:
-    """
-    Get configuration for a specific landmark location.
-
-    Args:
-        location_key: Key from LANDMARK_LOCATIONS
-
-    Returns:
-        Location configuration dictionary
-
-    Raises:
-        KeyError: If location_key is not found
-    """
     if location_key not in LANDMARK_LOCATIONS:
         raise KeyError(f"Unknown location: {location_key}. "
                       f"Available: {list(LANDMARK_LOCATIONS.keys())}")
     return LANDMARK_LOCATIONS[location_key]
 
-
 def get_all_location_keys() -> List[str]:
-    """
-    Get all available location keys.
-
-    Returns:
-        List of location key strings
-    """
     return list(LANDMARK_LOCATIONS.keys())
 
-
-# =============================================================================
-# MODULE INFO
-# =============================================================================
-
+# module info
 if __name__ == "__main__":
-    print("=" * 60)
     print("SmartShift Configuration Module")
-    print("=" * 60)
     print(f"\nDubai Configuration:")
     print(f"  Latitude:  {DUBAI.LATITUDE}°")
     print(f"  Longitude: {DUBAI.LONGITUDE}°")
@@ -371,15 +306,3 @@ if __name__ == "__main__":
     for bldg in SAMPLE_BUILDINGS:
         print(f"  - {bldg['name']}: {bldg['height']}m")
     print(f"\nAPI Server: http://{API.HOST}:{API.PORT}")
-    print("=" * 60)
-
-
-
-
-
-
-
-
-
-
-

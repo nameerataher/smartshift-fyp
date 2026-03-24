@@ -1,17 +1,3 @@
-"""
-calculates shadow projections from 3D buildings based on
-the sun's position.
-
-Key Concepts:
-- Shadow Length: Depends on sun altitude
-- Shadow Direction: Opposite to sun azimuth
-- Shadow Polygon: 2D projection of building shadow on the ground
-
-Dependencies:
-- solar_position.py: For sun position calculations
-
-"""
-
 import math
 from datetime import datetime
 from typing import List, Tuple, Dict, Optional, Any, Union
@@ -29,7 +15,7 @@ except ImportError:
 class Building:
     id: str
     footprint: List[Tuple[float, float]]  # [(lon, lat), ...]
-    height: float  # meters
+    height: float  #meters
     name: Optional[str] = None
 
     def get_centroid(self) -> Tuple[float, float]:
@@ -42,7 +28,6 @@ class Building:
 
         return (sum_lon / n, sum_lat / n)
 
-
 @dataclass
 class Shadow:
     building_id: str
@@ -54,7 +39,6 @@ class Shadow:
     timestamp: datetime
     opacity: float = 0.5
 
-
 @dataclass
 class ShadowAnalysis:
     timestamp: datetime
@@ -63,13 +47,10 @@ class ShadowAnalysis:
     total_shadow_area: float = 0.0
     coverage_percentage: float = 0.0
 
-
 class ShadowCalculator:
-    # Conversion factors for Dubai's latitude
-    # 1 degree latitude ≈ 111,320 meters
-    # 1 degree longitude ≈ 111,320 * cos(25°) ≈ 100,856 meters at Dubai's latitude
+    #conversion factors for Dubai's latitude
     METERS_PER_DEGREE_LAT = 111320.0
-    METERS_PER_DEGREE_LON = 100856.0  # Adjusted for Dubai's latitude
+    METERS_PER_DEGREE_LON = 100856.0
 
     def __init__(self, latitude: float = 25.2048, longitude: float = 55.2708,
                  timezone_offset: float = 4.0):
@@ -78,14 +59,14 @@ class ShadowCalculator:
         self.longitude = longitude
         self.timezone_offset = timezone_offset
 
-        # Initialize solar position calculator
+        #initialize solar position calculator
         self.solar_calculator = SolarPositionCalculator(
             latitude=latitude,
             longitude=longitude,
             timezone_offset=timezone_offset
         )
 
-        # Update meters per degree based on latitude
+        #update meters per degree based on latitude
         self.meters_per_degree_lon = self.METERS_PER_DEGREE_LAT * math.cos(math.radians(latitude))
 
     def _meters_to_degrees_offset(self, dx_meters: float, dy_meters: float) -> Tuple[float, float]:
@@ -94,32 +75,32 @@ class ShadowCalculator:
         return (dlon, dlat)
 
     def calculate_shadow_length(self, building_height: float, sun_altitude: float) -> float:
-        # No shadow when sun is at or below horizon
+        #no shadow when sun is at or below horizon
         if sun_altitude <= 0:
             return 0.0
 
-        # Clamp altitude to prevent infinite shadows at very low angles
-        # Minimum practical altitude of 1 degree
+        #clamp altitude to prevent infinite shadows at very low angles
+        #minimum practical altitude of 1 degree
         effective_altitude = max(1.0, sun_altitude)
 
-        # Calculate shadow length using tangent
+        #calculate shadow length using tangent
         altitude_rad = math.radians(effective_altitude)
         shadow_length = building_height / math.tan(altitude_rad)
 
-        # Cap shadow length to reasonable maximum (10x building height)
+        #cap shadow length to reasonable maximum (10x building height)
         max_shadow = building_height * 10
         return min(shadow_length, max_shadow)
 
     def calculate_shadow_direction(self, sun_azimuth: float) -> float:
-        # Shadow is opposite to sun direction
+        #shadow is opposite to sun direction
         shadow_direction = (sun_azimuth + 180.0) % 360.0
         return shadow_direction
 
     def calculate_shadow_offset(self, shadow_length: float, shadow_direction: float) -> Tuple[float, float]:
-        # Convert direction to radians (measured from North, clockwise)
+        #convert direction to radians (measured from North, clockwise)
         direction_rad = math.radians(shadow_direction)
 
-        # Calculate offsets
+        #calculate offsets
         # sin gives East-West component (positive for East)
         # cos gives North-South component (positive for North)
         dx = shadow_length * math.sin(direction_rad)
@@ -137,14 +118,14 @@ class ShadowCalculator:
         if not sun_position.is_daylight or sun_position.altitude <= 0:
             return None
 
-        # Calculate shadow parameters
+        #calculate shadow parameters
         shadow_length = self.calculate_shadow_length(building.height, sun_position.altitude)
 
-        # No significant shadow if very short
+        #no significant shadow if very short
         if shadow_length < 0.5:
             return None
 
-        # Use override when provided (e.g. Mapbox light direction so overlay matches map lighting)
+        #use override when provided (e.g. Mapbox light direction so overlay matches map lighting)
         if shadow_direction_override is not None:
             shadow_direction = shadow_direction_override % 360.0
         else:
@@ -152,25 +133,21 @@ class ShadowCalculator:
         dx_meters, dy_meters = self.calculate_shadow_offset(shadow_length, shadow_direction)
         dlon, dlat = self._meters_to_degrees_offset(dx_meters, dy_meters)
 
-        # Create shadow polygon
-        # The polygon consists of: footprint vertices + projected shadow vertices
-        # We create a polygon that represents the shadow cast on the ground
-
+        #create shadow polygon
         footprint = building.footprint
         if len(footprint) < 3:
             return None
 
-        # Project each vertex to create shadow endpoints
+        #project each vertex to create shadow endpoints
         shadow_vertices = [(pt[0] + dlon, pt[1] + dlat) for pt in footprint]
 
-        # Create the shadow polygon by connecting footprint to shadow projection
-        # This creates a "swept" shadow shape
+        #create the shadow polygon by connecting footprint to shadow projection
         shadow_polygon = []
 
-        # Add the shadow endpoints (the far edge of the shadow)
+        #add the shadow endpoints (the far edge of the shadow)
         shadow_polygon.extend(shadow_vertices)
 
-        # Add the footprint in reverse order to close the polygon properly
+        #add the footprint in reverse order to close the polygon properly
         shadow_polygon.extend(reversed(footprint))
 
         return shadow_polygon
@@ -181,13 +158,7 @@ class ShadowCalculator:
         sun_position: SunPosition,
         shadow_direction_override: Optional[float] = None,
     ) -> Optional[Any]:
-        """
-        Merge all building shadow polygons (full elongated shadows, not just footprints)
-        using Shapely unary_union. Returns a Shapely geometry (Polygon or MultiPolygon)
-        or None if no shadows or Shapely unavailable.
-
-        Use this for area-based coverage: coverage = intersection(merged_shadow, target).area / target.area
-        """
+        #no shadows if Shapely is not available or sun is not daylight or sun is below horizon
         if not SHAPELY_AVAILABLE or not sun_position.is_daylight or sun_position.altitude <= 0:
             return None
         polys: List[Any] = []
@@ -213,11 +184,7 @@ class ShadowCalculator:
         sun_position: SunPosition,
         shadow_direction_override: Optional[float] = None,
     ) -> Optional[Any]:
-        """
-        Merge only the cast (ground) shadow polygons, excluding building footprints.
-        Builds the cast as the band between footprint edge and shadow edge for each
-        building, so we count only ground that is in shadow, not the building itself.
-        """
+        #no cast shadows if Shapely is not available or sun is not daylight or sun is below horizon
         if not SHAPELY_AVAILABLE or not sun_position.is_daylight or sun_position.altitude <= 0:
             return None
         cast_polys: List[Any] = []
@@ -278,12 +245,6 @@ class ShadowCalculator:
         target_polygon: List[Tuple[float, float]],
         merged_footprint_geom: Optional[Any] = None,
     ) -> float:
-        """
-        Compute coverage percentage: (shaded area ∩ target) / target area * 100.
-        Shaded = cast ground shadow + building footprints (so area on buildings counts as shaded).
-        target_polygon: list of (lon, lat) vertices.
-        Returns 0-100 (actual coverage so partial shade on plain land is visible).
-        """
         if not SHAPELY_AVAILABLE or len(target_polygon) < 3:
             return 0.0
         try:
@@ -363,11 +324,6 @@ class ShadowCalculator:
         target_area_polygon: Optional[List[Tuple[float, float]]] = None,
         shadow_direction_override: Optional[float] = None,
     ) -> ShadowAnalysis:
-        """
-        Build shadow list and optionally set total_shadow_area / coverage_percentage
-        from merged full shadow polygons (not footprint area).
-        target_area_polygon: optional list of (lon, lat) for coverage_percentage.
-        """
         sun_position = self.solar_calculator.get_sun_position(dt)
         shadows = []
 
@@ -585,13 +541,3 @@ if __name__ == "__main__":
         import json
         geojson = calculator.shadow_to_geojson(analysis.shadows[0])
         print(json.dumps(geojson, indent=2)[:500] + "...")
-
-
-
-
-
-
-
-
-
-

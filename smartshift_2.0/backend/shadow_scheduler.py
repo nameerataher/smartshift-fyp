@@ -1,23 +1,6 @@
-"""
-shadow_scheduler.py
-
-Shadow-based scheduling engine for SmartShift.
-Completely independent of the heat risk model (which lives on the dashboard).
-
-Uses REAL 3D building data and shadow projection to determine shadow coverage:
-1. Fetches nearby building footprints + heights from Mapbox vector tiles
-2. Projects 3D shadow polygons using the ShadowCalculator (sun geometry + building height)
-3. Uses ray-casting point-in-polygon tests to determine if the target location
-   falls inside any shadow at each sampled time
-4. Reports the fraction of time the location is in shadow during each candidate slot
-
-Performance: see scheduler_optimizations.py (adaptive sampling for long durations).
-"""
-
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
-from enum import Enum
 import math
 import requests as http_client
 
@@ -31,7 +14,6 @@ from scheduler_optimizations import (
 )
 
 def parse_client_buildings(raw_list: list) -> List[Building]:
-    """Parse building dicts sent from the frontend into Building objects."""
     buildings: List[Building] = []
     for b in raw_list:
         fp = b.get("footprint", [])
@@ -53,18 +35,13 @@ MAPBOX_TOKEN = (
 DEFAULT_BUILDING_HEIGHT = 30.0  # meters – fallback for missing height data
 BUILDING_FETCH_RADIUS = 300     # meters around the target point
 
-# Pipeline: discretize time at this step (minutes) for shade series + sliding window
-TIME_STEP_MINUTES = 30
-
-
-# ─── Data classes ───────────────────────────────────────────────────────────
+TIME_STEP_MINUTES = 30 #discretize time at this step (minutes) for shade series + sliding window
 
 @dataclass
 class TimeSlot:
-    """A time slot with its shadow coverage."""
     start: datetime
     end: datetime
-    shadow_percentage: float  # 0-100
+    shadow_percentage: float
     sun_altitude: float
     sun_azimuth: float
     # Debug breakdown for facade mode
@@ -102,10 +79,8 @@ class TimeSlot:
             "is_always_self_shaded": self.is_always_self_shaded,
         }
 
-
 @dataclass
 class ScheduleRecommendation:
-    """Scheduling recommendation with best and alternative slots."""
     task_name: str
     location_name: str
     lat: float
@@ -162,40 +137,16 @@ class ScheduleRecommendation:
         return out
 
 
-class BuildingFace(Enum):
-    """Building face orientations."""
-    NORTH = "N"
-    EAST = "E"
-    SOUTH = "S"
-    WEST = "W"
-
-    @property
-    def azimuth(self) -> float:
-        """Azimuth angle for face normal (degrees from north)."""
-        return {"N": 0, "E": 90, "S": 180, "W": 270}[self.value]
-
-    @classmethod
-    def from_string(cls, s: str) -> Optional['BuildingFace']:
-        mapping = {'N': cls.NORTH, 'E': cls.EAST, 'S': cls.SOUTH, 'W': cls.WEST}
-        return mapping.get(s.upper()) if s else None
-
-
 def _resolve_face_angle(
     face_angle: Optional[float],
     building_face: Optional[str],
 ) -> Optional[float]:
-    """
-    Resolve effective face angle (0-360) for physics. Uses only the numeric
-    face_angle from the client. N/E/S/W (building_face) is for display only;
-    do not map cardinals to angles here to avoid precision loss (e.g. 112° → E → 90°).
-    """
     if face_angle is not None and 0 <= face_angle < 360:
         return float(face_angle)
     return None
 
 
 def _face_angle_to_cardinal(angle: float) -> str:
-    """Convert face angle (0-360) to cardinal label for display only."""
     a = angle % 360
     if a >= 315 or a < 45:
         return "N"
@@ -205,24 +156,16 @@ def _face_angle_to_cardinal(angle: float) -> str:
         return "S"
     return "W"
 
-
 def _get_face_point_on_building(
     building: Building,
     face_angle_deg: float,
 ) -> Tuple[float, float]:
-    """
-    Return (lat, lon) of a point on the selected face of the building,
-    for use in blocking checks. Using the building center would miss shadow
-    that falls on the east face but not on the center (e.g. at 11:30).
-    """
     if not building.footprint or len(building.footprint) < 2:
         clon, clat = building.get_centroid()
         return (clat, clon)
     clon, clat = building.get_centroid()
     cos_lat = math.cos(math.radians(clat))
     face_rad = math.radians(face_angle_deg)
-    # Bearing 0 = north: (dx_north, dy_north) ~ (0, 1) in (lon, lat) delta
-    # Project each vertex onto face direction; pick farthest in that direction
     best_proj = -1e9
     best_pt = (clon, clat)
     for (plon, plat) in building.footprint:
@@ -232,7 +175,6 @@ def _get_face_point_on_building(
         if proj > best_proj:
             best_proj = proj
             best_pt = (plon, plat)
-    # Midpoint between centroid and farthest point = on the face
     face_lon = (clon + best_pt[0]) / 2.0
     face_lat = (clat + best_pt[1]) / 2.0
     return (face_lat, face_lon)
@@ -243,10 +185,6 @@ def _get_face_sample_points(
     face_angle_deg: float,
     n: int = 3,
 ) -> List[Tuple[float, float]]:
-    """
-    Return n points along the face (centroid → face point) for Option C:
-    average shade over multiple points smooths out single-point extremes.
-    """
     if n <= 1:
         return [_get_face_point_on_building(building, face_angle_deg)]
     face_lat, face_lon = _get_face_point_on_building(building, face_angle_deg)
@@ -261,45 +199,40 @@ def _get_face_sample_points(
 
 
 def _compute_building_edges(footprint: List[Tuple[float, float]]) -> List[Dict[str, Any]]:
-    """
-    For each edge of a building footprint, compute outward normal bearing and midpoint.
-    Returns list of {bearing, midpoint_lat, midpoint_lon, cardinal, p1, p2} with ``p1``/``p2``
-    as (lon, lat) endpoints for sampling along the wall.
-    """
     if len(footprint) < 3:
         return []
-    
+
     # Ensure closed ring
     ring = list(footprint)
     if ring[0] != ring[-1]:
         ring.append(ring[0])
-    
+
     # Compute centroid for determining outward direction
     n = len(ring) - 1
     cx = sum(p[0] for p in ring[:-1]) / n
     cy = sum(p[1] for p in ring[:-1]) / n
-    
+
     edges = []
     for i in range(len(ring) - 1):
         p1 = ring[i]
         p2 = ring[i + 1]
-        
+
         # Edge midpoint
         mx = (p1[0] + p2[0]) / 2
         my = (p1[1] + p2[1]) / 2
-        
+
         # Edge direction (tangent)
         dx = p2[0] - p1[0]
         dy = p2[1] - p1[1]
         length = math.sqrt(dx * dx + dy * dy)
         if length < 1e-9:
             continue
-        
+
         # Perpendicular (rotate 90° clockwise: (dx, dy) → (dy, -dx))
         # This gives "right side" normal
         nx = dy / length
         ny = -dx / length
-        
+
         # Check if this normal points outward (away from centroid)
         to_centroid_x = cx - mx
         to_centroid_y = cy - my
@@ -307,11 +240,11 @@ def _compute_building_edges(footprint: List[Tuple[float, float]]) -> List[Dict[s
         if dot > 0:
             # Normal points toward centroid, flip it
             nx, ny = -nx, -ny
-        
+
         # Convert to compass bearing (0=N, 90=E, 180=S, 270=W)
         # atan2(dx, dy) where dx=east, dy=north
         bearing = math.degrees(math.atan2(nx, ny)) % 360
-        
+
         # Nearest cardinal
         if bearing >= 315 or bearing < 45:
             cardinal = "N"
@@ -321,7 +254,7 @@ def _compute_building_edges(footprint: List[Tuple[float, float]]) -> List[Dict[s
             cardinal = "S"
         else:
             cardinal = "W"
-        
+
         edges.append({
             "bearing": round(bearing, 1),
             "cardinal": cardinal,
@@ -330,9 +263,8 @@ def _compute_building_edges(footprint: List[Tuple[float, float]]) -> List[Dict[s
             "p1": (p1[0], p1[1]),
             "p2": (p2[0], p2[1]),
         })
-    
-    return edges
 
+    return edges
 
 def _edge_segment_sample_points(
     p1: Tuple[float, float], p2: Tuple[float, float], n: int = 5
@@ -348,21 +280,8 @@ def _edge_segment_sample_points(
         for i in range(n)
     ]
 
-
-# ─── Main scheduler ────────────────────────────────────────────────────────
-
 class ShadowScheduler:
-    """
-    Shadow-based scheduling engine using real 3D building data.
-
-    Fetches actual building footprints and heights from Mapbox, then uses
-    the ShadowCalculator to project accurate shadow polygons. A ray-casting
-    point-in-polygon test determines whether the target location is shaded
-    at each sampled time.
-    """
-
     TIMEZONE_OFFSET = 4  # UTC+4 (Dubai)
-    # Sample every 1 min within a slot so short periods of full coverage aren't missed
     SLOT_SAMPLE_INTERVAL_MINUTES = 1
 
     def __init__(
@@ -383,7 +302,7 @@ class ShadowScheduler:
 
         self._building_cache: Dict[str, List[Building]] = {}
 
-    # ─── Public API ─────────────────────────────────────────────────
+    #Public API
 
     def find_optimal_schedule(
         self,
@@ -400,22 +319,6 @@ class ShadowScheduler:
         recommendation_count: int = 5,
         client_buildings: Optional[List[Building]] = None
     ) -> ScheduleRecommendation:
-        """
-        Find optimal work window based on real 3D shadow projection.
-
-        1. Fetches nearby buildings (footprints + heights)
-        2. For every candidate time slot, samples shadow state every 5 min
-        3. At each sample: projects shadow polygons, ray-casts to check coverage
-        4. Ranks slots by shadow percentage descending
-
-        If client_buildings is provided, uses those directly (extracted from
-        Mapbox's rendered vector tiles on the frontend) instead of querying
-        the Tilequery API.
-
-        For facade mode: pass face_angle (0-360) for full precision, or
-        building_face ("N"/"E"/"S"/"W") for backward compatibility. face_angle
-        takes precedence when both are provided.
-        """
         buildings = client_buildings if client_buildings else self._fetch_nearby_buildings(lat, lon)
         effective_face = _resolve_face_angle(face_angle, building_face)
         facade_mode = effective_face is not None
@@ -507,14 +410,6 @@ class ShadowScheduler:
         recommendation_count: int = 5,
         client_buildings: Optional[List[Building]] = None
     ) -> ScheduleRecommendation:
-        """
-        Find optimal work window for a polygon area using grid sampling.
-
-        Generates a grid of sample points inside the polygon, fetches buildings
-        near the centroid, then for each candidate time slot averages the shadow
-        state across all grid points — giving a true "what fraction of this area
-        is in shadow" answer.
-        """
         grid = self._sample_polygon_grid(polygon_points)
         if not grid:
             raise ValueError("Could not generate sample points inside the polygon")
@@ -594,11 +489,6 @@ class ShadowScheduler:
         best: TimeSlot,
         count: int,
     ) -> List[TimeSlot]:
-        """
-        Pick up to `count` alternative slots spread across the day so recommendations
-        aren't all clustered in 9–10 and 3–5. Uses time-of-day buckets and takes the
-        best slot per bucket, then fills with next best by shadow % if needed.
-        """
         if count <= 0:
             return []
         rest = [s for s in slots if (s.start, s.end) != (best.start, best.end)]
@@ -1449,64 +1339,6 @@ def _circular_mean_azimuth_deg(azimuths: List[float]) -> float:
     sx = sum(math.sin(math.radians(a)) for a in azimuths)
     cx = sum(math.cos(math.radians(a)) for a in azimuths)
     return _normalize_azimuth_deg(math.degrees(math.atan2(sx, cx)))
-
-
-# ─── Convenience functions (API compatibility) ──────────────────────────────
-
-def find_optimal_schedule(
-    task_name: str,
-    lat: float,
-    lon: float,
-    location_name: str,
-    duration_minutes: int,
-    date: datetime,
-    start_hour: int = 5,
-    end_hour: int = 20,
-    building_face: Optional[str] = None,
-    face_angle: Optional[float] = None,
-    recommendation_count: int = 5
-) -> Dict:
-    """Convenience wrapper returning a dict suitable for API responses."""
-    scheduler = ShadowScheduler()
-    recommendation = scheduler.find_optimal_schedule(
-        task_name=task_name,
-        lat=lat,
-        lon=lon,
-        location_name=location_name,
-        task_duration_minutes=duration_minutes,
-        date=date,
-        start_hour=start_hour,
-        end_hour=end_hour,
-        building_face=building_face,
-        face_angle=face_angle,
-        recommendation_count=recommendation_count
-    )
-    return recommendation.to_dict()
-
-
-def find_optimal_schedule_for_area(
-    task_name: str,
-    polygon_points: List[Tuple[float, float]],
-    location_name: str,
-    duration_minutes: int,
-    date: datetime,
-    start_hour: int = 5,
-    end_hour: int = 20,
-    recommendation_count: int = 5
-) -> Dict:
-    """Convenience wrapper for area-based scheduling returning an API dict."""
-    scheduler = ShadowScheduler()
-    recommendation = scheduler.find_optimal_schedule_for_area(
-        task_name=task_name,
-        polygon_points=polygon_points,
-        location_name=location_name,
-        task_duration_minutes=duration_minutes,
-        date=date,
-        start_hour=start_hour,
-        end_hour=end_hour,
-        recommendation_count=recommendation_count
-    )
-    return recommendation.to_dict()
 
 
 def _circular_abs_diff_deg(a: float, b: float) -> float:

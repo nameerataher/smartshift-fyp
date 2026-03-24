@@ -1,10 +1,5 @@
-"""
-calculates sun position (azimuth and altitude) for any given
-date, time, and location. It uses NOAA astronomical algorithms to compute
-accurate solar positions needed for shadow projection.
-
-"""
-
+# calculates solar position (azimuth and altitude) for any given date, time, and location
+# using NOAA astronomical algorithms
 import math
 from datetime import datetime, timezone
 from typing import Tuple, Dict, Optional
@@ -26,47 +21,39 @@ class SolarPositionCalculator:
         self.longitude = longitude
         self.timezone_offset = timezone_offset
 
-        # validate coordinates
+        #validate coordinates
         if not -90 <= latitude <= 90:
             raise ValueError(f"Latitude must be between -90 and 90, got {latitude}")
         if not -180 <= longitude <= 180:
             raise ValueError(f"Longitude must be between -180 and 180, got {longitude}")
 
     def calculate_julian_day(self, dt: datetime) -> float:
-        """
-        Convert a datetime to Julian Day Number: a continuous count of days since the
-        beginning of the Julian Period (January 1, 4713 BC in the Julian calendar).
-        """
-
-        # Extract components
+        #calculate Julian day for the given date and time: standard for the NOAA algorithms
+        #time measured over centuries: astronomical norm
         year = dt.year
         month = dt.month
         day = dt.day + (dt.hour + dt.minute / 60.0 + dt.second / 3600.0) / 24.0
 
-        # Adjust for January and February (treat as months 13 and 14 of previous year)
+        #adjust for jan and feb (treat as months 13 and 14 of previous year)
         if month <= 2:
             year -= 1
             month += 12
 
-        # Calculate Julian Day using the standard formula
+        #calculate Julian Day using the standard formula
         A = int(year / 100)
         B = 2 - A + int(A / 4)
 
         julian_day = (int(365.25 * (year + 4716)) +
                       int(30.6001 * (month + 1)) +
                       day + B - 1524.5)
-
         return julian_day
 
     def calculate_julian_century(self, julian_day: float) -> float:
         return (julian_day - 2451545.0) / 36525.0
 
     def calculate_geometric_mean_longitude(self, julian_century: float) -> float:
-        L0 = (280.46646 +
-              julian_century * (36000.76983 + 0.0003032 * julian_century))
-
-        # Normalize to 0-360 range
-        return L0 % 360
+        L0 = (280.46646 + julian_century * (36000.76983 + 0.0003032 * julian_century))
+        return L0 % 360 #normalize to 0-360 range
 
     def calculate_geometric_mean_anomaly(self, julian_century: float) -> float:
         return (357.52911 +
@@ -79,7 +66,6 @@ class SolarPositionCalculator:
     def calculate_sun_equation_of_center(self, julian_century: float) -> float:
         M = self.calculate_geometric_mean_anomaly(julian_century)
         M_rad = math.radians(M)
-
         sin_M = math.sin(M_rad)
         sin_2M = math.sin(2 * M_rad)
         sin_3M = math.sin(3 * M_rad)
@@ -87,7 +73,6 @@ class SolarPositionCalculator:
         C = (sin_M * (1.914602 - julian_century * (0.004817 + 0.000014 * julian_century)) +
              sin_2M * (0.019993 - 0.000101 * julian_century) +
              sin_3M * 0.000289)
-
         return C
 
     def calculate_sun_true_longitude(self, julian_century: float) -> float:
@@ -145,15 +130,15 @@ class SolarPositionCalculator:
         return 4 * math.degrees(Etime)  # Convert to minutes
 
     def calculate_hour_angle(self, dt: datetime, julian_century: float) -> float:
-        # Calculate solar time
+        #calculate solar time
         eqtime = self.calculate_equation_of_time(julian_century)
 
-        # Time in minutes from midnight (local time)
-        time_offset = self.timezone_offset * 60  # Timezone offset in minutes
+        #time in minutes from midnight (local time)
+        time_offset = self.timezone_offset * 60  #timezone offset in minutes
         solar_time_minutes = (dt.hour * 60 + dt.minute + dt.second / 60.0 +
                               eqtime + 4 * self.longitude - time_offset)
 
-        # Convert to hour angle (15° per hour, 0° at solar noon)
+        #convert to hour angle (15° per hour, 0° at solar noon)
         hour_angle = (solar_time_minutes / 4.0) - 180.0
 
         return hour_angle
@@ -171,8 +156,6 @@ class SolarPositionCalculator:
 
         cos_zenith = (math.sin(lat_rad) * math.sin(dec_rad) +
                       math.cos(lat_rad) * math.cos(dec_rad) * math.cos(ha_rad))
-
-        # Clamp to valid range to avoid domain errors
         cos_zenith = max(-1.0, min(1.0, cos_zenith))
 
         return math.degrees(math.acos(cos_zenith))
@@ -188,7 +171,7 @@ class SolarPositionCalculator:
         dec_rad = math.radians(dec)
         zenith_rad = math.radians(zenith)
 
-        # Calculate azimuth
+        #calculate azimuth (zenith=noon)
         sin_zenith = math.sin(zenith_rad)
 
         if sin_zenith == 0:
@@ -197,13 +180,11 @@ class SolarPositionCalculator:
 
         cos_azimuth = ((math.sin(lat_rad) * math.cos(zenith_rad) - math.sin(dec_rad)) /
                        (math.cos(lat_rad) * sin_zenith))
-
-        # Clamp to valid range
         cos_azimuth = max(-1.0, min(1.0, cos_azimuth))
 
         azimuth = math.degrees(math.acos(cos_azimuth))
 
-        # Determine if we're in the morning (hour_angle < 0) or afternoon
+        #morning (hour_angle < 0) or afternoon
         if hour_angle > 0:
             azimuth = 360.0 - azimuth
 
@@ -219,8 +200,8 @@ class SolarPositionCalculator:
         lat_rad = math.radians(self.latitude)
         dec_rad = math.radians(dec)
 
-        # Solar depression angle for sunrise/sunset (top of sun at horizon)
-        # 90.833° accounts for atmospheric refraction and sun's apparent radius
+        #solar depression angle for sunrise/sunset (top of sun at horizon)
+        #90.833° accounts for atmospheric refraction and sun's apparent radius
         zenith_angle = 90.833
 
         cos_hour_angle = ((math.cos(math.radians(zenith_angle)) /
@@ -305,8 +286,6 @@ class SolarPositionCalculator:
 
         return positions
 
-
-# Convenience function for quick calculations
 def get_dubai_sun_position(dt: datetime) -> SunPosition:
     calculator = SolarPositionCalculator(
         latitude=25.2048,
@@ -314,7 +293,6 @@ def get_dubai_sun_position(dt: datetime) -> SunPosition:
         timezone_offset=4.0
     )
     return calculator.get_sun_position(dt)
-
 
 # Example usage and testing
 if __name__ == "__main__":
@@ -325,7 +303,6 @@ if __name__ == "__main__":
         timezone_offset=4.0
     )
 
-    # Test with current time
     now = datetime.now()
     position = dubai_calc.get_sun_position(now)
 

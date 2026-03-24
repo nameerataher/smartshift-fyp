@@ -1,83 +1,28 @@
-# Install with: pip install -r requirements.txt
+#install with: pip install -r requirements.txt
 
-# =============================================================================
-# web framework
-# =============================================================================
-flask>=3.0.0                    # core web framework for api server
-flask-cors>=4.0.0               # cross-origin resource sharing support
-python-dotenv>=1.0.0            # load .env for API keys (e.g. GOOGLE_DIRECTIONS_API_KEY)
+#web framework
+flask>=3.0.0                    #core web framework for api server
+flask-cors>=4.0.0               #cross-origin resource sharing support
+python-dotenv>=1.0.0            #load .env for API keys
 
-# =============================================================================
-# weather data (open-meteo official sdk)
-# =============================================================================
-openmeteo-requests>=1.3.0       # official open-meteo sdk
-requests-cache>=1.0.0           # caching for weather requests
-retry-requests>=2.0.0           # automatic retry on errors
-pandas>=2.0.0                   # data handling for open-meteo
-requests>=2.31.0                # http requests (used by openmeteo-requests)
+#weather data
+openmeteo-requests>=1.3.0       #official open-meteo sdk
+requests-cache>=1.0.0           #caching for weather requests
+retry-requests>=2.0.0           #automatic retry on errors
+pandas>=2.0.0                   #data handling for open-meteo
+requests>=2.31.0                #http requests (used by openmeteo-requests)
 
-# =============================================================================
-# machine learning (for heat risk & schedule optimization models)
-# =============================================================================
+#machine learning
 numpy>=1.24.0                   # numerical computations
 scikit-learn>=1.3.0             # randomforestclassifier, gradientboostingregressor
 joblib>=1.3.0                   # model persistence (save/load trained models)
 
-# =============================================================================
-# database (postgresql support - optional, falls back to sqlite)
-# =============================================================================
-psycopg2-binary>=2.9.0          # postgresql driver (use psycopg2 in production)
+#database
+psycopg2-binary>=2.9.0          #postgresql driver
 
-# =============================================================================
-# navigation & mapping (shade-optimized routing)
-# =============================================================================
-networkx>=3.2                   # A* and Yen's K-shortest-paths algorithms
-shapely>=2.0.0                  # merge shadow polygons, area-based coverage
-# osmnx>=2.0.0                  # optional – only if using full OSM graph mode
+#navigation & mapping
+networkx>=3.2                   #K-shortest-paths algorithms
+shapely>=2.0.0                  #merge shadow polygons, area-based coverage
 
-# =============================================================================
-# packages used from python standard library (no need to install)
-# =============================================================================
-#   - math (trigonometric calculations)
-#   - datetime (date/time handling)
-#   - dataclasses (data structures)
-#   - typing (type hints)
-#   - json (json serialization)
-#   - os (file operations)
-#   - pickle (alternative serialization)
-
-# =============================================================================
-# development dependencies (optional)
-# =============================================================================
-pytest>=7.4.0                   # testing framework
-# black>=24.0.0                 # code formatting
-# mypy>=1.8.0                   # type checking
-
-# =============================================================================
-# data sources documentation
-# =============================================================================
-#
-# weather data (temperature, humidity, wind):
-#   - meteostat: free api, pip install meteostat
-#     docs: https://dev.meteostat.net/python/
-#     usage: from meteostat import Point, Hourly
-#
-#   - era5 (copernicus): more comprehensive, requires account
-#     docs: https://cds.climate.copernicus.eu/
-#     usage: climate data store api
-#
-# surface type data (asphalt, grass, concrete):
-#   - openstreetmap: free, query via overpass api
-#     example: surface=asphalt, landuse=grass
-#     docs: https://wiki.openstreetmap.org/wiki/Key:surface
-#
-#   - mapbox: tilequery api for land use
-#     docs: https://docs.mapbox.com/api/maps/tilequery/
-#
-# building data (for shadow calculations):
-#   - openstreetmap: building footprints and heights
-#     tag: building=*, height=*
-#
-#   - mapbox: 3d buildings in mapbox gl js
-#
-# =============================================================================
+# testing framework
+pytest>=7.4.0
