@@ -21,7 +21,6 @@ joblib>=1.3.0                   # model persistence (save/load trained models)
 psycopg2-binary>=2.9.0          #postgresql driver
 
 #navigation & mapping
-networkx>=3.2                   #K-shortest-paths algorithms
 shapely>=2.0.0                  #merge shadow polygons, area-based coverage
 
 # testing framework

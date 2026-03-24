@@ -699,28 +699,6 @@ def get_shaded_navigation_route():
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400
 
-@app.route('/api/v2/shadow-route', methods=['POST'])
-def get_shadow_optimized_route():
-    if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:
-        return jsonify({"success": False, "error": "ShadeRouter not available"}), 503
-    try:
-        data = request.get_json() or {}
-        start_lat = float(data.get('start_lat', DUBAI.LATITUDE))
-        start_lon = float(data.get('start_lon', DUBAI.LONGITUDE))
-        end_lat = float(data.get('end_lat', DUBAI.LATITUDE + 0.01))
-        end_lon = float(data.get('end_lon', DUBAI.LONGITUDE + 0.01))
-        mode = data.get('mode', 'walking')
-        if mode not in ['walking', 'cycling']:
-            mode = 'walking'
-        date_str = data.get('date')
-        current_minutes = data.get('current_minutes')
-        client_buildings = data.get('buildings')
-        router = ShadeRouter()
-        result = router.find_routes(start_lat=start_lat, start_lon=start_lon, end_lat=end_lat, end_lon=end_lon, mode=mode, k=3, client_buildings=client_buildings, date_str=date_str, current_minutes=(int(current_minutes) if current_minutes is not None else None))
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 400
-
 @app.route('/api/v2/shadow-route/update', methods=['POST'])
 def update_shadow_route():
     if not SHADE_ROUTER_AVAILABLE or not ShadeRouter:

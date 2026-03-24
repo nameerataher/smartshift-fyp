@@ -11,55 +11,6 @@ router_skip = pytest.mark.skipif(
 )
 
 @router_skip
-@patch("api_server.ShadeRouter")
-def test_v2_shadow_route_invalid_mode_defaults_to_walking(mock_router_cls, client):
-    inst = mock_router_cls.return_value
-    inst.find_routes.return_value = {"success": True, "routes": []}
-    client.post(
-        "/api/v2/shadow-route",
-        data=json.dumps(
-            {
-                "start_lat": 25.2,
-                "start_lon": 55.27,
-                "end_lat": 25.21,
-                "end_lon": 55.28,
-                "mode": "driving",
-                "date": "2026-06-15",
-                "current_minutes": 600,
-            }
-        ),
-        content_type="application/json",
-    )
-    inst.find_routes.assert_called()
-    kwargs = inst.find_routes.call_args.kwargs
-    assert kwargs.get("mode") == "walking"
-
-@router_skip
-@patch("api_server.ShadeRouter")
-def test_v2_shadow_route_accepts_walking_and_cycling(mock_router_cls, client):
-    inst = mock_router_cls.return_value
-    inst.find_routes.return_value = {"success": True, "routes": []}
-
-    for mode in ("walking", "cycling"):
-        r = client.post(
-            "/api/v2/shadow-route",
-            data=json.dumps(
-                {
-                    "start_lat": 25.2,
-                    "start_lon": 55.27,
-                    "end_lat": 25.21,
-                    "end_lon": 55.28,
-                    "mode": mode,
-                    "date": "2026-06-15",
-                    "current_minutes": 480,
-                }
-            ),
-            content_type="application/json",
-        )
-        assert r.status_code == 200
-        assert inst.find_routes.call_args.kwargs.get("mode") == mode
-
-@router_skip
 def test_route_segment_shadows_requires_two_points(client):
     r = client.post(
         "/api/v2/route-segment-shadows",
