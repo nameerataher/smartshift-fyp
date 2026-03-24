@@ -844,7 +844,7 @@ def get_mapbox_cycling_directions():
         start_lon = float(data.get("start_lon", DUBAI.LONGITUDE))
         end_lat = float(data.get("end_lat", DUBAI.LATITUDE + 0.01))
         end_lon = float(data.get("end_lon", DUBAI.LONGITUDE + 0.01))
-        result = mapbox_get_directions(start_lon=start_lon, start_lat=start_lat, end_lon=end_lon, end_lat=end_lat, mode="cycling", alternatives=True, steps=True)
+        result = mapbox_get_directions(start_lon=start_lon, start_lat=start_lat, end_lon=end_lon, end_lat=end_lat, mode="cycling")
         return jsonify(result)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 400

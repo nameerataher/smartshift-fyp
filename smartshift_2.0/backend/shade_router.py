@@ -1,20 +1,3 @@
-"""
-shade_router.py — realistic shade-aware routing
-
-Pipeline
---------
-1. Mapbox Directions API provides realistic, connected candidate routes
-2. Mapbox Tilequery road features enrich the nearby road graph
-3. Both sources are merged into one directed graph
-4. Buildings are fetched along the actual route corridor
-5. Each edge is sampled at multiple points for time-specific shadow exposure
-6. A* optimizes for shade-weighted travel cost
-7. Yen's K-shortest returns a few realistic alternatives
-
-This hybrid approach keeps routes connected and road-realistic while still
-allowing the router to strongly prefer streets with better building shade.
-"""
-
 import hashlib
 import itertools
 import math
@@ -745,17 +728,6 @@ class ShadeRouter:
             G.nodes[v]["y"], G.nodes[v]["x"],
         )
 
-    def _yen(self, G, src, tgt, k):
-        try:
-            return list(
-                itertools.islice(
-                    nx.shortest_simple_paths(G, src, tgt, weight="shade_cost"),
-                    k,
-                )
-            )
-        except (nx.NetworkXNoPath, nx.NodeNotFound, nx.NetworkXNotImplemented):
-            return []
-
     def _shortest_paths_by_weight(self, G, src, tgt, weight, k):
         try:
             return list(
@@ -878,7 +850,7 @@ class ShadeRouter:
             mid_lon = (ux + vx) / 2
             mid_lat = (uy + vy) / 2
 
-            edge_time = departure_time + timedelta(seconds=elapsed_seconds + seg_d / max(speed, 0.1))
+            edge_time = dep + timedelta(seconds=elapsed_seconds + seg_d / max(speed, 0.1))
             sun = self._sun(edge_time, mid_lat, mid_lon)
             shadow_polys = self._shadow_polys_for_bucket(
                 buildings, sun, edge_time, shadow_cache,

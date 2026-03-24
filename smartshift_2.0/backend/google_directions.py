@@ -1,20 +1,9 @@
-"""
-google_directions.py — Google Routes API integration
-
-Uses the Routes API (directions v2 computeRoutes), not the legacy Directions API.
-Returns route geometry, distance, duration in a shape compatible with Mapbox
-for side-by-side comparison.
-Requires GOOGLE_DIRECTIONS_API_KEY (env or pass-in).
-"""
-
 import os
 import re
 import requests as http_req
 from typing import Dict, List, Optional, Any, Tuple
 
-
 def _decode_polyline(encoded: str) -> List[List[float]]:
-    """Decode Google's encoded polyline to list of [lon, lat] (for GeoJSON)."""
     if not encoded:
         return []
     coords: List[Tuple[float, float]] = []
@@ -51,7 +40,6 @@ def _decode_polyline(encoded: str) -> List[List[float]]:
 
 
 def _parse_duration_seconds(duration_str: Optional[str]) -> float:
-    """Parse Routes API duration string (e.g. '123s' or '45.5s') to seconds."""
     if not duration_str or not isinstance(duration_str, str):
         return 0.0
     s = duration_str.strip().rstrip("s").strip()
@@ -60,20 +48,14 @@ def _parse_duration_seconds(duration_str: Optional[str]) -> float:
     except ValueError:
         return 0.0
 
-
-# Routes API travel modes (not legacy).
-# Note: Google Routes API does not expose traffic signals or pedestrian-crossing logic in the response;
-# it routes along pedestrian-appropriate paths (sidewalks, crossings) by default.
 MODE_MAP = {
     "walking": "WALK",
     "running": "WALK",
     "cycling": "BICYCLE",
 }
 
-# For running we use the same route as walking but scale duration by speed ratio.
 WALK_SPEED_MS = 1.4
 RUN_SPEED_MS = 2.6
-
 
 def get_directions(
     start_lat: float,
@@ -143,23 +125,17 @@ def get_directions(
     for idx, route in enumerate(routes_in):
         polyline = route.get("polyline") or {}
         coords: List[List[float]] = []
-        # Prefer GeoJSON so we get [lon, lat] without decoding (avoids encoding issues)
-        if polyline.get("geoJsonLinestring"):
-            geo = polyline.get("geoJsonLinestring")
+        geo = polyline.get("geoJsonLinestring")
+        if geo:
             if isinstance(geo, dict) and geo.get("type") == "LineString":
                 coords = list(geo.get("coordinates") or [])
             elif isinstance(geo, dict) and "coordinates" in geo:
                 coords = list(geo.get("coordinates") or [])
+            elif isinstance(geo, list):
+                coords = list(geo)
         if not coords:
             encoded = polyline.get("encodedPolyline") or ""
             coords = _decode_polyline(encoded)
-            # Routes API can return GeoJSON LineString in polyline as well
-            if not coords and polyline.get("geoJsonLinestring"):
-                geo = polyline.get("geoJsonLinestring") or {}
-                if isinstance(geo, dict) and geo.get("type") == "LineString":
-                    coords = list(geo.get("coordinates") or [])
-                elif isinstance(geo, list):
-                    coords = list(geo)
         distance_m = int(route.get("distanceMeters", 0))
         duration_sec = _parse_duration_seconds(route.get("duration"))
         if mode.lower() == "running":
