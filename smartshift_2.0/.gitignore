@@ -1,7 +1,5 @@
 .cache.sqlite
 *.sqlite
-# Local app database (user data; never commit)
-backend/smartshift.db
 .cache/
 cache/
 .graph_cache/
