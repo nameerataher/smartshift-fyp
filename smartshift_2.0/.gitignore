@@ -11,6 +11,12 @@ __pycache__/
 *.pyc
 *.so
 
+# Large GIS datasets
+*.geojson
+*.gpkg
+
+smartshift/data/
+
 #packages
 .Python
 build/
