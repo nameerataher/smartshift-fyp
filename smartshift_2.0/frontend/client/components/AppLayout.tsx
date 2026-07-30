@@ -5,6 +5,7 @@ import { useLocation } from "react-router-dom";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
 import { ThemeSelect } from "@/components/ThemeSelect";
+import { Logo } from "@/components/Logo";
 
 interface AppLayoutProps {
   children: React.ReactNode;
@@ -51,10 +52,8 @@ export function AppLayout({ children }: AppLayoutProps) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between gap-4">
             <Link to="/" className="flex items-center gap-3 shrink-0">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-amber-400 flex items-center justify-center">
-                <Sun className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <span className="text-xl font-bold text-foreground hidden sm:block">SmartShift</span>
+              <Logo className="w-10 h-10" />
+              <span className="font-garet text-xl font-bold text-foreground hidden sm:block">ShadeMe</span>
             </Link>
 
             {!isPersonalUser && (

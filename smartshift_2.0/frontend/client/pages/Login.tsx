@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { Sun, Mail, Lock, User, Building2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { useMode } from "@/hooks/useMode";
+import { Logo } from "@/components/Logo";
 
 export default function Login() {
   const navigate = useNavigate();
@@ -47,10 +48,8 @@ export default function Login() {
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-slate-50 dark:to-slate-900 flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <Link to="/" className="flex items-center justify-center gap-3 mb-8">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-amber-400 flex items-center justify-center shadow-lg">
-            <Sun className="w-7 h-7 text-primary-foreground" />
-          </div>
-          <span className="text-2xl font-bold text-foreground">SmartShift</span>
+          <Logo className="w-12 h-12" />
+          <span className="font-garet text-2xl font-bold text-foreground">ShadeMe</span>
         </Link>
 
         <div className="bg-card border border-border rounded-2xl shadow-xl p-8">
@@ -58,7 +57,7 @@ export default function Login() {
             {isRegister ? "Create Account" : "Welcome Back"}
           </h2>
           <p className="text-sm text-muted-foreground text-center mb-6">
-            {isRegister ? "Start optimizing your outdoor work" : "Sign in to your SmartShift account"}
+            {isRegister ? "Start optimizing your outdoor work" : "Sign in to your ShadeMe account"}
           </p>
 
           {!isRegister && (

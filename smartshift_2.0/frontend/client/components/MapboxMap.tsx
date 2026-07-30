@@ -19,7 +19,7 @@ import {
 } from "@/lib/lightingHelpers";
 
 const DEFAULT_TOKEN =
-  "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
+  "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ";
 const TOKEN_KEY = "smartshift:mapboxToken";
 
 function loadToken(): string {
@@ -199,6 +199,8 @@ export interface MapboxMapProps {
   drawPolygonMode?: boolean;
   onPolygonDrawn?: (points: [number, number][]) => void;
   drawnPolygon?: [number, number][] | null;
+  /** Additional already-drawn polygons to render statically (e.g. other work zones), each with its own color/label. */
+  extraPolygons?: Array<{ id: string; points: [number, number][]; color?: string; label?: string }>;
   debugShadowGeoJSON?: any | null;
   mapInstanceRef?: React.MutableRefObject<mapboxgl.Map | null>;
   // Facade mode
@@ -345,6 +347,7 @@ export default function MapboxMap({
   drawPolygonMode,
   onPolygonDrawn,
   drawnPolygon,
+  extraPolygons,
   debugShadowGeoJSON,
   mapInstanceRef,
   facadeSelectMode,
@@ -924,6 +927,72 @@ export default function MapboxMap({
       paint: { "line-color": "#3b82f6", "line-width": 2, "line-dasharray": [2, 2] },
     } as any);
   }, [drawnPolygon]);
+
+  // ── Render multiple static work-zone polygons (e.g. already-drawn zones) ─
+  const extraPolygonsKey = JSON.stringify(extraPolygons ?? []);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReadyRef.current) return;
+
+    const SRC = "extra-polygons-src";
+    const FILL = "extra-polygons-fill";
+    const LINE = "extra-polygons-line";
+    const LABEL = "extra-polygons-label";
+
+    try { if (map.getLayer(LABEL)) map.removeLayer(LABEL); } catch {}
+    try { if (map.getLayer(FILL)) map.removeLayer(FILL); } catch {}
+    try { if (map.getLayer(LINE)) map.removeLayer(LINE); } catch {}
+    try { if (map.getSource(SRC)) map.removeSource(SRC); } catch {}
+
+    const zones = (extraPolygons ?? []).filter((z) => z.points.length >= 3);
+    if (zones.length === 0) return;
+
+    map.addSource(SRC, {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: zones.map((z) => {
+          const cLng = z.points.reduce((s, p) => s + p[0], 0) / z.points.length;
+          const cLat = z.points.reduce((s, p) => s + p[1], 0) / z.points.length;
+          return {
+            type: "Feature",
+            properties: { color: z.color || "#3b82f6", label: z.label || "", cLng, cLat },
+            geometry: { type: "Polygon", coordinates: [z.points] },
+          };
+        }),
+      },
+    });
+    map.addLayer({
+      id: FILL,
+      type: "fill",
+      source: SRC,
+      slot: "top",
+      paint: { "fill-color": ["get", "color"], "fill-opacity": 0.18 },
+    } as any);
+    map.addLayer({
+      id: LINE,
+      type: "line",
+      source: SRC,
+      slot: "top",
+      paint: { "line-color": ["get", "color"], "line-width": 2 },
+    } as any);
+    map.addLayer({
+      id: LABEL,
+      type: "symbol",
+      source: SRC,
+      slot: "top",
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 14,
+        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+      },
+      paint: {
+        "text-color": ["get", "color"],
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.5,
+      },
+    } as any);
+  }, [extraPolygonsKey]);
 
   // ── Debug shadow + footprint overlay ─────────────────────────────────────
   useEffect(() => {

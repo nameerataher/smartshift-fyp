@@ -20,7 +20,7 @@ import {
 } from "@/lib/sunCalculations";
 
 const API_BASE = "http://localhost:8002";
-const MAPBOX_TOKEN = "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
+const MAPBOX_TOKEN = "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ";
 
 interface HeatRisk {
   risk_level?: string;

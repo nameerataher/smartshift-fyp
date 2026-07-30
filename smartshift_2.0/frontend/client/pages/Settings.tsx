@@ -136,7 +136,7 @@ export default function SettingsPage() {
             <div>
               <h3 className="font-medium text-foreground mb-1">Theme</h3>
               <p className="text-sm text-muted-foreground mb-3">
-                Choose how SmartShift looks. Light and Dark follow your preference; Contrast increases contrast for easier reading.
+                Choose how ShadeMe looks. Light and Dark follow your preference; Contrast increases contrast for easier reading.
               </p>
               <div className="flex flex-wrap gap-2">
                 {THEME_OPTIONS.map((opt) => (
@@ -181,7 +181,7 @@ export default function SettingsPage() {
                 <h3 className="font-medium text-foreground">Keyboard shortcuts</h3>
               </div>
               <p className="text-sm text-muted-foreground mb-3">
-                SmartShift supports full keyboard navigation. Press Tab to move between elements, Enter/Space to activate. Dialogs close with Escape. Press ? to view all shortcuts.
+                ShadeMe supports full keyboard navigation. Press Tab to move between elements, Enter/Space to activate. Dialogs close with Escape. Press ? to view all shortcuts.
               </p>
               <button
                 onClick={() => setShortcutsOpen(true)}
@@ -452,7 +452,7 @@ export default function SettingsPage() {
         <div className="flex-1 min-w-0 max-w-2xl space-y-6">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-foreground">Settings</h1>
-            <p className="text-muted-foreground mt-2">Customize your SmartShift experience</p>
+            <p className="text-muted-foreground mt-2">Customize your ShadeMe experience</p>
           </div>
 
           {renderSection()}

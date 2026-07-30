@@ -1,13 +1,20 @@
 /** @import must precede all other statements */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap");
+@import url("https://api.fontshare.com/v2/css?f[]=garet@400,500,600,700&display=swap");
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+@layer utilities {
+  .font-garet {
+    font-family: "Garet", "Inter", sans-serif;
+  }
+}
+
 @layer base {
   /**
-   * Tailwind CSS theme for SmartShift
+   * Tailwind CSS theme for ShadeMe
    * tailwind.config.ts expects the following color variables to be expressed as HSL values.
    * A different format will require also updating the theme in tailwind.config.ts.
   */

@@ -5,7 +5,7 @@ import {
   Sun, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin,
   RotateCcw, Play, Pause, Briefcase, X, CheckCircle,
   Plus, Clock, Zap, Search, Loader2, LayoutDashboard, Locate,
-  Bookmark, Trash2, Activity,
+  Bookmark, Trash2, Activity, ChevronUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import MapboxMap, {
@@ -16,6 +16,8 @@ import mapboxgl from "mapbox-gl";
 import { useMode } from "@/hooks/useMode";
 import { useAuth } from "@/hooks/useAuth";
 import { ThemeSelect } from "@/components/ThemeSelect";
+import { Logo } from "@/components/Logo";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   calculateSunPosition,
   formatTime,
@@ -27,9 +29,9 @@ import {
   fetchSunriseSunsetDubai,
   SunPosition,
 } from "@/lib/sunCalculations";
+import { getMapboxToken } from "@/lib/mapboxToken";
 
 const API_BASE = "http://localhost:8002";
-const MAPBOX_TOKEN = "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9.WI13BJqDyOu6G38-YP6hog";
 
 interface TurnStep {
   instruction: string;
@@ -167,6 +169,16 @@ interface SavedPlaceItem {
   lon: number;
 }
 
+/** Format minutes since midnight as "H:MM AM/PM" (used for work-zone recommendation times). */
+function formatTime12(minutes: number): string {
+  const total = ((minutes % 1440) + 1440) % 1440;
+  const h24 = Math.floor(total / 60);
+  const m = total % 60;
+  const period = h24 < 12 ? "AM" : "PM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${period}`;
+}
+
 /** Shade coverage bands: 81–100 Very High, 61–80 High, 41–60 Moderate, 21–40 Low, 0–20 Very Low */
 function recQuality(shadePct: number): WindowRec["quality"] {
   if (shadePct >= 81) return "excellent";
@@ -229,7 +241,7 @@ async function fetchScheduleFromBackend(
         date: dateStr,
         start_hour: startHour,
         end_hour: endHour,
-        recommendation_count: 5,
+        recommendation_count: 10,
         buildings: buildingsPayload,
       };
       res = await fetch(`${API_BASE}/api/v2/schedule/area`, {
@@ -275,9 +287,9 @@ async function fetchScheduleFromBackend(
       const reason = isBest ? rec.recommendation_reason : (slot.recommendation_reason ?? undefined);
       return {
         id: `${isBest ? "best" : "alt"}-${startMin}-${endMin}`,
-        title: `${formatTime(startMin)} – ${formatTime(endMin)}`,
+        title: `${formatTime12(startMin)} – ${formatTime12(endMin)}`,
         start: startMin, end: endMin,
-        timeLabel: slot.time_label || `${formatTime(startMin)} – ${formatTime(endMin)}`,
+        timeLabel: slot.time_label || `${formatTime12(startMin)} – ${formatTime12(endMin)}`,
         uv, uvCat: getUVCategoryStyle(uv), shadePct, quality,
         reason: reason || undefined,
         debug: slot.debug || undefined,
@@ -286,7 +298,7 @@ async function fetchScheduleFromBackend(
 
     const bestRec = makeRec(best, true);
     if (bestRec) results.push(bestRec);
-    for (const alt of alternatives.slice(0, 4)) {
+    for (const alt of alternatives.slice(0, 9)) {
       const r = makeRec(alt, false);
       if (r) results.push(r);
     }
@@ -370,8 +382,8 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
     const shadePct = calculateShadowCoverage(sp.altitude);
     const quality = recQuality(shadePct);
     results.push({
-      id: `${s}-${e}`, title: `${formatTime(s)} – ${formatTime(e)}`,
-      start: s, end: e, timeLabel: `${formatTime(s)} – ${formatTime(e)}`,
+      id: `${s}-${e}`, title: `${formatTime12(s)} – ${formatTime12(e)}`,
+      start: s, end: e, timeLabel: `${formatTime12(s)} – ${formatTime12(e)}`,
       uv, uvCat, shadePct, quality, score: shadePct,
     });
   }
@@ -399,6 +411,7 @@ export default function MapPage() {
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [animSpeed, setAnimSpeed] = useState(500);
+  const [timeCardCollapsed, setTimeCardCollapsed] = useState(false);
   const animRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [sunPos, setSunPos] = useState<SunPosition | null>(null);
@@ -477,7 +490,7 @@ export default function MapPage() {
     if (val.trim().length < 2) { setSuggestions([]); return; }
     geoTimeoutRef.current = setTimeout(async () => {
       try {
-        const url = `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&country=AE&limit=6&proximity=55.2708,25.2048&access_token=${MAPBOX_TOKEN}&session_token=${searchSessionToken}`;
+        const url = `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&country=AE&limit=6&proximity=55.2708,25.2048&access_token=${getMapboxToken()}&session_token=${searchSessionToken}`;
         const res = await fetch(url);
         const data = await res.json();
         setSuggestions(data.suggestions || []);
@@ -517,6 +530,8 @@ export default function MapPage() {
   const [facadeWorkStartMinute, setFacadeWorkStartMinute] = useState(0);
   const [facadeTimeResult, setFacadeTimeResult] = useState<FacadeTimeResult | null>(null);
   const [showBuildingsOverlay, setShowBuildingsOverlay] = useState(false);
+  /** Legacy single-zone popup flow, kept for future use but no longer rendered. */
+  const SHOW_LEGACY_SITE_ANALYSIS = false;
   const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
 
   const getClientBuildings = useCallback((lat: number, lon: number): ClientBuilding[] => {
@@ -524,6 +539,143 @@ export default function MapPage() {
     if (!map) return [];
     return queryBuildingsFromMap(map, lon, lat);
   }, []);
+
+  // ── Multi work-zone flow ──────────────────────────────────────────────
+  const ZONE_LETTERS = ["A", "B", "C", "D", "E"];
+  const MAX_ZONES = 5;
+  const ZONE_COLORS = ["#3b82f6", "#f97316", "#10b981", "#a855f7", "#ef4444"];
+  /** Hour-of-day options (0–24) labeled in 12h AM/PM for the zone start/end pickers. */
+  const HOUR_OPTIONS = Array.from({ length: 25 }, (_, h) => ({
+    value: h,
+    label: h === 24 ? "12:00 AM (end of day)" : h === 0 ? "12:00 AM" : h < 12 ? `${h}:00 AM` : h === 12 ? "12:00 PM" : `${h - 12}:00 PM`,
+  }));
+
+  interface WorkZoneItem {
+    id: string;
+    label: string;
+    polygon: [number, number][] | null;
+    startHour: number;
+    endHour: number;
+    durationMinutes: number;
+    status: "empty" | "drawing" | "ready" | "loading" | "done" | "error";
+    recs: WindowRec[]; // top 2 shown on the zone card: best + moderate, worst excluded
+    candidates: WindowRec[]; // full acceptable pool (sorted by shade% desc), used to build the non-overlapping combined schedule
+    error?: string;
+  }
+
+  const [multiZoneTaskName, setMultiZoneTaskName] = useState("");
+  const [workZones, setWorkZones] = useState<WorkZoneItem[]>([]);
+  const [drawingZoneId, setDrawingZoneId] = useState<string | null>(null);
+  const [multiZoneLoading, setMultiZoneLoading] = useState(false);
+
+  const addWorkZone = () => {
+    if (workZones.length >= MAX_ZONES) return;
+    const id = `zone-${Date.now()}-${workZones.length}`;
+    const zone: WorkZoneItem = {
+      id,
+      label: `Zone ${ZONE_LETTERS[workZones.length]}`,
+      polygon: null,
+      startHour: 9,
+      endHour: 17,
+      durationMinutes: 60,
+      status: "drawing",
+      recs: [],
+      candidates: [],
+    };
+    setWorkZones((zs) => [...zs, zone]);
+    setDrawingZoneId(id);
+  };
+
+  const removeWorkZone = (id: string) => {
+    setWorkZones((zs) =>
+      zs
+        .filter((z) => z.id !== id)
+        .map((z, i) => ({ ...z, label: `Zone ${ZONE_LETTERS[i]}` }))
+    );
+    if (drawingZoneId === id) setDrawingZoneId(null);
+  };
+
+  const updateWorkZone = (id: string, patch: Partial<WorkZoneItem>) => {
+    setWorkZones((zs) => zs.map((z) => (z.id === id ? { ...z, ...patch } : z)));
+  };
+
+  const redrawWorkZone = (id: string) => {
+    updateWorkZone(id, { polygon: null, status: "drawing", recs: [], candidates: [] });
+    setDrawingZoneId(id);
+  };
+
+  /** Rank a zone's recommendations best-first, dropping low/poor (worst) slots. */
+  const pickAcceptable = (recs: WindowRec[]): WindowRec[] =>
+    [...recs].sort((a, b) => b.shadePct - a.shadePct).filter((r) => r.quality !== "low" && r.quality !== "poor");
+
+  const calculateMultiZoneSchedule = async () => {
+    const readyZones = workZones.filter((z) => z.polygon && z.polygon.length >= 3);
+    if (readyZones.length === 0) {
+      toast.error("Draw at least one work zone polygon first.");
+      return;
+    }
+    for (const z of readyZones) {
+      if (z.endHour <= z.startHour) {
+        toast.error(`${z.label}: end hour must be after start hour.`);
+        return;
+      }
+    }
+
+    setMultiZoneLoading(true);
+    setWorkZones((zs) =>
+      zs.map((z) => (z.polygon && z.polygon.length >= 3 ? { ...z, status: "loading", error: undefined } : z))
+    );
+
+    await Promise.all(
+      readyZones.map(async (zone) => {
+        const polygon = zone.polygon!;
+        const centroidLng = polygon.reduce((s, p) => s + p[0], 0) / polygon.length;
+        const centroidLat = polygon.reduce((s, p) => s + p[1], 0) / polygon.length;
+        const buildings = getClientBuildings(centroidLat, centroidLng);
+        try {
+          const result = await fetchScheduleFromBackend(
+            multiZoneTaskName || zone.label,
+            centroidLat, centroidLng,
+            zone.label,
+            dateStr, zone.durationMinutes, zone.startHour, zone.endHour,
+            polygon,
+            buildings
+          );
+          const acceptable = pickAcceptable(result.recs);
+          updateWorkZone(zone.id, { status: "done", recs: acceptable.slice(0, 2), candidates: acceptable });
+        } catch {
+          updateWorkZone(zone.id, { status: "error", error: "Failed to analyze this zone.", recs: [], candidates: [] });
+        }
+      })
+    );
+
+    setMultiZoneLoading(false);
+  };
+
+  /**
+   * Sequential, non-overlapping day plan: walk zones in the order they were added and give each
+   * the best-shade candidate slot that doesn't collide with a slot already claimed by an earlier zone.
+   * Zones with no free slot left in their own window are reported separately (not silently dropped).
+   */
+  const combinedZoneSchedule = (() => {
+    const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }) =>
+      a.start < b.end && b.start < a.end;
+    const assigned: Array<{ start: number; end: number }> = [];
+    const rows: Array<{ zone: WorkZoneItem; best: WindowRec | null; moderate: WindowRec | null }> = [];
+
+    for (const zone of workZones) {
+      if (zone.candidates.length === 0) continue;
+      const free = zone.candidates.filter((c) => !assigned.some((iv) => overlaps(iv, { start: c.start, end: c.end })));
+      const best = free[0] ?? null;
+      if (best) assigned.push({ start: best.start, end: best.end });
+      const moderate = free.find((c) => c.id !== best?.id) ?? null;
+      rows.push({ zone, best, moderate });
+    }
+
+    const scheduled = rows.filter((r) => r.best).sort((a, b) => a.best!.start - b.best!.start);
+    const unscheduled = rows.filter((r) => !r.best);
+    return [...scheduled, ...unscheduled];
+  })();
 
   // Saved places
   const [savedPlaces, setSavedPlaces] = useState<SavedPlaceItem[]>([]);
@@ -676,7 +828,7 @@ export default function MapPage() {
     timeoutRef.current = setTimeout(async () => {
       try {
         const res = await fetch(
-          `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&limit=6&proximity=55.2708,25.2048&session_token=${searchSessionToken}&access_token=${MAPBOX_TOKEN}`
+          `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encodeURIComponent(val)}&language=en&limit=6&proximity=55.2708,25.2048&session_token=${searchSessionToken}&access_token=${getMapboxToken()}`
         );
         const data = await res.json();
         setSugg(data.suggestions || []);
@@ -686,7 +838,7 @@ export default function MapPage() {
 
   const selectRouteLocation = async (s: SearchSuggestion, type: "from" | "to") => {
     try {
-      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?session_token=${searchSessionToken}&access_token=${MAPBOX_TOKEN}`);
+      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?session_token=${searchSessionToken}&access_token=${getMapboxToken()}`);
       const data = await res.json();
       const coords = data.features?.[0]?.geometry?.coordinates as [number, number] | undefined;
       const label = s.full_address || s.place_formatted || s.name;
@@ -733,7 +885,7 @@ export default function MapPage() {
 
   const selectSuggestion = async (s: SearchSuggestion) => {
     try {
-      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?access_token=${MAPBOX_TOKEN}&session_token=${searchSessionToken}`);
+      const res = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${s.mapbox_id}?access_token=${getMapboxToken()}&session_token=${searchSessionToken}`);
       const data = await res.json();
       const feature = data.features?.[0];
       const center = feature?.geometry?.coordinates as [number, number] | undefined;
@@ -1490,10 +1642,8 @@ export default function MapPage() {
         <div className="max-w-full px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between gap-4">
             <Link to="/" className="flex items-center gap-3 shrink-0">
-              <div className="w-10 h-10 bg-gradient-to-br from-primary to-amber-400 rounded-lg flex items-center justify-center shadow-md">
-                <Sun className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <span className="text-xl font-bold text-foreground hidden sm:block">SmartShift</span>
+              <Logo className="w-10 h-10" />
+              <span className="font-garet text-xl font-bold text-foreground hidden sm:block">ShadeMe</span>
             </Link>
             {!isPersonalUser && (
               <div className="hidden sm:flex items-center gap-2 bg-muted rounded-lg p-1">
@@ -1531,14 +1681,27 @@ export default function MapPage() {
             onBearingChange={(b) => setMapBearing(b)}
             fromMarker={mode === "commercial" && !selectedBuilding ? (commercialSite ? [commercialSite.lng, commercialSite.lat] : null) : mode === "personal" ? fromCoords : null}
             toMarker={mode === "personal" ? toCoords : null}
-            drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && isSelectingSite}
+            drawPolygonMode={mode === "commercial" && analysisMode === "workzone" && (isSelectingSite || drawingZoneId !== null)}
             onPolygonDrawn={(pts) => {
+              if (drawingZoneId) {
+                updateWorkZone(drawingZoneId, { polygon: pts, status: "ready" });
+                setDrawingZoneId(null);
+                return;
+              }
               setDrawnPolygon(pts);
               setIsSelectingSite(false);
               setSiteDraft((prev) => ({ ...prev, locationLabel: `Polygon (${pts.length - 1} vertices)` }));
-              setIsSitePopupOpen(true);
+              if (SHOW_LEGACY_SITE_ANALYSIS) setIsSitePopupOpen(true);
             }}
             drawnPolygon={drawnPolygon}
+            extraPolygons={workZones
+              .filter((z) => z.polygon && z.polygon.length >= 3 && z.id !== drawingZoneId)
+              .map((z) => ({
+                id: z.id,
+                points: z.polygon!,
+                color: ZONE_COLORS[workZones.findIndex((w) => w.id === z.id) % ZONE_COLORS.length],
+                label: z.label,
+              }))}
             debugShadowGeoJSON={
               showBuildingsOverlay && siteAnalysisBuildingsGeoJSON
                 ? { shadows: null, footprints: siteAnalysisBuildingsGeoJSON }
@@ -1570,77 +1733,101 @@ export default function MapPage() {
             selectedFaceAngle={analysisMode === "facade" ? selectedFaceAngle ?? undefined : undefined}
           />
 
-          {/* Floating time card */}
-          <div className="absolute top-4 left-4 z-20 w-[22rem] max-w-[calc(100vw-2rem)] rounded-2xl border border-white/20 bg-background/45 backdrop-blur-xl shadow-2xl p-3 box-border">
-            <div className="flex items-baseline justify-between mb-2 gap-2">
-              <span className="text-xl font-bold font-mono text-foreground">{formatTime(currentMinutes)}</span>
+          {/* Floating time / shadow controls card */}
+          <div className={cn(
+            "absolute top-4 left-4 z-20 rounded-2xl border border-white/20 bg-background/50 backdrop-blur-xl shadow-2xl box-border transition-all",
+            timeCardCollapsed ? "w-auto p-2" : "w-72 max-w-[calc(100vw-2rem)] p-3"
+          )}>
+            <div className={cn("flex items-center justify-between gap-2", !timeCardCollapsed && "mb-2")}>
+              <button
+                type="button"
+                onClick={() => setTimeCardCollapsed((v) => !v)}
+                className="flex items-baseline gap-1.5 shrink-0 hover:opacity-80"
+                title={timeCardCollapsed ? "Expand shadow controls" : "Minimize"}
+              >
+                <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
+                <span className="text-base font-bold font-mono text-foreground">{formatTime(currentMinutes)}</span>
+                <span className="text-[10px] text-primary font-medium">{period}</span>
+              </button>
               <div className="flex items-center gap-1.5 shrink-0">
-                {followRealTime && !isPlaying ? (
-                  <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">Live</span>
+                {followRealTime && !isPlaying && !timeCardCollapsed ? (
+                  <span className="text-[9px] font-medium text-emerald-600 dark:text-emerald-400 uppercase tracking-wide">Live</span>
                 ) : null}
-                <span className="text-xs text-primary font-medium">{period}</span>
-              </div>
-            </div>
-            <input type="range" min={0} max={1440} step={5} value={currentMinutes}
-              onInput={(e) => onManualTimeMinutes(Number((e.target as HTMLInputElement).value))}
-              onChange={(e) => onManualTimeMinutes(Number(e.target.value))}
-              className="w-full accent-primary h-2 cursor-pointer" />
-            <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
-              {["12A", "6A", "12P", "6P", "12A"].map((t) => <span key={t}>{t}</span>)}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <div className="flex gap-1.5 min-w-0">
-                <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => onManualTimeMinutes(Number(e.target.value))} className="min-w-0 flex-1 px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs">
-                  {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
-                </select>
-                <input type="date" value={dateStr} onChange={(e) => onManualDateStr(e.target.value)} className="min-w-0 flex-1 px-2 py-1.5 rounded-lg border border-border/60 bg-background/50 text-xs" />
-              </div>
-              <div className="grid grid-cols-3 gap-1.5 min-w-0">
                 <button
                   type="button"
-                  onClick={snapToDubaiNow}
-                  className={cn(
-                    "rounded-lg px-2 py-1.5 text-xs border font-medium flex items-center justify-center",
-                    followRealTime && !isPlaying
-                      ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
-                      : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground",
-                  )}
-                  title="Use current Dubai time and keep updating (shadows follow the clock)"
-                  aria-label="Snap to current Dubai time and follow live"
+                  onClick={() => setTimeCardCollapsed((v) => !v)}
+                  className="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted"
+                  aria-label={timeCardCollapsed ? "Expand shadow controls" : "Minimize shadow controls"}
                 >
-                  <Clock className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsPlaying((p) => {
-                    const next = !p;
-                    if (next) setFollowRealTime(false);
-                    return next;
-                  })}
-                  className={cn("rounded-lg px-2 py-1.5 text-xs font-medium flex items-center justify-center", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}
-                  aria-label={isPlaying ? "Pause time animation" : "Play time animation"}
-                >
-                  {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPlaying(false);
-                    setFollowRealTime(false);
-                    setCurrentMinutes(720);
-                  }}
-                  className="rounded-lg px-2 py-1.5 text-xs border border-border/60 bg-background/50 flex items-center justify-center"
-                  aria-label="Reset time to noon"
-                >
-                  <RotateCcw className="w-3 h-3" />
+                  {timeCardCollapsed ? <Plus className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
                 </button>
               </div>
             </div>
-            <div className="flex items-center gap-2 mt-2">
-              <span className="text-[10px] text-muted-foreground">Speed</span>
-              <input type="range" min={100} max={2000} step={100} value={2100 - animSpeed} onChange={(e) => setAnimSpeed(2100 - Number(e.target.value))} className="flex-1 accent-primary h-1.5" />
-              <span className="text-[10px] text-muted-foreground font-mono">{(1000 / animSpeed).toFixed(1)}x</span>
-            </div>
+
+            {!timeCardCollapsed && (
+              <>
+                <input type="range" min={0} max={1440} step={5} value={currentMinutes}
+                  onInput={(e) => onManualTimeMinutes(Number((e.target as HTMLInputElement).value))}
+                  onChange={(e) => onManualTimeMinutes(Number(e.target.value))}
+                  className="w-full accent-primary h-1.5 cursor-pointer" />
+                <div className="flex justify-between text-[9px] text-muted-foreground mb-2">
+                  {["12A", "6A", "12P", "6P", "12A"].map((t) => <span key={t}>{t}</span>)}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex gap-1.5 min-w-0">
+                    <select value={Math.round(currentMinutes / 30) * 30} onChange={(e) => onManualTimeMinutes(Number(e.target.value))} className="min-w-0 flex-1 px-2 py-1 rounded-lg border border-border/60 bg-background/50 text-[11px]">
+                      {timeOptions.map((m) => <option key={m} value={m}>{formatTime(m)}</option>)}
+                    </select>
+                    <input type="date" value={dateStr} onChange={(e) => onManualDateStr(e.target.value)} className="min-w-0 flex-1 px-2 py-1 rounded-lg border border-border/60 bg-background/50 text-[11px]" />
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5 min-w-0">
+                    <button
+                      type="button"
+                      onClick={snapToDubaiNow}
+                      className={cn(
+                        "rounded-lg px-2 py-1 text-xs border font-medium flex items-center justify-center",
+                        followRealTime && !isPlaying
+                          ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                          : "border-border/60 bg-background/50 text-muted-foreground hover:text-foreground",
+                      )}
+                      title="Use current Dubai time and keep updating (shadows follow the clock)"
+                      aria-label="Snap to current Dubai time and follow live"
+                    >
+                      <Clock className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsPlaying((p) => {
+                        const next = !p;
+                        if (next) setFollowRealTime(false);
+                        return next;
+                      })}
+                      className={cn("rounded-lg px-2 py-1 text-xs font-medium flex items-center justify-center", isPlaying ? "bg-amber-500 text-white" : "bg-primary text-primary-foreground")}
+                      aria-label={isPlaying ? "Pause time animation" : "Play time animation"}
+                    >
+                      {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsPlaying(false);
+                        setFollowRealTime(false);
+                        setCurrentMinutes(720);
+                      }}
+                      className="rounded-lg px-2 py-1 text-xs border border-border/60 bg-background/50 flex items-center justify-center"
+                      aria-label="Reset time to noon"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-[9px] text-muted-foreground">Speed</span>
+                  <input type="range" min={100} max={2000} step={100} value={2100 - animSpeed} onChange={(e) => setAnimSpeed(2100 - Number(e.target.value))} className="flex-1 accent-primary h-1.5" />
+                  <span className="text-[9px] text-muted-foreground font-mono">{(1000 / animSpeed).toFixed(1)}x</span>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Floating compass: entire rose rotates with map so cardinals match view */}
@@ -1677,7 +1864,7 @@ export default function MapPage() {
         {/* Right panel */}
         <div className="w-80 shrink-0 border-l border-border/40 bg-background/70 backdrop-blur-xl overflow-y-auto flex flex-col">
           {/* Search */}
-          <div className="px-4 py-3 border-b border-border/40">
+          <div className="px-4 pt-3 pb-2 border-b border-border/40">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
               {mode === "commercial" ? "Search Work Site" : "Search Location"}
             </p>
@@ -1703,7 +1890,7 @@ export default function MapPage() {
           </div>
 
           {/* Quick Places */}
-          <div className="px-4 py-2.5 border-b border-border/40">
+          <div className="px-4 pt-1.5 pb-2.5 border-b border-border/40">
             <div className="flex items-center justify-between mb-2">
               <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Quick Places</p>
               <button onClick={() => { setShowAddPlace(true); setAddingPlaceOnMap(false); }}
@@ -1752,9 +1939,10 @@ export default function MapPage() {
           )}
 
           {mode === "commercial" ? (
+            SHOW_LEGACY_SITE_ANALYSIS ? (
             <div className="px-4 py-3 border-b border-border/40 flex-1">
               <div className="flex items-center justify-between mb-3">
-                <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Site Analysis</h2>
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Work Zone</h2>
                 <button onClick={openSitePopup} className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium border border-primary/25 bg-primary/10 text-primary hover:bg-primary/15">
                   <Plus className="w-3 h-3" /> New
                 </button>
@@ -2071,6 +2259,204 @@ export default function MapPage() {
                 </div>
               )}
             </div>
+            ) : (
+            <div className="px-4 py-3 border-b border-border/40 flex-1 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Work Zone</h2>
+                <span className="text-[10px] text-muted-foreground">{workZones.length} / {MAX_ZONES} zones</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-muted-foreground mb-1">Task Name</label>
+                  <input
+                    value={multiZoneTaskName}
+                    onChange={(e) => setMultiZoneTaskName(e.target.value)}
+                    placeholder="e.g. Road Cleaning"
+                    className="w-full px-3 py-1.5 rounded-lg border border-border bg-background text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-muted-foreground mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={dateStr}
+                    onChange={(e) => onManualDateStr(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded-lg border border-border bg-background text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {workZones.map((zone) => {
+                  const zoneIndex = workZones.findIndex((z) => z.id === zone.id);
+                  const color = ZONE_COLORS[zoneIndex % ZONE_COLORS.length];
+                  const centroid =
+                    zone.polygon && zone.polygon.length >= 3
+                      ? (() => {
+                          const lng = zone.polygon!.reduce((s, p) => s + p[0], 0) / zone.polygon!.length;
+                          const lat = zone.polygon!.reduce((s, p) => s + p[1], 0) / zone.polygon!.length;
+                          return `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+                        })()
+                      : null;
+
+                  return (
+                    <div key={zone.id} className="rounded-xl border border-border/60 bg-background/55 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                          <span className="text-sm font-semibold text-foreground">{zone.label}</span>
+                          {zone.status === "loading" && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeWorkZone(zone.id)}
+                          className="text-muted-foreground hover:text-destructive p-1 rounded"
+                          title="Remove zone"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      {!zone.polygon ? (
+                        <button
+                          type="button"
+                          onClick={() => { setDrawingZoneId(zone.id); updateWorkZone(zone.id, { status: "drawing" }); }}
+                          className={cn(
+                            "w-full py-1.5 rounded-lg border text-xs font-medium",
+                            drawingZoneId === zone.id
+                              ? "border-primary/50 bg-primary/10 text-primary"
+                              : "border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+                          )}
+                        >
+                          {drawingZoneId === zone.id ? "Draw polygon on map…" : "Draw on Map"}
+                        </button>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span>Location Coordinates: {centroid}</span>
+                            <button type="button" onClick={() => redrawWorkZone(zone.id)} className="text-primary underline shrink-0 ml-2">
+                              Redraw
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-3 gap-2">
+                            <div>
+                              <label className="block text-[10px] text-muted-foreground mb-0.5">Start</label>
+                              <Select value={String(zone.startHour)} onValueChange={(v) => updateWorkZone(zone.id, { startHour: Number(v) })}>
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  {HOUR_OPTIONS.slice(0, 24).map((o) => (
+                                    <SelectItem key={o.value} value={String(o.value)}>{o.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-muted-foreground mb-0.5">Duration (min)</label>
+                              <input type="number" min={15} step={15} value={zone.durationMinutes}
+                                onChange={(e) => updateWorkZone(zone.id, { durationMinutes: Number(e.target.value) })}
+                                className="w-full px-2 py-1 rounded-lg border border-border bg-background text-xs" />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] text-muted-foreground mb-0.5">End</label>
+                              <Select value={String(zone.endHour)} onValueChange={(v) => updateWorkZone(zone.id, { endHour: Number(v) })}>
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent>
+                                  {HOUR_OPTIONS.slice(1).map((o) => (
+                                    <SelectItem key={o.value} value={String(o.value)}>{o.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {zone.status === "error" && (
+                        <p className="text-[11px] text-destructive">{zone.error}</p>
+                      )}
+
+                      {zone.status === "done" && zone.recs.length > 0 && (
+                        <div className="grid grid-cols-2 gap-1.5 pt-1">
+                          {zone.recs.map((rec) => {
+                            const tag = qualityTag(rec.quality);
+                            return (
+                              <div key={rec.id} className="rounded-lg border border-border/50 bg-muted/20 px-2 py-1.5 min-w-0">
+                                <div className="text-xs font-medium text-foreground truncate">{rec.title}</div>
+                                <span className={cn("mt-1 inline-block text-[9px] px-1.5 py-0.5 rounded-full font-medium", tag.color)}>
+                                  {tag.label} · {rec.shadePct}%
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {zone.status === "done" && zone.recs.length === 0 && (
+                        <p className="text-[11px] text-muted-foreground">No acceptable (non-poor) time windows found in this range.</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                onClick={addWorkZone}
+                disabled={workZones.length >= MAX_ZONES}
+                className="w-full flex items-center justify-center gap-1 py-1.5 rounded-lg border border-dashed border-border/60 text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-40"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Zone
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void calculateMultiZoneSchedule()}
+                disabled={multiZoneLoading || workZones.every((z) => !z.polygon)}
+                className="w-full py-2 rounded-lg bg-gradient-to-r from-primary to-amber-500 text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {multiZoneLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing zones…</> : "Calculate Schedule"}
+              </button>
+
+              {combinedZoneSchedule.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-border/40">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Combined Schedule</h3>
+                  {combinedZoneSchedule.map(({ zone, best, moderate }) => {
+                    const zoneIndex = workZones.findIndex((z) => z.id === zone.id);
+                    const color = ZONE_COLORS[zoneIndex % ZONE_COLORS.length];
+                    return (
+                      <div key={zone.id} className="rounded-xl border border-border/60 bg-background/55 p-2.5">
+                        <div
+                          className={cn("flex items-center gap-2", best && "cursor-pointer")}
+                          onMouseEnter={() => best && previewRec(best)}
+                          title={best ? "Hover to preview shadows at this time" : undefined}
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                          <span className="text-xs font-semibold text-foreground">{zone.label}</span>
+                          {best ? (
+                            <>
+                              <span className="text-xs text-foreground">{best.title}</span>
+                              <span className="text-[10px] text-green-600 font-medium ml-auto">{best.shadePct}%</span>
+                            </>
+                          ) : (
+                            <span className="text-[10px] text-destructive font-medium ml-auto">No free slot in this window</span>
+                          )}
+                        </div>
+                        {moderate && (
+                          <div
+                            className="text-[10px] text-muted-foreground mt-1 pl-4.5 cursor-pointer hover:text-foreground"
+                            onMouseEnter={() => previewRec(moderate)}
+                            title="Hover to preview shadows at this time"
+                          >
+                            Alt: {moderate.title} · {moderate.shadePct}% shade
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            )
           ) : (
             <div className="px-4 py-3 border-b border-border/40">
               <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Shadow-Optimized Route</h2>
@@ -2280,16 +2666,16 @@ export default function MapPage() {
           {/* Sun metrics */}
           <div className="px-4 py-3 mt-auto">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Sun Metrics</h2>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-4 gap-1.5">
               {[
-                { label: "Azimuth", value: sunPos ? `${sunPos.azimuth.toFixed(1)}°` : "--", color: "text-amber-500" },
-                { label: "Altitude", value: sunPos ? `${sunPos.altitude.toFixed(1)}°` : "--", color: "text-orange-500" },
-                { label: "Sunrise", value: sunriseSunset.sunrise, color: "text-rose-400" },
-                { label: "Sunset", value: sunriseSunset.sunset, color: "text-violet-500" },
+                { label: "Azimuth", value: sunPos ? `${sunPos.azimuth.toFixed(1)}°` : "--", color: "text-amber-500", bg: "bg-amber-500/10 border-amber-500/20" },
+                { label: "Altitude", value: sunPos ? `${sunPos.altitude.toFixed(1)}°` : "--", color: "text-orange-500", bg: "bg-orange-500/10 border-orange-500/20" },
+                { label: "Sunrise", value: sunriseSunset.sunrise, color: "text-rose-400", bg: "bg-rose-400/10 border-rose-400/20" },
+                { label: "Sunset", value: sunriseSunset.sunset, color: "text-violet-500", bg: "bg-violet-500/10 border-violet-500/20" },
               ].map((x) => (
-                <div key={x.label} className="rounded-xl border border-border/60 bg-background/55 p-2">
-                  <div className="text-[10px] text-muted-foreground">{x.label}</div>
-                  <div className={cn("text-sm font-bold", x.color)}>{x.value}</div>
+                <div key={x.label} className={cn("rounded-xl border p-1.5 min-w-0", x.bg)}>
+                  <div className="text-[9px] text-muted-foreground truncate">{x.label}</div>
+                  <div className={cn("text-xs font-bold truncate", x.color)}>{x.value}</div>
                 </div>
               ))}
             </div>
@@ -2337,8 +2723,8 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* Site Analysis popup */}
-      {mode === "commercial" && isSitePopupOpen && (
+      {/* Legacy single-zone "New Site Analysis" popup — kept for future use, not rendered (see SHOW_LEGACY_SITE_ANALYSIS). */}
+      {SHOW_LEGACY_SITE_ANALYSIS && mode === "commercial" && isSitePopupOpen && (
         <div className="fixed inset-0 z-[100] bg-black/45 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="w-full max-w-xl rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
             <div className="px-5 py-4 border-b border-border flex items-center justify-between">
@@ -2416,7 +2802,7 @@ export default function MapPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">Location Name (optional)</label>
+                <label className="block text-sm font-medium mb-1">Location Coordinates (optional)</label>
                 <input value={siteDraft.locationName} onChange={(e) => setSiteDraft((p) => ({ ...p, locationName: e.target.value }))}
                   placeholder="e.g. Downtown Tower, Site A"
                   className="w-full px-3 py-2 rounded-lg border border-border bg-background" />

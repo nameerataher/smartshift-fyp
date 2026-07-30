@@ -16,8 +16,7 @@ from shadow_scheduler import _haversine, _point_in_polygon, parse_client_buildin
 from solar_position import SunPosition
 
 MAPBOX_TOKEN = (
-    "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9"
-    ".WI13BJqDyOu6G38-YP6hog"
+    "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ"
 )
 
 BUILDING_FETCH_RADIUS = 300

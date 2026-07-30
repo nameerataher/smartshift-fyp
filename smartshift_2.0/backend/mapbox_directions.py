@@ -2,8 +2,7 @@ import requests as http_req
 from typing import Dict, List, Optional, Any
 
 MAPBOX_TOKEN = (
-    "pk.eyJ1IjoibmFtZWVyYXQiLCJhIjoiY21rdTMzOHFxMXI5MzNmc2U5cTI5Y3phbyJ9"
-    ".WI13BJqDyOu6G38-YP6hog"
+    "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ"
 )
 
 # Mapbox profile: walking, cycling. Running uses walking profile.

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { ThemeSelect } from "@/components/ThemeSelect";
 import { useMode } from "@/hooks/useMode";
+import { Logo } from "@/components/Logo";
 
 export default function Index() {
   const { user } = useAuth();
@@ -20,10 +21,8 @@ export default function Index() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-amber-400 flex items-center justify-center">
-                <Sun className="w-6 h-6 text-primary-foreground" />
-              </div>
-              <span className="text-xl font-bold text-foreground">SmartShift</span>
+              <Logo className="w-10 h-10" />
+              <span className="font-garet text-xl font-bold text-foreground">ShadeMe</span>
             </div>
             <div className="hidden md:flex items-center gap-4">
               <a href="#" className="text-sm font-medium text-muted-foreground hover:text-foreground transition">Overview</a>
@@ -84,7 +83,7 @@ export default function Index() {
                   Optimize Your Outdoor Work
                 </h1>
                 <p className="text-lg sm:text-xl text-muted-foreground max-w-xl">
-                  SmartShift predicts shadow patterns, schedules tasks efficiently, and routes you through the safest, coolest paths.
+                  ShadeMe predicts shadow patterns, schedules tasks efficiently, and routes you through the safest, coolest paths.
                 </p>
               </div>
 
@@ -92,30 +91,15 @@ export default function Index() {
                 <Link to="/map" onClick={() => setMode("commercial")}>
                   <Button size="lg" className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-primary-foreground gap-2">
                     <CalendarClock className="w-5 h-5" />
-                    Task Scheduling
+                    Work Planning
                   </Button>
                 </Link>
                 <Link to="/map" onClick={handlePersonalClick}>
-                  <Button size="lg" variant="outline" className="w-full sm:w-auto gap-2">
+                  <Button size="lg" className="w-full sm:w-auto gap-2 bg-secondary hover:bg-secondary/90 text-secondary-foreground border-2 border-secondary">
                     <Route className="w-5 h-5" />
                     Route Navigation
                   </Button>
                 </Link>
-              </div>
-
-              <div className="grid grid-cols-3 gap-4 pt-8">
-                <div>
-                  <div className="text-2xl font-bold text-primary">3D</div>
-                  <p className="text-sm text-muted-foreground">Urban Mapping</p>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-secondary">360</div>
-                  <p className="text-sm text-muted-foreground">Sun Tracking</p>
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-accent">Real-Time</div>
-                  <p className="text-sm text-muted-foreground">Updates</p>
-                </div>
               </div>
             </div>
 
@@ -157,7 +141,7 @@ export default function Index() {
           <div className="text-center space-y-4 mb-12">
             <h2 className="text-3xl sm:text-4xl font-bold text-foreground">About Us</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              SmartShift is a real-time shade tracking and scheduling platform designed to help people
+              ShadeMe is a real-time shade tracking and scheduling platform designed to help people
               navigate cities while minimizing exposure to direct sunlight.
             </p>
           </div>
@@ -426,7 +410,7 @@ export default function Index() {
       <footer className="border-t border-border py-8 bg-card/30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-            <span>2025 SmartShift. All rights reserved.</span>
+            <span>2025 ShadeMe. All rights reserved.</span>
             <div className="flex gap-6">
               <a className="hover:text-foreground transition cursor-pointer">Privacy</a>
               <a className="hover:text-foreground transition cursor-pointer">Terms</a>
