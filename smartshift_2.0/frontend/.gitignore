@@ -24,4 +24,8 @@ dist-ssr
 *.sw?
 
 .config/
-!.env
+
+# Never commit real env files — copy .env.example instead
+.env
+.env.local
+.env.*.local
