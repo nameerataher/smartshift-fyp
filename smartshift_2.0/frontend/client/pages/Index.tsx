@@ -80,10 +80,11 @@ export default function Index() {
                   <span className="text-sm font-semibold">Real-Time Shade Intelligence</span>
                 </div>
                 <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground tracking-tight">
-                  Optimize Your Outdoor Work
+                  Follow the Shade
                 </h1>
                 <p className="text-lg sm:text-xl text-muted-foreground max-w-xl">
-                  ShadeMe predicts shadow patterns, schedules tasks efficiently, and routes you through the safest, coolest paths.
+                  ShadeMe maps where the shade will fall, hour by hour,
+                  so a walk across the city or a day's work in it means less time in direct sunlight.
                 </p>
               </div>
 

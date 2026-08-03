@@ -12,6 +12,7 @@ from scheduler_optimizations import (
     get_sun_bucket,
     get_slot_step_for_long_duration,
 )
+from mapbox_config import get_mapbox_token
 
 def parse_client_buildings(raw_list: list) -> List[Building]:
     buildings: List[Building] = []
@@ -28,9 +29,7 @@ def parse_client_buildings(raw_list: list) -> List[Building]:
     return buildings
 
 
-MAPBOX_TOKEN = (
-    "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ"
-)
+MAPBOX_TOKEN = get_mapbox_token()
 DEFAULT_BUILDING_HEIGHT = 30.0  # meters – fallback for missing height data
 BUILDING_FETCH_RADIUS = 300     # meters around the target point
 

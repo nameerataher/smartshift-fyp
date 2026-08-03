@@ -14,10 +14,9 @@ import requests as http_req
 from shadow_calculator import Building, ShadowCalculator
 from shadow_scheduler import _haversine, _point_in_polygon, parse_client_buildings
 from solar_position import SunPosition
+from mapbox_config import get_mapbox_token
 
-MAPBOX_TOKEN = (
-    "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ"
-)
+MAPBOX_TOKEN = get_mapbox_token()
 
 BUILDING_FETCH_RADIUS = 300
 DEFAULT_BUILDING_HEIGHT = 30.0

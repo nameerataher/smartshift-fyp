@@ -18,12 +18,12 @@ import {
   getShadowIntensity,
 } from "@/lib/lightingHelpers";
 
-const DEFAULT_TOKEN =
-  "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ";
 const TOKEN_KEY = "smartshift:mapboxToken";
 
 function loadToken(): string {
-  try { return localStorage.getItem(TOKEN_KEY) || DEFAULT_TOKEN; } catch { return DEFAULT_TOKEN; }
+  const envToken = import.meta.env.VITE_MAPBOX_TOKEN;
+  const fallback = typeof envToken === "string" ? envToken.trim() : "";
+  try { return localStorage.getItem(TOKEN_KEY) || fallback; } catch { return fallback; }
 }
 
 export const LOCATIONS: Record<
@@ -47,6 +47,8 @@ export interface RouteToDraw {
   coordinates: [number, number][];
   travelMode: string;
   key: number; // increment to trigger
+  /** Overrides the default travelMode-based line color (e.g. to match a route's Most Shaded/Balanced/Fastest tag). */
+  color?: string;
 }
 
 export interface AltRouteToDraw {
@@ -627,7 +629,7 @@ export default function MapboxMap({
         map.removeSource("shaded-route");
       }
     } catch {}
-    const { coordinates, travelMode } = routeToDraw;
+    const { coordinates, travelMode, color } = routeToDraw;
     if (coordinates.length < 2) return;
     map.addSource("shaded-route", {
       type: "geojson",
@@ -639,7 +641,7 @@ export default function MapboxMap({
       source: "shaded-route",
       layout: { "line-join": "round", "line-cap": "round" },
       paint: {
-        "line-color": travelMode === "cycling" ? "#22c55e" : "#3b82f6",
+        "line-color": color || (travelMode === "cycling" ? "#22c55e" : "#3b82f6"),
         "line-width": 6,
         "line-opacity": 0.9,
       },

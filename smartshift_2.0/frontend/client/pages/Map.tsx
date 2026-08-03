@@ -2,10 +2,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useLocation, useSearchParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
-  Sun, Map, CheckSquare, Settings, Navigation2, Navigation, MapPin,
+  Sun, Map, CheckSquare, Settings, Navigation, MapPin,
   RotateCcw, Play, Pause, Briefcase, X, CheckCircle,
-  Plus, Clock, Zap, Search, Loader2, LayoutDashboard, Locate,
-  Bookmark, Trash2, Activity, ChevronUp,
+  Plus, Clock, Search, Loader2, LayoutDashboard, Locate,
+  Bookmark, Trash2, ChevronUp, Footprints, Bike,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import MapboxMap, {
@@ -59,6 +59,8 @@ interface RouteResult {
   departureLabel?: string;
   /** Turn-by-turn steps (Google routes, etc.) */
   turnByTurn?: TurnStep[];
+  /** Fixed role tag decided once when routes are ranked — independent of display order. */
+  tag?: "Most Shaded" | "Balanced" | "Fastest";
 }
 
 /** Default quick place tags for route From/To (Dubai). [lon, lat], name */
@@ -388,6 +390,20 @@ function computeWindowsFallback(dateStr: string, durationMinutes: number, startH
     });
   }
   return results.sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
+/** Lucide has no running-figure glyph, so a small matching stick-figure icon is drawn by hand. */
+function RunningFigureIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="15.5" cy="4.5" r="1.8" />
+      <path d="M14.5 7l-2.2 4.8" />
+      <path d="M12.3 11.8L8 12.6l-2.3 3.6" />
+      <path d="M12.3 11.8l2.5 3.6-1 4.3" />
+      <path d="M13.3 8.6l-3.4 1" />
+      <path d="M13.3 8.6l2.7 2.6 2.7-.6" />
+    </svg>
+  );
 }
 
 export default function MapPage() {
@@ -1048,24 +1064,40 @@ export default function MapPage() {
               };
             }
           }
-          const distKm = (r: RouteResult) => parseFloat(r.distanceKm) || 0;
-          // Rank by score (desc) then shortest distance (asc)
-          routes = [...routes].sort((a, b) => {
-            const scoreA = a.score ?? 0;
-            const scoreB = b.score ?? 0;
-            if (scoreB !== scoreA) return scoreB - scoreA;
-            return distKm(a) - distKm(b);
-          });
-          const mostShadedIdx = 0;
-          const shortestIdx = routes.reduce((best, r, i) => (distKm(r) < distKm(routes[best]) ? i : best), 0);
-          const others = routes.map((_, i) => i).filter((i) => i !== mostShadedIdx && i !== shortestIdx);
-          const balancedIdx = others.length > 0
-            ? others.reduce((best, i) => (routes[i].score - distKm(routes[i]) * 2 > routes[best].score - distKm(routes[best]) * 2 ? i : best), others[0])
-            : -1;
-          routes = routes.map((r, i) => ({
-            ...r,
-            label: i === mostShadedIdx ? "Most shaded" : i === shortestIdx ? "Shortest" : i === balancedIdx ? "Balanced" : r.label,
-          }));
+          // Pick exactly 3 distinct routes: the 2 highest-shade routes ("Most Shaded" + "Balanced"),
+          // plus the API's own default/fastest route ("Fastest") taken as-is from the directions
+          // API's original response order (index 0) — untouched by shade ranking.
+          const apiFastestRoute = routes[0];
+          const byShadeDesc = [...routes].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+          const byDurationAsc = [...routes].sort((a, b) => (a.durationMin ?? 0) - (b.durationMin ?? 0));
+
+          const picked: RouteResult[] = [];
+          const usedCoordKeys = new Set<string>();
+          const coordKey = (r: RouteResult) => r.coordinates.length ? `${r.coordinates[0]}|${r.coordinates[r.coordinates.length - 1]}|${r.durationMin}` : Math.random().toString();
+
+          const addPick = (r: RouteResult, tag: RouteResult["tag"]) => {
+            const key = coordKey(r);
+            if (usedCoordKeys.has(key)) return false;
+            usedCoordKeys.add(key);
+            picked.push({ ...r, tag, label: tag });
+            return true;
+          };
+
+          if (byShadeDesc[0]) addPick(byShadeDesc[0], "Most Shaded");
+          for (const r of byShadeDesc.slice(1)) {
+            if (picked.length >= 2) break;
+            addPick(r, "Balanced");
+          }
+          // Prefer the API's literal fastest/default route; only fall back to the next-quickest
+          // distinct route if that one was already claimed by Most Shaded/Balanced above.
+          if (!apiFastestRoute || !addPick(apiFastestRoute, "Fastest")) {
+            for (const r of byDurationAsc) {
+              if (picked.length >= 3) break;
+              if (addPick(r, "Fastest")) break;
+            }
+          }
+
+          routes = picked.length > 0 ? picked : routes;
         }
         routes = routes.map((r) => ({
           ...r,
@@ -1080,11 +1112,11 @@ export default function MapPage() {
           departureTime: departureTimeIso,
           departureLabel: departureSelection.label,
         });
+        const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
         if (routes[0].coordinates.length >= 2) {
           routeKeyRef.current += 1;
-          setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current });
+          setRouteToDraw({ coordinates: routes[0].coordinates, travelMode, key: routeKeyRef.current, color: routeColors[0] });
         }
-        const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
         altRoutesKeyRef.current += 1;
         setAltRoutesToDraw(
           routes.map((r, idx) => ({
@@ -1109,11 +1141,11 @@ export default function MapPage() {
     setSelectedRouteIdx(idx);
     const route = alternativeRoutes[idx];
     setRouteResult(route);
+    const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
     if (route.coordinates.length >= 2) {
       routeKeyRef.current += 1;
-      setRouteToDraw({ coordinates: route.coordinates, travelMode, key: routeKeyRef.current });
+      setRouteToDraw({ coordinates: route.coordinates, travelMode, key: routeKeyRef.current, color: routeColors[idx] });
     }
-    const routeColors = ["#22c55e", "#3b82f6", "#f59e0b"];
     altRoutesKeyRef.current += 1;
     setAltRoutesToDraw(
       alternativeRoutes.map((r, i) => ({
@@ -1711,6 +1743,7 @@ export default function MapPage() {
             facadeSelectMode={mode === "commercial" && analysisMode === "facade" && isSelectingSite}
             onBuildingSelected={(bldg) => {
               setSelectedBuilding(bldg);
+              setIsSelectingSite(false);
               const fp = bldg.footprint;
               const cLng = fp.reduce((s, p) => s + p[0], 0) / fp.length;
               const cLat = fp.reduce((s, p) => s + p[1], 0) / fp.length;
@@ -1725,7 +1758,7 @@ export default function MapPage() {
               setBuildingFace(face.direction);
               setSelectedFaceAngle(face.bearing);
               setIsSelectingSite(false);
-              setIsSitePopupOpen(true);
+              if (SHOW_LEGACY_SITE_ANALYSIS) setIsSitePopupOpen(true);
               toast.success(`${face.direction} face selected (${face.bearing.toFixed(0)}°)`);
             }}
             selectedBuildingFootprint={selectedBuilding?.footprint ?? null}
@@ -1823,7 +1856,7 @@ export default function MapPage() {
                 </div>
                 <div className="flex items-center gap-2 mt-2">
                   <span className="text-[9px] text-muted-foreground">Speed</span>
-                  <input type="range" min={100} max={2000} step={100} value={2100 - animSpeed} onChange={(e) => setAnimSpeed(2100 - Number(e.target.value))} className="flex-1 accent-primary h-1.5" />
+                  <input type="range" min={50} max={2000} step={50} value={2050 - animSpeed} onChange={(e) => setAnimSpeed(2050 - Number(e.target.value))} className="flex-1 accent-primary h-1.5" />
                   <span className="text-[9px] text-muted-foreground font-mono">{(1000 / animSpeed).toFixed(1)}x</span>
                 </div>
               </>
@@ -1865,9 +1898,11 @@ export default function MapPage() {
         <div className="w-80 shrink-0 border-l border-border/40 bg-background/70 backdrop-blur-xl overflow-y-auto flex flex-col">
           {/* Search */}
           <div className="px-4 pt-3 pb-2 border-b border-border/40">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
-              {mode === "commercial" ? "Search Work Site" : "Search Location"}
-            </p>
+            {mode === "commercial" && (
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-2">
+                Search Work Site
+              </p>
+            )}
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
               <input value={locationSearch} onChange={(e) => handleSearchInput(e.target.value)}
@@ -2261,6 +2296,31 @@ export default function MapPage() {
             </div>
             ) : (
             <div className="px-4 py-3 border-b border-border/40 flex-1 space-y-3">
+              <div className="flex gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setAnalysisMode("workzone")}
+                  className={cn("flex-1 py-1.5 rounded-lg border text-xs font-medium transition-colors",
+                    analysisMode === "workzone"
+                      ? "bg-primary/15 text-primary border-primary/40"
+                      : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground")}
+                >
+                  Work Zone
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAnalysisMode("facade")}
+                  className={cn("flex-1 py-1.5 rounded-lg border text-xs font-medium transition-colors",
+                    analysisMode === "facade"
+                      ? "bg-primary/15 text-primary border-primary/40"
+                      : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground")}
+                >
+                  Facade
+                </button>
+              </div>
+
+              {analysisMode === "workzone" && (
+              <>
               <div className="flex items-center justify-between">
                 <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Work Zone</h2>
                 <span className="text-[10px] text-muted-foreground">{workZones.length} / {MAX_ZONES} zones</span>
@@ -2455,21 +2515,226 @@ export default function MapPage() {
                   })}
                 </div>
               )}
+              </>
+              )}
+
+              {analysisMode === "facade" && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-medium text-muted-foreground mb-1">Task Name</label>
+                    <input
+                      value={siteDraft.taskName}
+                      onChange={(e) => setSiteDraft((p) => ({ ...p, taskName: e.target.value }))}
+                      placeholder="e.g. Facade Cleaning"
+                      className="w-full px-3 py-1.5 rounded-lg border border-border bg-background text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-muted-foreground mb-1">Building</label>
+                    <button
+                      type="button"
+                      onClick={() => { setIsSelectingSite(true); setSelectedBuilding(null); setBuildingFace("N"); setSelectedFaceAngle(null); }}
+                      className={cn(
+                        "w-full py-1.5 rounded-lg border text-xs font-medium",
+                        isSelectingSite
+                          ? "border-primary/50 bg-primary/10 text-primary"
+                          : "border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+                      )}
+                    >
+                      {isSelectingSite ? "Click a building on the map…" : selectedBuilding ? "Change Building" : "Select Building on Map"}
+                    </button>
+                    {selectedBuilding && (
+                      <p className="text-[11px] text-green-600 mt-1">
+                        {selectedBuilding.name} — {selectedBuilding.height.toFixed(0)}m ({selectedBuilding.faces.length} edges)
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5">Duration (min)</label>
+                      <input type="number" min={15} step={15} value={siteDraft.durationMinutes}
+                        onChange={(e) => setSiteDraft((p) => ({ ...p, durationMinutes: Number(e.target.value) }))}
+                        className="w-full px-2 py-1 rounded-lg border border-border bg-background text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5">Start hour</label>
+                      <input type="number" min={0} max={23} value={facadeWorkStartHour}
+                        onChange={(e) => setFacadeWorkStartHour(Number(e.target.value))}
+                        className="w-full px-2 py-1 rounded-lg border border-border bg-background text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5">Start minute</label>
+                      <input type="number" min={0} max={59} step={5} value={facadeWorkStartMinute}
+                        onChange={(e) => setFacadeWorkStartMinute(Number(e.target.value))}
+                        className="w-full px-2 py-1 rounded-lg border border-border bg-background text-xs" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    We use sun direction at <strong>work start</strong> to recommend the best building edges for shade.
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={() => void submitSiteAnalysis()}
+                    disabled={scheduleLoading || !selectedBuilding}
+                    className="w-full py-2 rounded-lg bg-gradient-to-r from-primary to-amber-500 text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {scheduleLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Computing best facade…</> : "Find Best Edges"}
+                  </button>
+
+                  {facadeTimeResult && (() => {
+                    const longName = (f: string) =>
+                      f === "N" ? "North" : f === "E" ? "East" : f === "S" ? "South" : f === "W" ? "West" : f;
+                    const fid = `${siteDraft.taskName}-facade-${facadeTimeResult.window_start}`;
+                    const savedF = savedRecIds.has(fid);
+
+                    const hasCardinalSummary =
+                      facadeTimeResult.recommended_cardinals &&
+                      facadeTimeResult.recommended_cardinals.length > 0;
+                    const hasEdgeBearings =
+                      facadeTimeResult.best_edges && facadeTimeResult.best_edges.length > 0;
+
+                    let bestFacadesTitle = "";
+                    let avoidText = "";
+                    let cardinalDetailLines: string[] = [];
+
+                    if (facadeTimeResult.all_faces_largely_shaded && hasCardinalSummary) {
+                      bestFacadesTitle = facadeTimeResult.recommended_cardinals!
+                        .map((c) => longName(c))
+                        .join(" · ");
+                      cardinalDetailLines = [
+                        "Most edges are shaded at this time — all main directions on this footprint look favorable.",
+                      ];
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${longName(worst.cardinal)} (${Math.round(worst.bearing)}°)`;
+                      }
+                    } else if (hasCardinalSummary) {
+                      bestFacadesTitle = facadeTimeResult.recommended_cardinals!
+                        .map((c) => longName(c))
+                        .join(" · ");
+                      if (facadeTimeResult.cardinal_summary?.length) {
+                        cardinalDetailLines = facadeTimeResult.cardinal_summary
+                          .filter((row) => facadeTimeResult.recommended_cardinals!.includes(row.cardinal))
+                          .map(
+                            (row) =>
+                              `${longName(row.cardinal)}: ${row.shaded_count}/${row.total_count} edge×time samples ≥80% shade (avg ${row.avg_shade_pct}%)`,
+                          );
+                      }
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${longName(worst.cardinal)} (${Math.round(worst.bearing)}°)`;
+                      }
+                    } else if (hasEdgeBearings) {
+                      const bestEdges = facadeTimeResult.best_edges!.slice(0, 3);
+                      bestFacadesTitle = bestEdges.map((e) => `${Math.round(e.bearing)}° ${e.cardinal}`).join(" · ");
+                      if (facadeTimeResult.avoid_edges && facadeTimeResult.avoid_edges.length > 0) {
+                        const worst = facadeTimeResult.avoid_edges[0];
+                        avoidText = `${Math.round(worst.bearing)}° ${worst.cardinal}`;
+                      } else if (facadeTimeResult.avoid) {
+                        avoidText = longName(facadeTimeResult.avoid);
+                      }
+                    } else {
+                      const bestFaces: string[] = [];
+                      if (facadeTimeResult.recommended) bestFaces.push(facadeTimeResult.recommended);
+                      if (
+                        facadeTimeResult.second_best &&
+                        facadeTimeResult.second_best !== facadeTimeResult.recommended
+                      ) {
+                        bestFaces.push(facadeTimeResult.second_best);
+                      }
+                      bestFacadesTitle = bestFaces.map((f) => longName(f)).join(" · ");
+                      avoidText = facadeTimeResult.avoid ? longName(facadeTimeResult.avoid) : "";
+                    }
+
+                    const showCardinalAggregated = hasCardinalSummary || facadeTimeResult.all_faces_largely_shaded;
+
+                    return (
+                      <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 space-y-4 text-sm">
+                        <div className="space-y-2">
+                          {bestFacadesTitle ? (
+                            <div>
+                              <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                                Best {showCardinalAggregated ? "directions" : hasEdgeBearings ? "edges" : "facades"}
+                              </div>
+                              <p className="mt-1 text-lg font-bold text-primary leading-snug tracking-tight">
+                                {bestFacadesTitle}
+                              </p>
+                              {cardinalDetailLines.length > 0 && (
+                                <ul className="mt-2 space-y-0.5 text-[11px] text-muted-foreground leading-snug list-disc pl-4">
+                                  {cardinalDetailLines.map((line, i) => (
+                                    <li key={i}>{line}</li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-muted-foreground text-sm">Sun below horizon — no strong preference.</p>
+                          )}
+                          {avoidText && (
+                            <p className="text-foreground/90 text-sm">
+                              <span className="text-muted-foreground">
+                                {facadeTimeResult.cardinal_summary?.length
+                                  ? "Avoid (lowest avg shade on footprint, incl. neighbor shadows): "
+                                  : "Avoid (lowest shade score over the window): "}
+                              </span>
+                              <span className="font-semibold">{avoidText}</span>
+                            </p>
+                          )}
+                        </div>
+
+                        {facadeTimeResult.ranking_model && (
+                          <p className="text-xs text-muted-foreground">
+                            Model: {facadeTimeResult.ranking_model === "building_3d" ? "footprint + neighbor shadows" : "sun direction only"}
+                            {facadeTimeResult.buildings_used != null && ` · ${facadeTimeResult.buildings_used} buildings`}
+                          </p>
+                        )}
+
+                        {selectedBuilding && (
+                          <p className="text-[10px] text-muted-foreground leading-relaxed">
+                            White edge = primary map pick. Labels on the building show each wall’s bearing (degrees + N/S/E/W).
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void saveFacadeTimePlan()}
+                          className={cn(
+                            "w-full flex items-center justify-center gap-2 rounded-lg py-2 text-xs font-medium border",
+                            savedF
+                              ? "bg-green-500/15 border-green-500/30 text-green-600"
+                              : "border-border/60 bg-background/80 hover:bg-primary/10 text-foreground",
+                          )}
+                        >
+                          {savedF ? <CheckCircle className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+                          {savedF ? "Saved" : "Save task"}
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
             )
           ) : (
             <div className="px-4 py-3 border-b border-border/40">
-              <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">Shadow-Optimized Route</h2>
+              <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-3">Planned Route</h2>
               <div className="space-y-2 mb-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0" />
+                  <span className="flex items-center gap-1 w-11 shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-green-500 shrink-0" />
+                    <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Start</span>
+                  </span>
                   <div className="flex-1 relative">
                     <input type="text" value={fromSearch || routeFrom} onChange={(e) => searchRouteLocation(e.target.value, "from")}
                       placeholder="From - search or click map"
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60 text-xs pr-16" />
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-green-500/30 bg-background/60 text-xs pr-16 focus:outline-none focus:ring-1 focus:ring-green-500/40" />
                     <div className="absolute right-1 top-0.5 flex gap-0.5">
                       <button onClick={() => setSelectingPoint(selectingPoint === "from" ? null : "from")}
-                        className={cn("p-1 rounded text-xs", selectingPoint === "from" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}
+                        className={cn("p-1 rounded text-xs", selectingPoint === "from" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" : "text-muted-foreground hover:text-green-600")}
                         title="Pick on map">
                         <MapPin className="w-3.5 h-3.5" />
                       </button>
@@ -2499,14 +2764,17 @@ export default function MapPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
+                  <span className="flex items-center gap-1 w-11 shrink-0">
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500 shrink-0" />
+                    <span className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">End</span>
+                  </span>
                   <div className="flex-1 relative">
                     <input type="text" value={toSearch || routeTo} onChange={(e) => searchRouteLocation(e.target.value, "to")}
                       placeholder="To - search or click map"
-                      className="w-full px-2.5 py-1.5 rounded-lg border border-border/60 bg-background/60 text-xs pr-10" />
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-blue-500/30 bg-background/60 text-xs pr-10 focus:outline-none focus:ring-1 focus:ring-blue-500/40" />
                     <button onClick={() => setSelectingPoint(selectingPoint === "to" ? null : "to")}
                       className={cn("absolute right-1 top-0.5 p-1 rounded text-xs",
-                        selectingPoint === "to" ? "bg-amber-100 text-amber-700" : "text-muted-foreground hover:text-foreground")}
+                        selectingPoint === "to" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "text-muted-foreground hover:text-blue-600")}
                       title="Pick on map">
                       <MapPin className="w-3.5 h-3.5" />
                     </button>
@@ -2525,7 +2793,7 @@ export default function MapPage() {
                 </div>
               </div>
               <div className="mb-2">
-                <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Departure</div>
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-1.5">Departure Time</div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button onClick={() => {
                     const now = getDubaiNow();
@@ -2533,14 +2801,18 @@ export default function MapPage() {
                     setRouteDepartureDate(now.dateStr);
                     setRouteDepartureMinutes(now.minutes);
                   }}
-                    className={cn("py-1.5 rounded-lg border text-[10px] font-medium flex items-center justify-center",
-                      routeDepartureMode === "now" ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
-                    Leave now
+                    className={cn("py-2 rounded-lg border text-xs font-medium flex items-center justify-center transition-colors",
+                      routeDepartureMode === "now"
+                        ? "bg-primary/15 text-primary border-primary/40"
+                        : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground")}>
+                    Now
                   </button>
                   <button onClick={() => setRouteDepartureMode("selected")}
-                    className={cn("py-1.5 rounded-lg border text-[10px] font-medium flex items-center justify-center",
-                      routeDepartureMode === "selected" ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
-                    Leave later
+                    className={cn("py-2 rounded-lg border text-xs font-medium flex items-center justify-center transition-colors",
+                      routeDepartureMode === "selected"
+                        ? "bg-primary/15 text-primary border-primary/40"
+                        : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground")}>
+                    Set Time
                   </button>
                 </div>
                 {routeDepartureMode === "selected" && (
@@ -2559,26 +2831,25 @@ export default function MapPage() {
               <div className="grid grid-cols-3 gap-1.5 mb-2">
                 {(["walking", "running", "cycling"] as const).map((m) => (
                   <button key={m} onClick={() => setTravelMode(m)}
-                    className={cn("py-1.5 rounded-lg border text-sm font-medium flex items-center justify-center gap-1",
-                      travelMode === m ? "bg-primary text-primary-foreground border-primary" : "bg-background/60 border-border/60")}>
-                    {m === "walking" ? <Navigation2 className="w-3.5 h-3.5" /> : m === "running" ? <Activity className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
+                    className={cn("py-2 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 transition-colors",
+                      travelMode === m
+                        ? "bg-primary/15 text-primary border-primary/40"
+                        : "bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground")}>
+                    {m === "walking" ? <Footprints className="w-3.5 h-3.5" /> : m === "running" ? <RunningFigureIcon className="w-3.5 h-3.5" /> : <Bike className="w-3.5 h-3.5" />}
                     {m === "walking" ? "Walk" : m === "running" ? "Run" : "Cycle"}
                   </button>
                 ))}
               </div>
-              <>
               <div className="grid grid-cols-2 gap-1.5">
                 <button onClick={findRoute} disabled={routeLoading}
-                  className="py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  className="py-2 rounded-lg bg-green-500/15 hover:bg-green-500/25 border border-green-500/40 text-green-700 dark:text-green-300 text-xs font-semibold disabled:opacity-50 flex items-center justify-center gap-1.5 transition-colors">
                   {routeLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Getting routes...</> : "Find Route"}
                 </button>
                 <button onClick={clearRoute}
-                  className="py-2 rounded-lg border border-border/60 bg-background/60 text-sm font-medium flex items-center justify-center gap-1">
+                  className="py-2 rounded-lg border border-border/50 bg-muted/30 hover:bg-muted/50 text-xs font-medium flex items-center justify-center gap-1 text-muted-foreground hover:text-foreground transition-colors">
                   <RotateCcw className="w-3.5 h-3.5" /> Clear
                 </button>
               </div>
-
-              </>
 
               {alternativeRoutes.length > 0 && (
                 <div className="mt-3 space-y-2">
@@ -2597,16 +2868,11 @@ export default function MapPage() {
                   </div>
                   {alternativeRoutes.map((route, idx) => {
                     const isActive = idx === selectedRouteIdx;
+                    const routeName = route.tag || `Route ${idx + 1}`;
                     const labelColors: Record<string, string> = {
-                      "Best Shade": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
                       "Most Shaded": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-                      "Most shaded": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-                      "Fastest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-                      "Balanced": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-                      "Shortest": "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-                      "Route 1": "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-                      "Route 2": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-                      "Alternative 2": "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                      Balanced: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+                      Fastest: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
                     };
                     const dotColors = ["bg-green-500", "bg-blue-500", "bg-amber-500"];
                     return (
@@ -2617,41 +2883,25 @@ export default function MapPage() {
                             ? "border-primary/60 bg-primary/5 shadow-md ring-1 ring-primary/20"
                             : "border-border/60 bg-background/55 hover:border-primary/40"
                         )}>
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <div className={cn("w-2 h-2 rounded-full", dotColors[idx] || "bg-gray-400")} />
-                            <span className="text-xs font-semibold text-foreground">Route {idx + 1}</span>
+                        <div className="flex items-center justify-between mb-1 gap-2">
+                          <div className="flex items-center gap-2 flex-wrap min-w-0">
+                            <div className={cn("w-2 h-2 rounded-full shrink-0", dotColors[idx] || "bg-gray-400")} />
+                            <span className="text-xs font-semibold text-muted-foreground">Route {idx + 1}</span>
                             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium",
-                              labelColors[route.label || ""] || "bg-gray-100 text-gray-700")}>
-                              {route.label || `Option ${idx + 1}`}
+                              labelColors[routeName] || "bg-gray-100 text-gray-700")}>
+                              {routeName}
                             </span>
-                            {route.heatRisk != null && (
-                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize",
-                                route.heatRisk === "low" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
-                                route.heatRisk === "medium" && "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-                                route.heatRisk === "high" && "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
-                              )}>
-                                {route.heatRisk === "medium" ? "Med" : route.heatRisk}
-                              </span>
-                            )}
                           </div>
-                          {route.score != null && (
-                            <span className="text-xs font-bold text-foreground tabular-nums shrink-0 ml-1">
-                              {route.score}/100
-                            </span>
+                          {route.shadePct != null && (
+                            <span className="text-sm font-bold text-green-600 shrink-0">{route.shadePct}%</span>
                           )}
                         </div>
                         <div className="text-xs text-muted-foreground">
                           {route.distanceKm} km · {route.durationMin} min
-                          {route.shadePct != null && (
-                            <><span className="text-green-600 font-medium"> · {route.shadePct}% shade</span></>
+                          {route.sunExposure != null && route.sunExposure > 0 && (
+                            <> · Sun exposure: {route.sunExposure} mins</>
                           )}
                         </div>
-                        {route.sunExposure != null && route.sunExposure > 0 && (
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Approx sun exposure: {route.sunExposure} min
-                          </p>
-                        )}
                         {route.reason && (
                           <p className="text-[10px] text-muted-foreground/70 mt-1 italic leading-tight">{route.reason}</p>
                         )}
@@ -2663,7 +2913,8 @@ export default function MapPage() {
             </div>
           )}
 
-          {/* Sun metrics */}
+          {/* Sun metrics — commercial mode only */}
+          {mode === "commercial" && (
           <div className="px-4 py-3 mt-auto">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-2">Sun Metrics</h2>
             <div className="grid grid-cols-4 gap-1.5">
@@ -2720,6 +2971,7 @@ export default function MapPage() {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 

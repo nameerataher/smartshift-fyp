@@ -18,9 +18,10 @@ import {
   getUVCategory,
   fetchSunriseSunsetDubai,
 } from "@/lib/sunCalculations";
+import { getMapboxToken } from "@/lib/mapboxToken";
 
 const API_BASE = "http://localhost:8002";
-const MAPBOX_TOKEN = "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ";
+const MAPBOX_TOKEN = getMapboxToken();
 
 interface HeatRisk {
   risk_level?: string;

@@ -1,9 +1,9 @@
 import requests as http_req
 from typing import Dict, List, Optional, Any
 
-MAPBOX_TOKEN = (
-    "pk.eyJ1Ijoibm1ydCIsImEiOiJjbXM0aTlsd2MxdGNqMzByM2E2anhwejFxIn0.-lSbB75uwdyrg2hmBJSZLQ"
-)
+from mapbox_config import get_mapbox_token
+
+MAPBOX_TOKEN = get_mapbox_token()
 
 # Mapbox profile: walking, cycling. Running uses walking profile.
 PROFILES = {
