@@ -1022,15 +1022,33 @@ export default function MapPage() {
         const departureTimeIso = toDubaiIso(departureSelection.date, departureSelection.minutes);
         const midLat = (fromCoords[1] + toCoords[1]) / 2;
         const midLon = (fromCoords[0] + toCoords[0]) / 2;
-        const buildings = getClientBuildings(midLat, midLon);
-        const fromBuildings = getClientBuildings(fromCoords[1], fromCoords[0]);
-        const toBuildings = getClientBuildings(toCoords[1], toCoords[0]);
+        // Sample along every candidate route as well as the endpoints/midpoint, so all
+        // routes are scored against the same building set. Scoring a route against
+        // buildings gathered only near its own corridor made the shade percentages
+        // non-comparable between routes.
+        const samplePoints: [number, number][] = [
+          [fromCoords[1], fromCoords[0]],
+          [midLat, midLon],
+          [toCoords[1], toCoords[0]],
+        ];
+        const SAMPLES_PER_ROUTE = 4;
+        for (const r of routes) {
+          const n = r.coordinates.length;
+          if (n < 2) continue;
+          for (let s = 1; s <= SAMPLES_PER_ROUTE; s++) {
+            const c = r.coordinates[Math.floor((n - 1) * (s / (SAMPLES_PER_ROUTE + 1)))];
+            if (c) samplePoints.push([c[1], c[0]]);
+          }
+        }
+
         const allBuildingIds = new Set<string>();
         const allBuildings: ClientBuilding[] = [];
-        for (const b of [...buildings, ...fromBuildings, ...toBuildings]) {
-          if (!allBuildingIds.has(b.id)) {
-            allBuildingIds.add(b.id);
-            allBuildings.push(b);
+        for (const [lat, lon] of samplePoints) {
+          for (const b of getClientBuildings(lat, lon)) {
+            if (!allBuildingIds.has(b.id)) {
+              allBuildingIds.add(b.id);
+              allBuildings.push(b);
+            }
           }
         }
 
@@ -1055,49 +1073,87 @@ export default function MapPage() {
           for (const s of scoreData.route_scores) {
             const i = s.route_index;
             if (i >= 0 && i < routes.length) {
+              const shadePct = Math.round(s.shade_pct);
               routes[i] = {
                 ...routes[i],
-                shadePct: Math.round(s.shade_pct),
-                score: s.score ?? Math.round(s.shade_pct),
-                sunExposure: s.sun_exposure_minutes ?? 0,
+                shadePct,
+                score: s.score ?? shadePct,
+                // Derive from the duration actually shown on the card. The backend
+                // figure comes from its own constant-speed model, so it disagreed
+                // with the displayed "X min" for the same route.
+                sunExposure: Math.round(((routes[i].durationMin ?? 0) * (1 - shadePct / 100)) * 10) / 10,
                 heatRisk: s.heat_risk === "medium" ? "medium" : s.heat_risk === "high" ? "high" : "low",
               };
             }
           }
-          // Pick exactly 3 distinct routes: the 2 highest-shade routes ("Most Shaded" + "Balanced"),
-          // plus the API's own default/fastest route ("Fastest") taken as-is from the directions
-          // API's original response order (index 0) — untouched by shade ranking.
-          const apiFastestRoute = routes[0];
-          const byShadeDesc = [...routes].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-          const byDurationAsc = [...routes].sort((a, b) => (a.durationMin ?? 0) - (b.durationMin ?? 0));
+
+          // Drop duplicate polylines before tagging. The old key was
+          // start|end|duration, and since every alternative shares its endpoints it
+          // collapsed genuinely different routes that happened to take the same time.
+          const polyKey = (r: RouteResult) =>
+            r.coordinates.length
+              ? r.coordinates.map((c) => `${c[0].toFixed(5)},${c[1].toFixed(5)}`).join(";")
+              : `empty-${Math.random()}`;
+          const uniqueRoutes: RouteResult[] = [];
+          const seenPoly = new Set<string>();
+          for (const r of routes) {
+            const k = polyKey(r);
+            if (seenPoly.has(k)) continue;
+            seenPoly.add(k);
+            uniqueRoutes.push(r);
+          }
+
+          const durOf = (r: RouteResult) => r.durationSeconds ?? (r.durationMin ?? 0) * 60;
+          const distOf = (r: RouteResult) => parseFloat(r.distanceKm) || 0;
+          const shadeOf = (r: RouteResult) => r.shadePct ?? 0;
+
+          // Each tag is assigned to the route that actually earns it:
+          // "Most Shaded" = highest shade %, "Fastest" = shortest travel time
+          // (ties broken by distance), "Balanced" = best shade/time trade-off of
+          // what's left. Previously "Fastest" was just the directions API's first
+          // route, which is not necessarily the quickest one it returned.
+          const mostShaded = [...uniqueRoutes].sort(
+            (a, b) => shadeOf(b) - shadeOf(a) || durOf(a) - durOf(b)
+          )[0];
+          const byDurationAsc = [...uniqueRoutes].sort(
+            (a, b) => durOf(a) - durOf(b) || distOf(a) - distOf(b)
+          );
 
           const picked: RouteResult[] = [];
-          const usedCoordKeys = new Set<string>();
-          const coordKey = (r: RouteResult) => r.coordinates.length ? `${r.coordinates[0]}|${r.coordinates[r.coordinates.length - 1]}|${r.durationMin}` : Math.random().toString();
-
-          const addPick = (r: RouteResult, tag: RouteResult["tag"]) => {
-            const key = coordKey(r);
-            if (usedCoordKeys.has(key)) return false;
-            usedCoordKeys.add(key);
+          const claimed = new Set<RouteResult>();
+          const addPick = (r: RouteResult | undefined, tag: RouteResult["tag"]) => {
+            if (!r || claimed.has(r)) return false;
+            claimed.add(r);
             picked.push({ ...r, tag, label: tag });
             return true;
           };
 
-          if (byShadeDesc[0]) addPick(byShadeDesc[0], "Most Shaded");
-          for (const r of byShadeDesc.slice(1)) {
-            if (picked.length >= 2) break;
-            addPick(r, "Balanced");
-          }
-          // Prefer the API's literal fastest/default route; only fall back to the next-quickest
-          // distinct route if that one was already claimed by Most Shaded/Balanced above.
-          if (!apiFastestRoute || !addPick(apiFastestRoute, "Fastest")) {
-            for (const r of byDurationAsc) {
-              if (picked.length >= 3) break;
-              if (addPick(r, "Fastest")) break;
-            }
+          addPick(mostShaded, "Most Shaded");
+          // Claimed before "Balanced" so the quickest route can never end up on the
+          // Balanced card while a slower one is presented as the fastest.
+          addPick(byDurationAsc.find((r) => !claimed.has(r)), "Fastest");
+          // Best remaining trade-off: shade and time each normalised across the
+          // candidates, weighted equally.
+          const rest = uniqueRoutes.filter((r) => !claimed.has(r));
+          if (rest.length) {
+            const shades = uniqueRoutes.map(shadeOf);
+            const durs = uniqueRoutes.map(durOf);
+            const sMin = Math.min(...shades), sMax = Math.max(...shades);
+            const dMin = Math.min(...durs), dMax = Math.max(...durs);
+            const norm = (v: number, lo: number, hi: number) => (hi > lo ? (v - lo) / (hi - lo) : 1);
+            const balanced = [...rest].sort(
+              (a, b) =>
+                (norm(shadeOf(b), sMin, sMax) + (1 - norm(durOf(b), dMin, dMax))) -
+                (norm(shadeOf(a), sMin, sMax) + (1 - norm(durOf(a), dMin, dMax)))
+            )[0];
+            addPick(balanced, "Balanced");
           }
 
-          routes = picked.length > 0 ? picked : routes;
+          // Display order is fixed by tag, independent of the claim order above.
+          const tagOrder: RouteResult["tag"][] = ["Most Shaded", "Balanced", "Fastest"];
+          picked.sort((a, b) => tagOrder.indexOf(a.tag) - tagOrder.indexOf(b.tag));
+
+          routes = picked.length > 0 ? picked : uniqueRoutes;
         }
         routes = routes.map((r) => ({
           ...r,

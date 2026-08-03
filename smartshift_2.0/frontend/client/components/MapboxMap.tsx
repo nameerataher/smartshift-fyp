@@ -306,7 +306,10 @@ export function queryBuildingsFromMap(
     const effectiveHeight = height > 0 ? height - minH : 30;
 
     buildings.push({
-      id: `cl_${buildings.length}`,
+      // Geometry-derived so the same building keeps the same id across separate
+      // queries — callers merge several queries and dedupe by id, and a positional
+      // id (cl_0, cl_1, …) made unrelated buildings collide and get dropped.
+      id: `cl_${key}`,
       footprint: coords.map((c) => [c[0], c[1]] as [number, number]),
       height: Math.max(1, effectiveHeight),
       min_height: minH,

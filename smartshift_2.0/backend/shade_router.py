@@ -25,6 +25,82 @@ ROUTE_SAMPLE_SPACING = 150
 # Segment length (m) for shadow segment sampling and remaining-shade estimate.
 GRAPH_SEGMENT_LENGTH = 5
 
+METERS_PER_DEGREE_LAT = 111320.0
+# Step (m) along the shadow axis when testing whether a point is occluded.
+SHADOW_SAMPLE_STEP = 4.0
+MAX_SHADOW_SAMPLES = 40
+
+# (footprint, height, centroid_lon, centroid_lat, radius_m)
+PreparedBuilding = tuple
+
+
+def _prepare_buildings(buildings: List[Building]) -> List[PreparedBuilding]:
+    """Precompute centroid + enclosing radius so point tests can skip far buildings."""
+    prepared: List[PreparedBuilding] = []
+    for b in buildings:
+        fp = b.footprint
+        if not fp or len(fp) < 3 or b.height <= 0:
+            continue
+        cx = sum(p[0] for p in fp) / len(fp)
+        cy = sum(p[1] for p in fp) / len(fp)
+        m_per_deg_lon = METERS_PER_DEGREE_LAT * math.cos(math.radians(cy))
+        radius = max(
+            math.hypot((p[0] - cx) * m_per_deg_lon, (p[1] - cy) * METERS_PER_DEGREE_LAT)
+            for p in fp
+        )
+        prepared.append((fp, float(b.height), cx, cy, radius))
+    return prepared
+
+
+def _shadow_length(height: float, altitude: float) -> float:
+    """Ground length of a building's shadow, matching ShadowCalculator's model."""
+    if altitude <= 0:
+        return 0.0
+    return min(height / math.tan(math.radians(max(1.0, altitude))), height * 10)
+
+
+def _point_shaded_prepared(lon, lat, sun, prepared: List[PreparedBuilding]) -> bool:
+    """
+    True if (lon, lat) sits in a building's cast shadow (or on its footprint).
+
+    The shadow of a footprint is that footprint swept along the shadow direction,
+    so the test walks the point back toward the sun and checks whether any step
+    lands inside a footprint. The previous version built a single polygon from
+    "translated vertices + reversed footprint", which self-intersects for any
+    non-convex footprint and made the ray-casting test flip shaded points to
+    unshaded — one reason the reported percentages disagreed with the map.
+    """
+    if not sun.is_daylight or sun.altitude <= 0:
+        return True
+
+    direction = math.radians((sun.azimuth + 180.0) % 360.0)
+    ux = math.sin(direction)  # east component
+    uy = math.cos(direction)  # north component
+    m_per_deg_lon = METERS_PER_DEGREE_LAT * math.cos(math.radians(lat)) or 1e-9
+
+    for fp, height, cx, cy, radius in prepared:
+        length = _shadow_length(height, sun.altitude)
+        if length < 0.5:
+            continue
+        dist = math.hypot((lon - cx) * m_per_deg_lon, (lat - cy) * METERS_PER_DEGREE_LAT)
+        if dist > radius + length:
+            continue
+        steps = max(1, min(MAX_SHADOW_SAMPLES, int(length / SHADOW_SAMPLE_STEP)))
+        for i in range(steps + 1):
+            t = length * i / steps
+            px = lon - (t * ux) / m_per_deg_lon
+            py = lat - (t * uy) / METERS_PER_DEGREE_LAT
+            if _point_in_polygon(px, py, fp):
+                return True
+    return False
+
+
+# Tilequery results keyed by rounded lat/lon. Shared across instances because a
+# ShadeRouter is constructed per request, and refetching the same tiles on every
+# request was the bulk of the scoring latency.
+_TILEQUERY_CACHE: Dict[str, List[Building]] = {}
+_TILEQUERY_CACHE_MAX = 4000
+
 
 class ShadeRouter:
     TZ = 4.0
@@ -35,7 +111,7 @@ class ShadeRouter:
     def __init__(self, segment_length: float = GRAPH_SEGMENT_LENGTH):
         self.seg_len = segment_length
         self._sc = ShadowCalculator()
-        self._bldg_cache: Dict[str, List[Building]] = {}
+        self._bldg_cache = _TILEQUERY_CACHE
 
     def update_route_shadows(
         self,
@@ -86,14 +162,20 @@ class ShadeRouter:
         departure_time: datetime,
         mode: str = "walking",
         client_buildings: Optional[List[Dict]] = None,
+        buildings: Optional[List[Building]] = None,
     ) -> Dict:
         """
         Return per-segment shadow fraction for a route polyline.
 
         route_coordinates: list of [lon, lat] points.
+        buildings: pre-gathered building set. Pass this when scoring several routes
+        against each other (see gather_buildings_for_routes) — gathering per route
+        gives each one a different set of obstacles and makes the resulting shade
+        percentages non-comparable.
         """
-        parsed = parse_client_buildings(client_buildings) if client_buildings else []
-        buildings = self._gather_route_buildings(route_coordinates, parsed)
+        if buildings is None:
+            parsed = parse_client_buildings(client_buildings) if client_buildings else []
+            buildings = self._gather_route_buildings(route_coordinates, parsed)
         if mode == "walking":
             speed = self.WALK_SPEED
         elif mode == "running":
@@ -105,6 +187,7 @@ class ShadeRouter:
         if len(sampled) < 2:
             return {"segments": [], "buildings_used": len(buildings)}
 
+        prepared = _prepare_buildings(buildings)
         segments_out: List[Dict] = []
         elapsed_seconds = 0.0
         total_time = 0.0
@@ -123,22 +206,7 @@ class ShadeRouter:
             edge_time = departure_time + timedelta(seconds=elapsed_seconds + segment_time)
 
             sun = self._sun(edge_time, mid_lat, mid_lon)
-            shadow_polys: Dict[str, list] = {}
-            if sun.is_daylight and sun.altitude > 0:
-                for b in buildings:
-                    poly = self._sc.calculate_shadow_polygon(b, sun)
-                    if poly:
-                        shadow_polys[b.id] = poly
-
-            shadow_fraction = 0.0
-            if sun.is_daylight and sun.altitude > 0:
-                for b in buildings:
-                    poly = shadow_polys.get(b.id)
-                    if poly and _point_in_polygon(mid_lon, mid_lat, poly):
-                        shadow_fraction = 1.0
-                        break
-            else:
-                shadow_fraction = 1.0
+            shadow_fraction = 1.0 if _point_shaded_prepared(mid_lon, mid_lat, sun, prepared) else 0.0
 
             total_shade_time += shadow_fraction * segment_time
             segments_out.append(
@@ -160,6 +228,25 @@ class ShadeRouter:
             "total_route_time_seconds": round(total_time, 1),
             "total_shade_time_seconds": round(total_shade_time, 1),
         }
+
+    def gather_buildings_for_routes(
+        self,
+        routes_coordinates: List[List[List[float]]],
+        client_buildings: Optional[List[Dict]] = None,
+    ) -> List[Building]:
+        """Union of the buildings near every given route, so a set of alternatives
+        can all be scored against identical obstacles."""
+        parsed = parse_client_buildings(client_buildings) if client_buildings else []
+        buildings: List[Building] = []
+        seen: Set[str] = set()
+        for coords in routes_coordinates:
+            if not coords or len(coords) < 2:
+                continue
+            for building in self._gather_route_buildings(coords, parsed):
+                if building.id not in seen:
+                    seen.add(building.id)
+                    buildings.append(building)
+        return buildings
 
     def _gather_route_buildings(self, route_coordinates, parsed):
         buildings: List[Building] = []
@@ -226,13 +313,7 @@ class ShadeRouter:
         return sampled
 
     def _point_shaded(self, lat, lon, sun, buildings):
-        if not sun.is_daylight or sun.altitude <= 0:
-            return True
-        for building in buildings:
-            poly = self._sc.calculate_shadow_polygon(building, sun)
-            if poly and _point_in_polygon(lon, lat, poly):
-                return True
-        return False
+        return _point_shaded_prepared(lon, lat, sun, _prepare_buildings(buildings))
 
     def _estimate_remaining_shade_pct(self, remaining, now, rem_dur, buildings):
         if len(remaining) < 2:
@@ -254,6 +335,7 @@ class ShadeRouter:
             segment_distances.append(seg_d)
             total_distance += seg_d
 
+        prepared = _prepare_buildings(buildings)
         shaded = 0
         total = 0
         walked = 0.0
@@ -264,7 +346,7 @@ class ShadeRouter:
                 seconds=(rem_dur * ((walked + seg_d / 2) / max(total_distance, 1.0)))
             )
             s = self._sun(t, mid_lat, mid_lon)
-            if self._point_shaded(mid_lat, mid_lon, s, buildings):
+            if _point_shaded_prepared(mid_lon, mid_lat, s, prepared):
                 shaded += 1
             total += 1
             walked += seg_d
@@ -291,7 +373,8 @@ class ShadeRouter:
             resp.raise_for_status()
             data = resp.json()
         except Exception:
-            self._bldg_cache[ck] = []
+            # Not cached: a transient failure must not blank out this tile for the
+            # rest of the process now that the cache is shared.
             return []
 
         buildings: List[Building] = []
@@ -335,6 +418,8 @@ class ShadeRouter:
                 )
             )
 
+        if len(self._bldg_cache) >= _TILEQUERY_CACHE_MAX:
+            self._bldg_cache.clear()
         self._bldg_cache[ck] = buildings
         return buildings
 

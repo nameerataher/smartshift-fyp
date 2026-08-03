@@ -765,13 +765,21 @@ def get_routes_shade_score():
         except:
             return jsonify({"success": False, "error": "Invalid date or current_minutes"}), 400
         router = ShadeRouter(segment_length=5.0)
+        # One building set shared by every route: scoring each route only against the
+        # buildings near itself made the shade percentages non-comparable, so the
+        # highest-scoring route was not reliably the most shaded one.
+        all_coords = [
+            (r.get("coordinates") or r.get("geometry", {}).get("coordinates", []))
+            for r in routes
+        ]
+        shared_buildings = router.gather_buildings_for_routes(all_coords, client_buildings)
         route_scores = []
         for idx, r in enumerate(routes):
-            coords = r.get("coordinates") or r.get("geometry", {}).get("coordinates", [])
+            coords = all_coords[idx]
             if not coords or len(coords) < 2:
                 route_scores.append({"route_index": idx, "shade_pct": 0, "score": 0, "sun_exposure_minutes": 0, "heat_risk": "low"})
                 continue
-            result = router.get_route_segment_shadows(route_coordinates=coords, departure_time=departure_time, mode=mode, client_buildings=client_buildings)
+            result = router.get_route_segment_shadows(route_coordinates=coords, departure_time=departure_time, mode=mode, buildings=shared_buildings)
             segments = result.get("segments", [])
             if not segments:
                 route_scores.append({"route_index": idx, "shade_pct": 0, "score": 0, "sun_exposure_minutes": 0, "heat_risk": "low"})
